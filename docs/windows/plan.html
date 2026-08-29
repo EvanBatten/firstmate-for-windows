@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>firstmate on Windows - P6 port plan</title>
+<style>
+/* Firstmate Design System tokens, copied from upstream
+   .agents/skills/bearings/assets/board-template.html so the plan reads as a
+   firstmate document. Single paper look by design (no dark variant). */
+@import url("https://fonts.googleapis.com/css2?family=Chango&family=Jost:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+:root {
+  --rust-700:#8f2f17; --rust-600:#a93a1f; --rust-500:#c0452a; --rust-400:#d35f3f; --rust-300:#e08365; --rust-100:#f4d8c9; --rust-050:#fbece3;
+  --navy-700:#1a2238; --navy-600:#222c49; --navy-500:#2a3656; --navy-300:#6c7796; --navy-100:#d9deea;
+  --gold-600:#b5791c; --gold-500:#e0a52e; --gold-300:#f0d38c; --gold-100:#f8ecc9;
+  --ocean-600:#2f6688; --ocean-500:#3c7ea6; --ocean-200:#b6d4e2; --ocean-050:#e8f1f5;
+  --sea-700:#234e3a; --sea-500:#2f6b4f; --sea-200:#b9d4c5; --sea-050:#e9f2ec;
+  --paper-000:#fbf4e2; --paper-100:#f6ecd3; --paper-200:#f0e3c4; --paper-300:#e7d6ae; --cream-line:#ddc89c;
+  --ink-900:#241c14; --ink-700:#3f3224; --ink-500:#6f5e46; --ink-300:#9c8a6c; --white:#fffdf7;
+  --bg-page:var(--paper-100); --surface-card:var(--white); --surface-card-warm:var(--paper-000);
+  --text-strong:var(--ink-900); --text-body:var(--ink-700); --text-muted:var(--ink-500); --text-faint:var(--ink-300);
+  --border-default:var(--cream-line); --border-soft:var(--paper-300);
+  --font-display:"Chango","Cooper Black",Rockwell,Georgia,serif;
+  --font-sans:"Jost",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --fs-h2:1.75rem; --fs-h3:1.4rem; --fs-h4:1.15rem; --fs-base:1rem; --fs-sm:.9375rem; --fs-xs:.8125rem; --fs-2xs:.6875rem;
+  --ls-caps:.16em; --radius-xs:6px; --radius-sm:9px; --radius-md:12px; --radius-banner:7px; --radius-lg:18px; --radius-pill:999px;
+  --shadow-sm:0 1px 2px rgba(36,28,20,.06),0 4px 10px rgba(36,28,20,.06);
+  --shadow-hard:4px 4px 0 var(--ink-900); --shadow-hard-sm:3px 3px 0 var(--ink-900);
+  --texture-paper:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E");
+  --focus-ring:0 0 0 3px var(--gold-300); --container-app:1180px;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:var(--font-sans);color:var(--text-body);background:var(--bg-page);background-image:var(--texture-paper);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:var(--ocean-600);text-decoration:none;font-weight:600}
+a:hover{text-decoration:underline}
+code,kbd{font-family:var(--font-mono);font-size:.86em;background:var(--paper-200);border:1px solid var(--border-soft);border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
+pre{font-family:var(--font-mono);font-size:var(--fs-xs);background:var(--ink-900);color:var(--paper-000);border-radius:var(--radius-sm);padding:12px 14px;overflow-x:auto;margin:0;line-height:1.5}
+pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
+p{margin:0 0 10px}
+p:last-child{margin-bottom:0}
+ul{margin:0;padding-left:20px}
+li{margin:3px 0}
+:where(p,h1,h2,h3,h4,li,td,th,dd,.fm-badge){overflow-wrap:anywhere}
+:where(.grid,.flex)>*{min-width:0}
+svg{max-width:100%;height:auto}
+
+/* fm components */
+.fm-badge{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-2xs);font-weight:800;line-height:1;padding:5px 9px 4px;text-transform:uppercase;letter-spacing:.07em;border-radius:var(--radius-xs);border:1.5px solid var(--ink-900);box-shadow:2px 2px 0 var(--ink-900);white-space:nowrap}
+.fm-badge--online{background:var(--sea-500);color:var(--paper-000)}
+.fm-badge--warn{background:var(--gold-500);color:var(--navy-700)}
+.fm-badge--danger{background:var(--rust-600);color:var(--paper-000)}
+.fm-badge--info{background:var(--ocean-500);color:var(--paper-000)}
+.fm-badge--neutral{background:var(--paper-000);color:var(--ink-900)}
+.fm-badge--navy{background:var(--navy-600);color:var(--paper-000)}
+.fm-card{background:var(--surface-card);border:1px solid var(--border-default);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:hidden}
+.fm-card--poster{border:2px solid var(--ink-900);box-shadow:var(--shadow-hard);border-radius:var(--radius-md)}
+.fm-card--warm{background:var(--surface-card-warm)}
+.fm-card__pad{padding:18px 20px}
+.fm-sign{display:inline-flex;align-items:center;gap:8px;font-weight:800;text-transform:uppercase;letter-spacing:var(--ls-caps);font-size:var(--fs-xs);line-height:1}
+.fm-sign--eyebrow{color:var(--rust-500)}
+.fm-sign--muted{color:var(--ink-500)}
+.fm-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:var(--font-sans);font-weight:800;line-height:1;white-space:nowrap;border:2px solid transparent;border-radius:var(--radius-banner);cursor:pointer;text-decoration:none;transition:background 120ms,transform 120ms}
+.fm-btn:active{transform:translateY(1px)}
+.fm-btn:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+.fm-btn--sm{font-size:var(--fs-xs);padding:8px 16px}
+.fm-btn--primary{background:var(--rust-500);color:var(--white);border-color:var(--ink-900);box-shadow:var(--shadow-hard-sm)}
+.fm-btn--primary:hover{background:var(--rust-600)}
+.fm-btn--gold{background:var(--gold-500);color:var(--navy-700);border-color:var(--ink-900);box-shadow:var(--shadow-hard-sm)}
+
+/* chrome */
+.nav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--paper-100) 88%,transparent);backdrop-filter:saturate(150%) blur(10px);border-bottom:1px solid var(--border-default)}
+.nav__inner{max-width:var(--container-app);margin:0 auto;padding:0 28px;height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.brand{display:inline-flex;align-items:center;gap:12px;min-width:0}
+.brand__disc{display:grid;place-items:center;width:34px;height:34px;flex:none;border-radius:999px;background:var(--rust-500);color:var(--paper-000);border:2px solid var(--ink-900);box-shadow:var(--shadow-hard-sm)}
+.brand__disc svg{width:60%;height:60%}
+.brand__wm{font-family:var(--font-display);font-size:22px;color:var(--text-strong);line-height:1;white-space:nowrap}
+.brand__sub{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--text-faint);white-space:nowrap}
+.nav__links{display:flex;gap:14px;font-size:var(--fs-xs);font-weight:700;color:var(--text-muted);flex-wrap:wrap;justify-content:flex-end}
+.nav__links a{color:inherit}
+main{max-width:var(--container-app);margin:0 auto;padding:26px 28px 90px;display:flex;flex-direction:column;gap:30px}
+section{display:flex;flex-direction:column;gap:14px;min-width:0}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font-family:var(--font-display);font-size:clamp(1.9rem,3.6vw,2.7rem);line-height:1.1;color:var(--text-strong);margin:0;font-weight:400}
+h2{font-size:var(--fs-h2);font-weight:800;color:var(--text-strong);margin:0;line-height:1.2}
+h3{font-size:var(--fs-h4);font-weight:800;color:var(--text-strong);margin:0 0 6px}
+.lede{font-size:1.05rem;color:var(--text-muted);max-width:70ch}
+.hero{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:22px;align-items:stretch}
+.hero__meta{display:flex;flex-direction:column;gap:8px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--text-muted)}
+.hero__meta b{color:var(--text-strong);font-weight:600}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{display:flex;flex-direction:column;gap:4px;padding:14px 16px;min-width:0;background:var(--surface-card-warm);border:1px solid var(--border-soft);border-radius:var(--radius-md)}
+.stat--call{background:var(--rust-050);border:2px solid var(--rust-500)}
+.stat--ok{background:var(--sea-050);border:2px solid var(--sea-500)}
+.stat__num{font-family:var(--font-mono);font-size:var(--fs-h3);font-weight:600;line-height:1;color:var(--text-strong)}
+.stat--call .stat__num{color:var(--rust-600)}
+.stat--ok .stat__num{color:var(--sea-700)}
+.stat__label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px}
+.cols3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.ctx{display:flex;flex-direction:column;gap:8px}
+.ctx__row{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;align-items:baseline}
+.ctx__k{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint);white-space:nowrap}
+.ctx__v{font-size:var(--fs-sm);color:var(--text-body);line-height:1.45;min-width:0}
+.fig{padding:16px 18px 10px}
+.fig__scroll{overflow-x:auto;overflow-y:hidden}
+.fig__scroll svg{min-width:760px;display:block}
+.fig figcaption{font-size:var(--fs-xs);color:var(--text-muted);padding:8px 2px 4px;line-height:1.45}
+.fig figcaption b{color:var(--text-strong)}
+figure{margin:0}
+
+/* svg figure styling */
+.d-box{fill:var(--surface-card);stroke:var(--ink-900);stroke-width:1.6}
+.d-box--warm{fill:var(--surface-card-warm)}
+.d-box--bad{stroke:var(--rust-600);stroke-width:2.2}
+.d-box--warn{stroke:var(--gold-600);stroke-width:2.2}
+.d-box--ok{stroke:var(--sea-500);stroke-width:2}
+.d-t{font-family:var(--font-sans);font-size:13px;font-weight:700;fill:var(--text-strong)}
+.d-m{font-family:var(--font-mono);font-size:10.5px;fill:var(--text-muted)}
+.d-cap{font-family:var(--font-mono);font-size:10.5px;font-weight:600;letter-spacing:.04em;fill:var(--text-faint);text-transform:uppercase}
+.d-edge{stroke:var(--ink-500);stroke-width:1.6;fill:none}
+.d-edge--bad{stroke:var(--rust-600);stroke-dasharray:5 4}
+.d-edge--ok{stroke:var(--sea-500)}
+.d-region{fill:var(--paper-200);stroke:var(--border-default);stroke-width:1;rx:10}
+.d-region--win{fill:var(--ocean-050);stroke:var(--ocean-200)}
+.d-region--msys{fill:var(--gold-100);stroke:var(--gold-300)}
+.d-pin{font-family:var(--font-mono);font-size:11px;font-weight:800;fill:var(--paper-000)}
+.d-pin-bg{fill:var(--rust-600);stroke:var(--ink-900);stroke-width:1.2}
+.d-pin-bg--warn{fill:var(--gold-500)}
+.d-pin--dark{fill:var(--navy-700)}
+.d-note{font-family:var(--font-sans);font-size:11.5px;fill:var(--text-muted)}
+
+/* table */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card)}
+table{border-collapse:collapse;width:100%;min-width:900px;font-size:var(--fs-sm)}
+th{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.05em;text-transform:uppercase;color:var(--text-faint);text-align:left;padding:10px 12px;border-bottom:1.5px solid var(--border-default);background:var(--paper-000);white-space:nowrap}
+td{padding:10px 12px;border-top:1px solid var(--border-soft);vertical-align:top;line-height:1.45}
+td.n{font-family:var(--font-mono);font-weight:700;color:var(--text-faint);white-space:nowrap}
+td.sub{font-weight:700;color:var(--text-strong)}
+td .ev{display:block;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--text-faint);margin-top:4px;overflow-wrap:anywhere}
+tr.blk td{background:color-mix(in srgb,var(--rust-050) 55%,transparent)}
+.legend{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:var(--fs-xs);color:var(--text-muted)}
+
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.phase{display:flex;flex-direction:column;gap:10px;padding:16px 16px 14px;min-width:0}
+.phase__num{font-family:var(--font-display);font-size:1.6rem;color:var(--rust-500);line-height:1}
+.phase h3{margin:0}
+.phase ul{font-size:var(--fs-sm);padding-left:18px}
+.phase__gate{margin-top:auto;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--sea-700);background:var(--sea-050);border:1px solid var(--sea-200);border-radius:var(--radius-xs);padding:6px 8px;line-height:1.4}
+.phase__gate b{text-transform:uppercase;letter-spacing:.06em}
+
+/* options */
+.opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.opt-card{display:flex;flex-direction:column;gap:10px;padding:16px;min-width:0;position:relative}
+.opt-card--rec{border:2px solid var(--ink-900);box-shadow:var(--shadow-hard);overflow:visible}
+.opt-card__rec{position:absolute;top:-11px;right:14px;font-size:var(--fs-2xs);font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--navy-700);background:var(--gold-300);border:1px solid var(--gold-600);border-radius:var(--radius-xs);padding:3px 7px 2px}
+.opt-card__cost{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px;font-size:var(--fs-xs);color:var(--text-muted);font-family:var(--font-mono)}
+.opt-card__cost b{color:var(--text-strong);font-weight:600}
+.opt-card--dead{opacity:.72}
+
+/* decisions */
+.dec{display:flex;flex-direction:column;gap:12px;padding:18px 20px 16px}
+.dec__top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.dec__title{font-size:var(--fs-h4);font-weight:800;color:var(--text-strong);margin:0;line-height:1.25}
+.dec form{display:flex;flex-direction:column;gap:10px}
+.o-list{display:flex;flex-direction:column;gap:7px}
+.o{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;cursor:pointer;background:var(--surface-card-warm);border:1.5px solid var(--border-default);border-radius:var(--radius-sm);transition:border-color 120ms,background 120ms}
+.o:hover{border-color:var(--ink-300)}
+.o input{accent-color:var(--rust-500);margin-top:3px;flex:none}
+.o__body{min-width:0;flex:1 1 auto}
+.o__label{display:block;font-size:var(--fs-sm);font-weight:700;color:var(--text-strong);line-height:1.3}
+.o__hint{display:block;font-size:var(--fs-xs);color:var(--text-muted);line-height:1.35;margin-top:1px}
+.o__rec{flex:none;align-self:center;font-size:var(--fs-2xs);font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--navy-700);background:var(--gold-300);border:1px solid var(--gold-600);border-radius:var(--radius-xs);padding:3px 7px 2px}
+.o:has(input:checked){border-color:var(--rust-500);background:var(--rust-050);box-shadow:inset 0 0 0 1px var(--rust-500)}
+.dec__foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.queued{display:none;align-items:center;gap:6px;font-size:var(--fs-2xs);font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--sea-700);background:var(--sea-050);border:1.5px solid var(--sea-200);border-radius:var(--radius-xs);padding:5px 9px 4px}
+.is-queued .queued{display:inline-flex}
+.freeform{width:100%;font-family:var(--font-sans);font-size:var(--fs-sm);color:var(--text-strong);background:var(--surface-card);border:1.5px solid var(--border-default);border-radius:var(--radius-sm);padding:8px 11px}
+.freeform:focus{outline:none;border-color:var(--rust-400);box-shadow:var(--focus-ring)}
+.dec-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.dec-grid[hidden]{display:none}
+
+/* risks */
+.risks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.risk{display:flex;gap:12px;padding:14px 16px;min-width:0}
+.risk__k{font-family:var(--font-mono);font-size:var(--fs-2xs);font-weight:800;color:var(--rust-600);white-space:nowrap;padding-top:3px}
+.risk p{font-size:var(--fs-sm)}
+.risk p b{color:var(--text-strong)}
+
+.foot{border-top:1px solid var(--border-default);padding-top:14px;font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--text-faint);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+@media (max-width:980px){.hero,.cols,.dec-grid,.risks{grid-template-columns:1fr}.phases,.opts{grid-template-columns:repeat(2,minmax(0,1fr))}.cols3{grid-template-columns:1fr}}
+@media (max-width:620px){.phases,.opts{grid-template-columns:1fr}.nav__links{display:none}main{padding:18px 16px 70px}}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <span class="brand">
+      <span class="brand__disc" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v16"/><path d="m19 13 2-1a9 9 0 0 1-18 0l2 1"/><path d="M9 11h6"/><circle cx="12" cy="4" r="2"/></svg>
+      </span>
+      <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
+        <span class="brand__wm">firstmate on Windows</span>
+        <span class="brand__sub">dotfiles P6 · plan v1.1 · decisions locked 2026-08-29</span>
+      </span>
+    </span>
+    <nav class="nav__links">
+      <a href="#goal">Goal</a><a href="#topology">Topology</a><a href="#findings">Findings</a><a href="#approach">Approach</a><a href="#options">Options</a><a href="#decisions">Decisions</a><a href="#risks">Risks</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ============================== HERO ============================== -->
+<section id="goal">
+  <div class="hero">
+    <div class="fm-card fm-card--poster fm-card__pad" style="display:flex;flex-direction:column;gap:14px">
+      <span class="fm-sign fm-sign--eyebrow">Plan · try unmodified → patch minimally → upstream</span>
+      <h1>Get firstmate sailing on native Windows 11</h1>
+      <p class="lede">
+        Run Kun Chen's <a href="https://github.com/kunchenguid/firstmate">firstmate</a> agent distro as the primary on this machine:
+        Claude Code inside a herdr pane, crewmates spawned into herdr tabs on treehouse worktrees, PRs shipped through no-mistakes.
+        The research below measured upstream <code>f66be0f</code> (2026-08-28, 158 scripts) against this exact box, so every claim in the findings table has a command behind it.
+      </p>
+      <div class="stats">
+        <div class="stat stat--call"><span class="stat__num">8</span><span class="stat__label">blockers measured</span></div>
+        <div class="stat"><span class="stat__num">2 / 8</span><span class="stat__label">fixed by config only</span></div>
+        <div class="stat"><span class="stat__num">6 / 8</span><span class="stat__label">need a small patch</span></div>
+        <div class="stat"><span class="stat__num">~300</span><span class="stat__label">est. patch LOC, 4 PRs</span></div>
+        <div class="stat stat--ok"><span class="stat__num">0</span><span class="stat__label">reasons to reimplement</span></div>
+      </div>
+    </div>
+    <div class="fm-card fm-card--warm fm-card__pad">
+      <span class="fm-sign fm-sign--muted" style="margin-bottom:10px">Verdict in one breath</span>
+      <p style="font-size:var(--fs-base);color:var(--text-strong);font-weight:600;line-height:1.5">
+        "Unmodified" is dead on arrival, but not for the reasons the README feared.
+        Bash, coreutils, herdr, treehouse (with <code>--lease</code>) and no-mistakes all already work here.
+        What breaks is the seam between the MSYS world (bash hooks, watcher) and the Win32 world (claude.exe, herdr.exe): line endings at checkout, process identity, symlinks, and one path-shape check.
+        All of it is surgical, and Kun already ships a <code>windows-herdr-spike.yml</code> CI lane measuring this same Git Bash + herdr path, so upstream is receptive.
+      </p>
+      <div class="ctx" style="margin-top:14px">
+        <div class="ctx__row"><span class="ctx__k">upstream</span><span class="ctx__v">kunchenguid/firstmate <code>f66be0f</code> · MIT · 158 bin scripts (151 bash, 5 python, 2 node) · 176 tests · 5 backends</span></div>
+        <div class="ctx__row"><span class="ctx__k">here</span><span class="ctx__v">Win11 26200 · Git Bash 5.2 (MSYS) · herdr 0.8.2 proto 20 · treehouse 2.3.0 · no-mistakes 1.57.0 · claude 2.1.251 native · Dev Mode ON</span></div>
+        <div class="ctx__row"><span class="ctx__k">backend</span><span class="ctx__v">herdr is the only backend with a Windows build (tmux/zellij/cmux/orca are not) and it is already the dotfiles multiplexer</span></div>
+        <div class="ctx__row"><span class="ctx__k">source</span><span class="ctx__v">claude-mem #28689/#28809/#28817 (dotfiles P0-P4 sessions), <code>~/dotfiles/docs/PLAN.md</code>, upstream clone in scratchpad</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== GOAL / STATE ============================== -->
+<section>
+  <div class="cols3">
+    <div class="fm-card fm-card__pad">
+      <span class="fm-sign fm-sign--eyebrow">Current state</span>
+      <ul style="margin-top:8px;font-size:var(--fs-sm)">
+        <li>This repo is a README and one commit; nothing ported yet.</li>
+        <li>dotfiles P0-P4 are live: WezTerm + herdr + Starship, AGENTS.md fan-out, AXI tools, treehouse, no-mistakes validated E2E (native <code>claude.exe</code> + <code>agent_path_override</code>).</li>
+        <li>Upstream README badge says macOS | Linux; every installer helper <code>die</code>s on <code>uname</code> = <code>MINGW64_NT</code>.</li>
+        <li>Upstream has a manual Windows spike workflow that proves herdr's headless automation core on <code>windows-latest</code>.</li>
+      </ul>
+    </div>
+    <div class="fm-card fm-card__pad">
+      <span class="fm-sign fm-sign--eyebrow">Desired behavior</span>
+      <ol style="margin:8px 0 0;padding-left:20px;font-size:var(--fs-sm)">
+        <li><code>cd ~/firstmate &amp;&amp; cc</code> in a herdr pane; AGENTS.md takes the helm, bootstrap reports nothing MISSING.</li>
+        <li>"ahoy, fix X in repo Y" spawns a crewmate into a new herdr tab, in its own treehouse worktree, launched with the brief.</li>
+        <li>Claude's Stop hook parks on the watcher; the crewmate's turn-end wakes the primary without spending tokens.</li>
+        <li>PR lands via no-mistakes; teardown returns the worktree; <code>/bearings</code> renders the board.</li>
+      </ol>
+    </div>
+    <div class="fm-card fm-card__pad">
+      <span class="fm-sign fm-sign--eyebrow">Non-goals for P6</span>
+      <ul style="margin-top:8px;font-size:var(--fs-sm)">
+        <li>Remote secondmates over SSH (Windows sshd + a second herdr home): later phase.</li>
+        <li>Relay (X/Discord), voice relay (<code>fm-voice-*.py</code>): untouched.</li>
+        <li>tmux/zellij/cmux/orca backends on Windows: not attempted.</li>
+        <li>Rewriting anything in PowerShell: explicitly rejected (see Options).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== TOPOLOGY ============================== -->
+<section id="topology">
+  <div class="sec-head">
+    <h2>Where the port actually breaks</h2>
+    <span class="fm-sign fm-sign--muted">measured 2026-08-29 on this machine</span>
+  </div>
+  <p class="lede">
+    firstmate is bash orchestrating native binaries.
+    On macOS/Linux that is one process world.
+    On Windows it is two: MSYS (bash, coreutils, the watcher) and Win32 (claude.exe, herdr.exe, pwsh).
+    The diagram is the real parent chain of the hook that ran this research, recovered with one CIM query, and it shows exactly which seams upstream code cannot see through.
+  </p>
+
+  <figure class="fm-card fig">
+    <div class="fig__scroll">
+    <svg viewBox="0 0 1000 330" width="100%" role="img" aria-labelledby="fig1t">
+      <title id="fig1t">Measured process ancestry of a Claude Code hook on this Windows machine, showing the MSYS and Win32 boundary</title>
+      <!-- regions -->
+      <rect class="d-region d-region--win" x="14" y="52" width="700" height="150" rx="10"><title>Win32 process world</title></rect>
+      <rect class="d-region d-region--msys" x="722" y="52" width="264" height="150" rx="10"><title>MSYS process world</title></rect>
+      <text class="d-cap" x="26" y="72">Win32 world · native PIDs</text>
+      <text class="d-cap" x="734" y="72">MSYS world · bash</text>
+
+      <!-- chain boxes -->
+      <g id="n-herdr"><title>herdr.exe server, PID 215332</title>
+        <rect class="d-box" x="28" y="92" width="118" height="52" rx="8"/>
+        <text class="d-t" x="87" y="114" text-anchor="middle">herdr.exe</text>
+        <text class="d-m" x="87" y="131" text-anchor="middle">pid 215332</text></g>
+      <g id="n-pwsh1"><title>pwsh.exe pane shell</title>
+        <rect class="d-box" x="166" y="92" width="100" height="52" rx="8"/>
+        <text class="d-t" x="216" y="114" text-anchor="middle">pwsh.exe</text>
+        <text class="d-m" x="216" y="131" text-anchor="middle">pane shell</text></g>
+      <g id="n-treehouse"><title>treehouse.exe subshell wrapper</title>
+        <rect class="d-box" x="286" y="92" width="118" height="52" rx="8"/>
+        <text class="d-t" x="345" y="114" text-anchor="middle">treehouse.exe</text>
+        <text class="d-m" x="345" y="131" text-anchor="middle">worktree get</text></g>
+      <g id="n-pwsh2"><title>pwsh.exe worktree subshell</title>
+        <rect class="d-box" x="424" y="92" width="100" height="52" rx="8"/>
+        <text class="d-t" x="474" y="114" text-anchor="middle">pwsh.exe</text>
+        <text class="d-m" x="474" y="131" text-anchor="middle">subshell</text></g>
+      <g id="n-claude"><title>claude.exe, the harness process firstmate must identify and prove alive</title>
+        <rect class="d-box d-box--bad" x="544" y="92" width="150" height="52" rx="8"/>
+        <text class="d-t" x="619" y="114" text-anchor="middle">claude.exe</text>
+        <text class="d-m" x="619" y="131" text-anchor="middle">harness · pid 257124</text></g>
+      <g id="n-bash1"><title>bash.exe hook process spawned by Claude Code</title>
+        <rect class="d-box d-box--warm" x="736" y="92" width="110" height="52" rx="8"/>
+        <text class="d-t" x="791" y="114" text-anchor="middle">bash.exe</text>
+        <text class="d-m" x="791" y="131" text-anchor="middle">hook · ppid=1 (!)</text></g>
+      <g id="n-bash2"><title>bash.exe running fm-*.sh</title>
+        <rect class="d-box d-box--warm" x="866" y="92" width="110" height="52" rx="8"/>
+        <text class="d-t" x="921" y="114" text-anchor="middle">bash.exe</text>
+        <text class="d-m" x="921" y="131" text-anchor="middle">fm-*.sh</text></g>
+
+      <!-- edges (child -> parent drawn left to right as parent -> child) -->
+      <g class="d-edge" id="e-chain"><title>parent to child edges, all recovered by Win32_Process.ParentProcessId</title>
+        <path d="M146 118 H166"/><path d="M266 118 H286"/><path d="M404 118 H424"/><path d="M524 118 H544"/><path d="M846 118 H866"/></g>
+      <path id="e-seam" class="d-edge d-edge--bad" d="M694 118 H736"><title>The seam: MSYS reports this parent as PID 1; ps -o and kill -0 cannot see claude.exe</title></path>
+      <g id="pin-1"><title>Finding 2: process identity is invisible across the seam</title>
+        <circle class="d-pin-bg" cx="715" cy="100" r="10"/><text class="d-pin" x="715" y="104" text-anchor="middle">2</text></g>
+
+      <!-- socket -->
+      <g id="n-sock"><title>herdr control socket, a Windows path that CPython on win32 cannot open (no AF_UNIX)</title>
+        <rect class="d-box d-box--warn" x="28" y="160" width="238" height="30" rx="6"/>
+        <text class="d-m" x="147" y="179" text-anchor="middle">%APPDATA%\herdr\herdr.sock  (AF_UNIX)</text></g>
+      <path class="d-edge" d="M87 144 V160"/>
+      <g id="pin-5"><title>Finding 5: adapter refuses socket paths that do not start with /</title>
+        <circle class="d-pin-bg" cx="275" cy="164" r="10"/><text class="d-pin" x="275" y="168" text-anchor="middle">5</text></g>
+      <g id="pin-7"><title>Finding 7: python3 on win32 has no socket.AF_UNIX, so the push reader exits 2 and the watcher polls</title>
+        <circle class="d-pin-bg d-pin-bg--warn" cx="299" cy="164" r="10"/><text class="d-pin d-pin--dark" x="299" y="168" text-anchor="middle">7</text></g>
+
+      <!-- what each world can see -->
+      <g id="see-msys"><title>What MSYS tools can see</title>
+        <text class="d-note" x="736" y="176">kill -0, ps, /proc: MSYS pids only</text>
+        <text class="d-note" x="736" y="192">ps -o comm= : "unknown option"</text></g>
+      <g id="see-win"><title>What recovers the whole chain</title>
+        <text class="d-note" x="340" y="178">Get-CimInstance Win32_Process walk: 7/7 hops, ~300 ms</text>
+        <text class="d-note" x="340" y="194">/proc/&lt;msys-pid&gt;/winpid bridges bash → its own Win32 id</text></g>
+
+      <!-- bottom: checkout + symlink seams -->
+      <g id="n-checkout"><title>Finding 1: git checkout with core.autocrlf=true rewrites every script with CRLF</title>
+        <rect class="d-box d-box--bad" x="28" y="236" width="306" height="60" rx="8"/>
+        <text class="d-t" x="42" y="258">git checkout · core.autocrlf=true</text>
+        <text class="d-m" x="42" y="276">151/151 bin/*.sh get CRLF → "bash\r" not found</text>
+        <circle class="d-pin-bg" cx="322" cy="246" r="10"/><text class="d-pin" x="322" y="250" text-anchor="middle">1</text></g>
+      <g id="n-symlink"><title>Finding 4: MSYS ln -s copies the target unless MSYS=winsymlinks:nativestrict</title>
+        <rect class="d-box d-box--bad" x="348" y="236" width="306" height="60" rx="8"/>
+        <text class="d-t" x="362" y="258">ln -s  (fm-wake-lib.sh:418 lock)</text>
+        <text class="d-m" x="362" y="276">default: deep copy · nativestrict: real link</text>
+        <circle class="d-pin-bg" cx="642" cy="246" r="10"/><text class="d-pin" x="642" y="250" text-anchor="middle">4</text></g>
+      <g id="n-shell"><title>Finding 6: crewmate tab opens pwsh, but firstmate types POSIX commands into it</title>
+        <rect class="d-box d-box--bad" x="668" y="236" width="308" height="60" rx="8"/>
+        <text class="d-t" x="682" y="258">new tab shell = pwsh</text>
+        <text class="d-m" x="682" y="276">"export GOTMPDIR=…" is not a pwsh command</text>
+        <circle class="d-pin-bg" cx="964" cy="246" r="10"/><text class="d-pin" x="964" y="250" text-anchor="middle">6</text></g>
+      <text class="d-cap" x="28" y="226">Three more seams outside the process chain</text>
+      <text class="d-note" x="28" y="320">Numbers match the findings table below. Red = blocks the flow. Gold = degrades to a documented fallback.</text>
+    </svg>
+    </div>
+    <figcaption>
+      <b>Evidence.</b> <code>pwsh -c "Get-CimInstance Win32_Process"</code> walked from <code>/proc/$$/winpid</code> printed
+      <code>bash.exe → bash.exe → claude.exe → pwsh.exe → treehouse.exe → pwsh.exe → herdr.exe</code>, while <code>ps -p $$</code> reported PPID 1 and
+      <code>kill -0 215332</code> answered "No such process". The socket path came from <code>herdr status --json</code>; <code>python3 -c "import socket; print(hasattr(socket,'AF_UNIX'))"</code> printed False for both Store Python 3.13.5 and Anaconda 3.12.
+    </figcaption>
+  </figure>
+</section>
+
+<!-- ============================== SPAWN FLOW ============================== -->
+<section>
+  <div class="sec-head">
+    <h2>The spawn flow, with every break point pinned</h2>
+    <span class="fm-sign fm-sign--muted">what runs when the captain says "ahoy"</span>
+  </div>
+  <figure class="fm-card fig">
+    <div class="fig__scroll">
+    <svg viewBox="0 0 1000 250" width="100%" role="img" aria-labelledby="fig2t">
+      <title id="fig2t">firstmate spawn flow from checkout to supervised crewmate, with numbered Windows break points</title>
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+      <g style="color:var(--ink-500)">
+        <g id="s1"><title>Step 1: clone firstmate (finding 1 hits here)</title>
+          <rect class="d-box d-box--bad" x="16" y="40" width="130" height="64" rx="8"/>
+          <text class="d-t" x="81" y="63" text-anchor="middle">1 · clone</text>
+          <text class="d-m" x="81" y="80" text-anchor="middle">git clone</text>
+          <text class="d-m" x="81" y="94" text-anchor="middle">bin/*.sh</text>
+          <circle class="d-pin-bg" cx="140" cy="44" r="10"/><text class="d-pin" x="140" y="48" text-anchor="middle">1</text></g>
+        <path class="d-edge" d="M146 72 H176" marker-end="url(#arr)"/>
+
+        <g id="s2"><title>Step 2: primary Claude Code session in a herdr pane; session lock records the harness pid (finding 2)</title>
+          <rect class="d-box d-box--bad" x="178" y="40" width="150" height="64" rx="8"/>
+          <text class="d-t" x="253" y="63" text-anchor="middle">2 · primary</text>
+          <text class="d-m" x="253" y="80" text-anchor="middle">claude in herdr pane</text>
+          <text class="d-m" x="253" y="94" text-anchor="middle">state/.lock = pid</text>
+          <circle class="d-pin-bg" cx="322" cy="44" r="10"/><text class="d-pin" x="322" y="48" text-anchor="middle">2</text></g>
+        <path class="d-edge" d="M328 72 H358" marker-end="url(#arr)"/>
+
+        <g id="s3"><title>Step 3: fm-spawn.sh asks the herdr adapter to create a tab; it first proves the launcher pane's socket matches (finding 5)</title>
+          <rect class="d-box d-box--bad" x="360" y="40" width="150" height="64" rx="8"/>
+          <text class="d-t" x="435" y="63" text-anchor="middle">3 · fm-spawn.sh</text>
+          <text class="d-m" x="435" y="80" text-anchor="middle">herdr tab create</text>
+          <text class="d-m" x="435" y="94" text-anchor="middle">socket identity check</text>
+          <circle class="d-pin-bg" cx="504" cy="44" r="10"/><text class="d-pin" x="504" y="48" text-anchor="middle">5</text></g>
+        <path class="d-edge" d="M510 72 H540" marker-end="url(#arr)"/>
+
+        <g id="s4"><title>Step 4: spawn-time commands typed into the new pane: treehouse get, export GOTMPDIR (finding 6)</title>
+          <rect class="d-box d-box--bad" x="542" y="40" width="150" height="64" rx="8"/>
+          <text class="d-t" x="617" y="63" text-anchor="middle">4 · pane run</text>
+          <text class="d-m" x="617" y="80" text-anchor="middle">treehouse get</text>
+          <text class="d-m" x="617" y="94" text-anchor="middle">export GOTMPDIR=…</text>
+          <circle class="d-pin-bg" cx="686" cy="44" r="10"/><text class="d-pin" x="686" y="48" text-anchor="middle">6</text></g>
+        <path class="d-edge" d="M692 72 H722" marker-end="url(#arr)"/>
+
+        <g id="s5"><title>Step 5: crewmate harness launch with the encoded brief</title>
+          <rect class="d-box d-box--ok" x="724" y="40" width="130" height="64" rx="8"/>
+          <text class="d-t" x="789" y="63" text-anchor="middle">5 · launch</text>
+          <text class="d-m" x="789" y="80" text-anchor="middle">claude + flags</text>
+          <text class="d-m" x="789" y="94" text-anchor="middle">brief as argv</text></g>
+        <path class="d-edge" d="M854 72 H884" marker-end="url(#arr)"/>
+
+        <g id="s6"><title>Step 6: watcher waits for turn-end; push events fall back to polling (finding 7); symlink lock (finding 4)</title>
+          <rect class="d-box d-box--warn" x="886" y="40" width="100" height="64" rx="8"/>
+          <text class="d-t" x="936" y="63" text-anchor="middle">6 · watch</text>
+          <text class="d-m" x="936" y="80" text-anchor="middle">events → poll</text>
+          <text class="d-m" x="936" y="94" text-anchor="middle">ln -s lock</text>
+          <circle class="d-pin-bg d-pin-bg--warn" cx="944" cy="44" r="10"/><text class="d-pin d-pin--dark" x="944" y="48" text-anchor="middle">7</text>
+          <circle class="d-pin-bg" cx="970" cy="44" r="10"/><text class="d-pin" x="970" y="48" text-anchor="middle">4</text></g>
+
+        <!-- stop hook loop -->
+        <path class="d-edge d-edge--ok" d="M936 104 V150 H253 V104" marker-end="url(#arr)"><title>Claude Stop hook: fm-claude-stop-autoarm.sh parks on the watcher and rewakes the primary (exit 2) when something needs the captain</title></path>
+        <text class="d-note" x="500" y="166" text-anchor="middle">Stop hook (asyncRewake, 8 h) → fm-claude-stop-autoarm.sh → arms only if THIS session's harness ancestor holds state/.lock  ← needs finding 2 fixed</text>
+
+        <!-- fix owners row -->
+        <text class="d-cap" x="16" y="206">Fix owner</text>
+        <text class="d-note" x="16" y="226">1 · .gitattributes (upstream) + clone config</text>
+        <text class="d-note" x="290" y="226">2 · fm-proc-lib.sh shim (upstream PR)</text>
+        <text class="d-note" x="520" y="226">5, 6 · herdr adapter (upstream PR)</text>
+        <text class="d-note" x="760" y="226">4 · MSYS env var (dotfiles) · 7 · accept</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>
+      Traced from <code>bin/fm-spawn.sh</code> (<code>launch_template</code>, lines 2285 and 2861), <code>bin/backends/herdr.sh</code> (<code>fm_backend_herdr_send_text_line</code>, launcher identity check at ~1554), <code>bin/fm-claude-stop-autoarm.sh</code>, and <code>.claude/settings.json</code> Stop hooks.
+      Step 5 is green because the crewmate launch line is plain <code>claude</code> flags plus an env prefix, which works from a bash pane; step 4 is what puts that pane in bash in the first place.
+    </figcaption>
+  </figure>
+</section>
+
+<!-- ============================== FINDINGS TABLE ============================== -->
+<section id="findings">
+  <div class="sec-head">
+    <h2>Findings ledger</h2>
+    <div class="legend">
+      <span class="fm-badge fm-badge--danger">blocker</span><span class="fm-badge fm-badge--warn">degraded</span><span class="fm-badge fm-badge--info">verify</span><span class="fm-badge fm-badge--online">works</span>
+    </div>
+  </div>
+  <p class="lede">Every row names what upstream assumes, what this machine actually did, and who owns the fix. Rows with a command were run today; rows marked verify are the first thing Phase A executes.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Subsystem</th><th>Upstream assumes</th><th>Measured here</th><th>Verdict</th><th>Fix owner</th></tr></thead>
+      <tbody>
+        <tr class="blk"><td class="n">1</td><td class="sub">Line endings at checkout</td><td>LF scripts; no <code>.gitattributes</code> in the repo.</td><td><code>core.autocrlf=true</code> (system + global). 151 of 151 <code>bin/*.sh</code> checked out with CRLF; <code>#!/usr/bin/env bash\r</code> cannot exec.<span class="ev">grep -l $'\r' bin/*.sh | wc -l → 151</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-1: <code>.gitattributes</code> with <code>* text=auto eol=lf</code>. Local: <code>git -c core.autocrlf=false clone</code>. Also fixes Kun's own spike, which sources <code>fm-backend.sh</code> on windows-latest.</td></tr>
+        <tr class="blk"><td class="n">2</td><td class="sub">Harness identity and liveness</td><td><code>ps -o comm=/ppid=/args= -p</code> ancestry walk and <code>kill -0 &lt;pid&gt;</code> in <code>fm-harness.sh</code>, <code>fm-session-lock-lib.sh</code>, <code>fm-wake-lib.sh</code>, <code>fm-backend.sh</code>.</td><td>MSYS <code>ps</code>: "unknown option -- o". Hook bash reports PPID 1. <code>kill -0</code> on a Win32 PID: "No such process". <code>CLAUDECODE=1</code> env marker still identifies the harness <em>type</em>. CIM walk recovers the full 7-hop chain.<span class="ev">Get-CimInstance Win32_Process -Filter ProcessId=… → ParentProcessId</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-2: <code>bin/fm-proc-lib.sh</code> with <code>fm_proc_comm</code>, <code>fm_proc_ppid</code>, <code>fm_proc_args</code>, <code>fm_pid_alive</code>; MSYS branch uses <code>/proc/&lt;pid&gt;/winpid</code> plus one pwsh CIM call; Darwin/Linux branches stay byte-identical.</td></tr>
+        <tr class="blk"><td class="n">3</td><td class="sub"><code>kill -0</code> on native PIDs</td><td>Any pid the lock recorded can be probed.</td><td>Fails for claude.exe/herdr.exe; works for MSYS pids (watcher, daemon). <code>ps -W</code> lists Win32 pids cheaply.<span class="ev">ps -W | awk '$4==215332' → herdr.exe</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Folded into PR-2 (<code>fm_pid_alive</code>).</td></tr>
+        <tr class="blk"><td class="n">4</td><td class="sub">Symlink-based lock</td><td><code>ln -s "$ownerdir" "$lockdir"</code> is atomic; <code>readlink</code> proves ownership (<code>fm-wake-lib.sh:418</code>).</td><td>Default MSYS <code>ln -s</code> deep-copied the directory; <code>readlink</code> failed. With <code>MSYS=winsymlinks:nativestrict</code> a real link was created (Developer Mode is ON, reg value 0x1).<span class="ev">plain: not a symlink · strict: lrwxrwxrwx → target</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>dotfiles <code>settings.ps1</code>: persist user env <code>MSYS=winsymlinks:nativestrict</code>. Zero firstmate change. Kun's spike already probes this exact mode.</td></tr>
+        <tr class="blk"><td class="n">5</td><td class="sub">herdr socket path shape</td><td><code>fm_backend_herdr_canonical_socket_path</code> refuses any path not starting with <code>/</code>; used for the launcher same-session proof and the presentation lock.</td><td><code>herdr status --json</code> reports <code>C:\Users\ebatt\AppData\Roaming\herdr\herdr.sock</code>; herdr injects the same form as <code>HERDR_SOCKET_PATH</code>, so every spawn is refused as "unverifiable parent identity".</td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-3 (~10 lines): accept <code>[A-Za-z]:[\\/]</code>, normalize through <code>cygpath -u</code> when present, compare case-insensitively.</td></tr>
+        <tr class="blk"><td class="n">6</td><td class="sub">Crewmate pane shell</td><td>New tab opens a POSIX shell; spawn types <code>treehouse get</code>, <code>export GOTMPDIR=…</code>, <code>export TRACEPARENT=…</code>, then the launch line.</td><td>herdr <code>default_shell = "pwsh"</code> (dotfiles choice). <code>herdr tab create --help</code> has <code>--cwd/--env/--label</code> but no shell or command flag. Measured: <code>exec bash -l</code> fails in pwsh (<code>exec</code> is not a command) and bare <code>bash</code> resolves to WSL, so the adapter must launch Git Bash by full path.</td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-4: on MSYS the herdr adapter sends <code>&amp; 'C:\Program Files\Git\usr\bin\bash.exe' --login</code> as the first pane command before the spawn sequence (locked as D2; see row 13 for the cwd half).</td></tr>
+        <tr><td class="n">7</td><td class="sub">Native event push</td><td><code>python3 herdr-eventwait.py</code> subscribes over AF_UNIX; exit 2 means "fall back to polling".</td><td>Windows CPython has no <code>socket.AF_UNIX</code> (3.13.5 Store, 3.12 Anaconda). Reader exits 2; watcher polls, exactly as Kun's spike records as DEGRADED. <code>FM_BACKEND_HERDR_EVENT_READER</code> override exists for a future .NET reader.</td><td><span class="fm-badge fm-badge--warn">degraded</span></td><td>Accept for P6. Follow-up PR-5: <code>herdr-eventwait.ps1</code> using .NET <code>UnixDomainSocketEndPoint</code> (Windows supports AF_UNIX since 1803).</td></tr>
+        <tr><td class="n">8</td><td class="sub">Presentation workspace ordering</td><td><code>herdr-workspace-move.py</code> requires a <code>/</code>-prefixed socket path.</td><td>Returns 2; adapter prints "leaving worker in Herdr's current order" and continues.</td><td><span class="fm-badge fm-badge--warn">degraded</span></td><td>Accept; cosmetic ordering only.</td></tr>
+        <tr class="blk"><td class="n">9</td><td class="sub">Presentation lock namespace</td><td><code>/tmp/firstmate-herdr-presentation</code> must be owned by uid and mode 700; the pane-kill path takes a lock there.</td><td>Every Git Bash mount here is <code>noacl</code>: <code>mkdir -m 700</code> creates a 755 dir and exits 1, the validity check fails, and the adapter refuses the close: "herdr task kill could not acquire its session presentation lock; refusing an unlocked pane close" (seen 3x in the smoke test). Not graceful: teardown cannot close panes.<span class="ev">mount → binary,noacl on /, /tmp, /c · stat after mkdir -m 700 → 755</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-3: on MSYS accept the owner-uid check alone (the per-user <code>%TEMP%</code> is already private by ACL) when the mount reports noacl.</td></tr>
+        <tr><td class="n">10</td><td class="sub">Stale git lock proof</td><td><code>lsof</code> proves no process holds <code>index.lock</code>.</td><td>No <code>lsof</code>; <code>fm-lock-lib.sh</code> fails safe (never removes). Same on Kun's spike.</td><td><span class="fm-badge fm-badge--warn">degraded</span></td><td>Accept; manual lock cleanup if it ever happens.</td></tr>
+        <tr><td class="n">11</td><td class="sub">Claude hook execution</td><td>Hooks run as <code>exec "$CLAUDE_PROJECT_DIR"/bin/fm-x.sh</code> under a POSIX shell.</td><td>Measured with a throwaway <code>.claude/settings.json</code> hook and <code>claude -p</code>: the hook ran in <code>/usr/bin/bash</code> 5.2 (MINGW64), <code>CLAUDE_PROJECT_DIR</code> arrived as <code>C:/Users/…</code> (forward slashes), <code>exec</code> of a repo script succeeded, <code>CLAUDECODE=1</code> was set. <code>bin/fm-harness.sh</code> prints <code>claude</code>.</td><td><span class="fm-badge fm-badge--online">works</span></td><td>None. Risk R1 retired.</td></tr>
+        <tr class="blk"><td class="n">12</td><td class="sub">MSYS argument path conversion</td><td>Arguments reach <code>herdr.exe</code>/<code>claude.exe</code> verbatim.</td><td>Measured at <code>herdr.exe</code>: <code>/clear</code> arrived as <code>C:/Program Files/Git/clear</code>, <code>--match=/x</code> as <code>--match=X:/</code>. Any steer or brief line starting with <code>/</code> (a slash command to a crewmate) is silently rewritten. <code>MSYS_NO_PATHCONV=1</code> or <code>MSYS2_ARG_CONV_EXCL=*</code> stops it; the default conversion of <code>--cwd /c/…</code> to <code>C:/…</code> is the one case that is wanted.<span class="ev">herdr pane get /clear → "pane C:/Program Files/Git/clear not found"</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-3: in <code>fm_backend_herdr_cli</code> disable conversion for <code>send-text</code>, <code>run</code>, and <code>--match</code> arguments and pass <code>--cwd</code> through <code>cygpath -w</code> explicitly.</td></tr>
+        <tr class="blk"><td class="n">13</td><td class="sub">Pane cwd tracking</td><td><code>pane get .foreground_cwd</code> follows <code>treehouse get</code> into the worktree; spawn polls it for 60 s.</td><td>On the Windows build <code>foreground_cwd</code> is always <code>null</code> (the real-herdr smoke test fails exactly there, 14/15 otherwise pass). <code>pane get .cwd</code> IS live: herdr injects a pwsh prompt hook that emits <code>ESC]9;9;&lt;path&gt;ESC\</code>, and a Git Bash child with <code>PROMPT_COMMAND</code> emitting the same sequence moved <code>.cwd</code> through two <code>cd</code>s exactly. Also: a bare <code>bash</code> typed into pwsh is WSL's bash, and <code>exec</code> is not a pwsh command.<span class="ev">lab session: cwd → C:\Users\ebatt\dotfiles → C:\Users\ebatt\AppData\Local\Temp</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-4: <code>tab create --env SHELL=&lt;git bash.exe&gt; --env PROMPT_COMMAND=&lt;OSC 9;9 emitter&gt;</code>, first pane command <code>&amp; 'C:\Program Files\Git\usr\bin\bash.exe' --login</code>, and <code>fm_backend_herdr_current_path</code> falls back to <code>.cwd</code> via <code>cygpath -u</code>. Verify in Phase B that treehouse's subshell honors the Windows-path <code>SHELL</code>.</td></tr>
+        <tr><td class="n">14</td><td class="sub">Universal toolchain</td><td>node, git, gh, no-mistakes ≥1.46, gh-axi ≥0.1.29, chrome-devtools-axi, lavish-axi ≥0.1.46, tasks-axi, quota-axi.</td><td>All present except <code>tasks-axi</code> (npm 0.1.33) and <code>quota-axi</code> (npm 0.2.5). <code>fm-lint.sh</code> also wants shellcheck + actionlint (winget: <code>koalaman.shellcheck</code>, <code>rhysd.actionlint</code>).</td><td><span class="fm-badge fm-badge--info">verify</span></td><td>dotfiles <code>tools.ps1</code> NPM list + <code>packages.dsc.yaml</code>. Then re-run bootstrap: expect zero MISSING lines.</td></tr>
+        <tr><td class="n">15</td><td class="sub">Treehouse lease</td><td><code>treehouse get --lease</code> exists (bootstrap's <code>treehouse_supports_lease</code>).</td><td>Windows treehouse 2.3.0 has <code>--lease</code>, <code>--lease-holder</code>, <code>--json</code>.</td><td><span class="fm-badge fm-badge--online">works</span></td><td>None.</td></tr>
+        <tr><td class="n">16</td><td class="sub">herdr protocol floors</td><td>Protocol ≥14 (adapter), ≥16 (events, workspace.move), ≥0.8.0 (presentation spaces).</td><td>herdr 0.8.2, protocol 20, server running, <code>compatible: true</code>.</td><td><span class="fm-badge fm-badge--online">works</span></td><td>None. Note upstream CI pins 0.7.4 for its own lane.</td></tr>
+        <tr><td class="n">17</td><td class="sub">coreutils and friends</td><td><code>mktemp</code>, <code>stat -c</code>, <code>timeout</code>, <code>realpath</code>, <code>install</code>, <code>column</code>, <code>fold</code>, <code>tput</code>, <code>perl</code>, <code>shasum</code>, <code>sha256sum</code>, <code>openssl</code>, <code>base64</code>, <code>mkfifo</code>, <code>/proc/&lt;pid&gt;/stat</code>.</td><td>All present in Git Bash 5.2 / coreutils 8.32 / util-linux 2.40; every <code>uname = Darwin</code> branch correctly takes the GNU path.</td><td><span class="fm-badge fm-badge--online">works</span></td><td>None.</td></tr>
+        <tr><td class="n">18</td><td class="sub">no-mistakes on Windows</td><td>Gate agents spawn <code>claude</code> with JSON schema args.</td><td>Already solved in P4: native <code>claude.exe</code> + <code>agent_path_override</code>; validated E2E on nm-pipeline-test PR#1.</td><td><span class="fm-badge fm-badge--online">works</span></td><td>None.</td></tr>
+        <tr><td class="n">19</td><td class="sub">Install helpers and bootstrap hints</td><td><code>fm-install-{herdr,treehouse,shellcheck,actionlint}.sh</code> switch on <code>uname</code>; bootstrap prints <code>brew install</code>.</td><td><code>uname -s</code> = <code>MINGW64_NT-10.0-26200</code>: helpers die "unsupported platform" (CI-only), hints are wrong but harmless.</td><td><span class="fm-badge fm-badge--warn">degraded</span></td><td>Optional upstream nicety: a <code>MINGW*|MSYS*)</code> arm printing winget commands. Not needed to run.</td></tr>
+        <tr><td class="n">20</td><td class="sub">Wedge alarm OS notification</td><td>macOS <code>osascript</code>; other platforms print nothing unless a <code>command:</code> notifier is configured.</td><td>No notifier on Windows.</td><td><span class="fm-badge fm-badge--warn">degraded</span></td><td>dotfiles nicety: a pwsh toast command wired through <code>config/wedge-alarm</code> (docs/wedge-alarm.md). Phase C.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================== APPROACH ============================== -->
+<section id="approach">
+  <div class="sec-head">
+    <h2>Proposed approach: four phases, each with a proof gate</h2>
+    <span class="fm-sign fm-sign--muted">this repo becomes the fork, patches ship as upstream PRs</span>
+  </div>
+  <div class="phases">
+    <div class="fm-card fm-card--poster phase">
+      <span class="phase__num">A</span>
+      <h3>Bench the seams</h3>
+      <ul>
+        <li>dotfiles PR: <code>MSYS=winsymlinks:nativestrict</code> in <code>settings.ps1</code>; <code>tasks-axi</code>, <code>quota-axi</code> in <code>tools.ps1</code>; shellcheck + actionlint in <code>packages.dsc.yaml</code>.</li>
+        <li>Fork upstream into this repo (<code>upstream</code> remote), clone to <code>C:\Users\ebatt\firstmate</code> with <code>core.autocrlf=false</code> (on C:, outside OneDrive, per the symlink memory).</li>
+        <li>Run the instruments: <code>bin/fm-bootstrap.sh</code>, <code>bin/fm-harness.sh</code>, <code>bin/fm-test-run.sh --lane portable-parallel-1</code> and <code>-2</code>, <code>tests/fm-backend-herdr-smoke.test.sh</code> against an <code>fm-herdr-lab.sh</code> session.</li>
+        <li>Resolve findings 9, 11, 12, 13 into measured rows; write <code>docs/windows-measurement.md</code> in the same shape as Kun's spike table.</li>
+      </ul>
+      <div class="phase__gate"><b>gate</b> · a Windows findings table with a command per row, and a green portable test lane count to beat</div>
+    </div>
+    <div class="fm-card fm-card--poster phase">
+      <span class="phase__num">B</span>
+      <h3>Four surgical patches</h3>
+      <ul>
+        <li><b>PR-1</b> <code>.gitattributes</code> (1 line).</li>
+        <li><b>PR-2</b> <code>bin/fm-proc-lib.sh</code> + wiring in 4 files; <code>tests/fm-proc-lib.test.sh</code> with a fake <code>ps</code>/<code>pwsh</code>; Darwin/Linux paths byte-identical by construction.</li>
+        <li><b>PR-3</b> Windows socket path canonicalization in <code>herdr.sh</code> (+ python mover guard).</li>
+        <li><b>PR-4</b> bash bootstrap of the crewmate pane on MSYS (+ measured cwd tracking).</li>
+        <li>Each PR runs <code>bin/fm-lint.sh</code> locally and extends <code>windows-herdr-spike.yml</code> into a real CI lane running the portable shards on <code>windows-latest</code>.</li>
+      </ul>
+      <div class="phase__gate"><b>gate</b> · portable lanes green on Windows; upstream CI (Linux + macOS pins) unchanged; no-mistakes gate passes on each branch</div>
+    </div>
+    <div class="fm-card fm-card--poster phase">
+      <span class="phase__num">C</span>
+      <h3>Captain's E2E</h3>
+      <ul>
+        <li><code>cc</code> in a herdr pane; bootstrap reports nothing MISSING.</li>
+        <li>Ship task against the P4 throwaway repo (nm-pipeline-test): tab appears, worktree leased, brief delivered, PR opened via no-mistakes, merged on the captain's word, teardown returns the worktree.</li>
+        <li>Stop-hook proof: primary idles, crewmate finishes, primary wakes without a human keypress (that is finding 2 working).</li>
+        <li><code>/afk</code> digest cycle, <code>/bearings</code> board, a scout task with a report.</li>
+        <li>Optional: pwsh toast wedge alarm (finding 20).</li>
+      </ul>
+      <div class="phase__gate"><b>gate</b> · one recorded captain session, start to merged PR, with the watcher wake visible in <code>state/</code></div>
+    </div>
+    <div class="fm-card fm-card--poster phase">
+      <span class="phase__num">D</span>
+      <h3>Upstream and close P6</h3>
+      <ul>
+        <li>Open an upstream issue first summarizing the measurement table, then PRs 1-4 in dependency order; PR-5 (.NET event reader) only if Kun wants push on Windows.</li>
+        <li>Update the README platform badge and <code>docs/herdr-backend.md</code> with a Windows section as part of PR-4.</li>
+        <li>dotfiles: <code>docs/PLAN.md</code> P6 → DONE with the delta list; this repo's README documents what is local-only vs. merged.</li>
+        <li>Rebase discipline: upstream lands many commits per day (#3261 was 2026-08-28); keep the branch stack under 250 LOC total.</li>
+      </ul>
+      <div class="phase__gate"><b>gate</b> · every local patch either merged upstream or listed as a deliberate delta in this repo's README</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== PR-2 DETAIL ============================== -->
+<section>
+  <div class="cols">
+    <div class="fm-card fm-card__pad">
+      <span class="fm-sign fm-sign--eyebrow">PR-2 sketch · the one non-trivial patch</span>
+      <p style="font-size:var(--fs-sm);margin-top:8px">One leaf library owns "what process is this and is it alive", so the four callers stop spelling <code>ps -o</code> themselves. Non-MSYS branches are literally today's commands.</p>
+<pre><code># bin/fm-proc-lib.sh (sketch)
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) FM_PROC_OS=msys ;;
+  *)                    FM_PROC_OS=posix ;;
+esac
+
+# bash's own Win32 id; a Win32 pid passes through unchanged
+fm_proc_winpid() {
+  cat "/proc/$1/winpid" 2>/dev/null || printf '%s' "$1"
+}
+
+# One pwsh call prints the whole parent chain, one line per
+# hop: winpid TAB ppid TAB name TAB cmdline
+fm_proc_chain_msys() {  # &lt;pid&gt;
+  pwsh -NoProfile -NonInteractive -Command "
+    \$p=$(fm_proc_winpid "$1")
+    for(\$i=0; \$i -lt 12 -and \$p; \$i++){
+      \$x=Get-CimInstance Win32_Process \`
+           -Filter \"ProcessId=\$p\"
+      if(-not \$x){ break }
+      \"\$(\$x.ProcessId)`t\$(\$x.ParentProcessId)`t\" +
+      \"\$(\$x.Name)`t\$(\$x.CommandLine)\"
+      \$p=\$x.ParentProcessId
+    }"
+}
+
+fm_proc_comm() {  # &lt;pid&gt;
+  if [ "$FM_PROC_OS" = msys ]; then
+    fm_proc_chain_msys "$1" | head -1 | cut -f3
+  else
+    ps -o comm= -p "$1" 2>/dev/null        # today's line
+  fi
+}
+
+fm_pid_alive() {  # &lt;pid&gt;
+  kill -0 "$1" 2>/dev/null && return 0
+  [ "$FM_PROC_OS" = msys ] || return 1
+  ps -W | awk -v p="$1" '$4==p{f=1} END{exit !f}'
+}</code></pre>
+      <p style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:10px">Callers: <code>fm-harness.sh detect_own</code> (loop over the chain instead of one <code>ps</code> per hop), <code>fm-session-lock-lib.sh fm_harness_pid_alive</code> and its ancestry walk, <code>fm-wake-lib.sh fm_pid_alive</code>, <code>fm-backend.sh</code> cmux ancestry (Darwin-only, untouched). Lock files should record the Win32 pid on MSYS so <code>fm_pid_alive</code> can probe it.</p>
+    </div>
+    <div class="fm-card fm-card__pad fm-card--warm">
+      <span class="fm-sign fm-sign--eyebrow">Why this is enough</span>
+      <ul style="margin-top:8px;font-size:var(--fs-sm)">
+        <li><b>Harness type</b> already resolves through the <code>CLAUDECODE=1</code> marker (layer 1), so only lock identity and liveness were blind.</li>
+        <li><b>Watcher and daemon</b> are MSYS processes; their mutual <code>kill -0</code>, <code>/proc</code>, <code>mkfifo</code>, <code>trap</code>, and <code>wait</code> paths already work (verified <code>/proc/$$/stat</code>).</li>
+        <li><b>Cost</b>: one pwsh start (~300 ms) per lock check; the Stop hook fires once per turn, not per poll. The watcher's poll loop uses herdr <code>agent get</code>, not <code>ps</code>.</li>
+        <li><b>Test story</b>: PR-2 ships <code>tests/fm-proc-lib.test.sh</code> that fakes <code>uname</code> and a <code>pwsh</code> stub emitting a canned chain, so Linux CI covers the MSYS branch too, mirroring how upstream fakes <code>herdr</code> in <code>fm-backend-herdr.test.sh</code>.</li>
+        <li><b>Rejected</b>: <code>wmic</code> (removed in current Win11), <code>tasklist</code> (no parent id), a Go helper (new build artifact for one query).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== OPTIONS ============================== -->
+<section id="options">
+  <div class="sec-head">
+    <h2>The README's three strategies, now with evidence</h2>
+    <span class="fm-sign fm-sign--muted">decision: which posture P6 commits to</span>
+  </div>
+  <div class="opts">
+    <div class="fm-card opt-card opt-card--dead">
+      <span class="fm-sign fm-sign--muted">(a) Run unmodified</span>
+      <h3>Git Bash + herdr, no changes</h3>
+      <p style="font-size:var(--fs-sm)">Clone, <code>claude</code>, hope. Fails at finding 1 before any script runs; with a fixed clone, fails at 5 on the first spawn and silently never arms supervision because of 2.</p>
+      <div class="opt-card__cost"><span>reaches</span><b>bootstrap digest only</b><span>patches</span><b>0</b><span>keeps upstream</span><b>yes</b><span>ships tasks</span><b>no</b></div>
+      <span class="fm-badge fm-badge--danger" style="align-self:flex-start">dead on arrival</span>
+    </div>
+    <div class="fm-card opt-card opt-card--rec">
+      <span class="opt-card__rec">Recommended</span>
+      <span class="fm-sign fm-sign--eyebrow">(b) Minimal patch + PRs</span>
+      <h3>4 PRs, ~220 lines, env fixes in dotfiles</h3>
+      <p style="font-size:var(--fs-sm)">Every blocker maps to one small owner. Two of five vanish with config. The remaining three are platform branches that leave macOS/Linux byte-identical, which is what makes them mergeable upstream.</p>
+      <div class="opt-card__cost"><span>reaches</span><b>full captain flow</b><span>patches</span><b>4 (+1 optional)</b><span>keeps upstream</span><b>yes, via PRs</b><span>ships tasks</span><b>yes</b></div>
+      <span class="fm-badge fm-badge--online" style="align-self:flex-start">go</span>
+    </div>
+    <div class="fm-card opt-card opt-card--dead">
+      <span class="fm-sign fm-sign--muted">(c) Reimplement</span>
+      <h3>PowerShell port of the distro</h3>
+      <p style="font-size:var(--fs-sm)">158 scripts, 176 tests, five backend adapters, and a codebase that moves daily. A port forks the semantics on day one and can never be upstreamed. Nothing found today requires it.</p>
+      <div class="opt-card__cost"><span>reaches</span><b>unknown</b><span>patches</span><b>everything</b><span>keeps upstream</span><b>no</b><span>ships tasks</span><b>eventually</b></div>
+      <span class="fm-badge fm-badge--danger" style="align-self:flex-start">rejected</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== DECISIONS ============================== -->
+<section id="decisions">
+  <div class="sec-head">
+    <h2>Captain's call · locked 2026-08-29</h2>
+    <span class="fm-sign fm-sign--muted">all five answered through this page; forms retired</span>
+  </div>
+  <div class="fm-card fm-card--poster" style="padding:6px 0">
+    <div class="ctx" style="padding:12px 20px;gap:12px">
+      <div class="ctx__row" style="grid-template-columns:52px minmax(0,1fr)"><span class="ctx__k" style="color:var(--rust-500)">D1</span><span class="ctx__v"><b style="color:var(--text-strong)">Posture:</b> minimal patch + upstream PRs. Phases A-D as drawn; four PRs plus env fixes in dotfiles.</span></div>
+      <div class="ctx__row" style="grid-template-columns:52px minmax(0,1fr)"><span class="ctx__k" style="color:var(--rust-500)">D2</span><span class="ctx__v"><b style="color:var(--text-strong)">Crewmate pane shell (finding 6):</b> the herdr adapter sends <code>exec bash -l</code> as the first pane command on MSYS (PR-4). herdr stays on pwsh for every manual tab.</span></div>
+      <div class="ctx__row" style="grid-template-columns:52px minmax(0,1fr)"><span class="ctx__k" style="color:var(--rust-500)">D3</span><span class="ctx__v"><b style="color:var(--text-strong)">Process shim (finding 2):</b> one pwsh CIM query per chain walk, <code>ps -W</code> for cheap liveness, no new binaries (PR-2 as sketched above).</span></div>
+      <div class="ctx__row" style="grid-template-columns:52px minmax(0,1fr)"><span class="ctx__k" style="color:var(--rust-500)">D4</span><span class="ctx__v"><b style="color:var(--text-strong)">Event push (finding 7):</b> accept polling for P6; a .NET AF_UNIX reader is an optional later PR-5 behind <code>FM_BACKEND_HERDR_EVENT_READER</code>.</span></div>
+      <div class="ctx__row" style="grid-template-columns:52px minmax(0,1fr)"><span class="ctx__k" style="color:var(--rust-500)">D5</span><span class="ctx__v"><b style="color:var(--text-strong)">Layout:</b> this repo becomes the fork (<code>upstream</code> remote, <code>main</code> tracking <code>upstream/main</code>); the live <code>FM_HOME</code> is a clone of it at <code>C:\Users\ebatt\firstmate</code>, on C:, outside OneDrive, LF checkout.</span></div>
+    </div>
+  </div>
+  <p class="lede" style="font-size:var(--fs-sm)">Still open, and deliberately so: Q1 (Kun's appetite for the platform badge) is answered by the upstream issue in Phase D, and Q2 (presentation spaces) by the Phase A measurement of finding 9.</p>
+  <div class="dec-grid" hidden>
+
+    <div class="fm-card fm-card--poster dec" data-lavish-question="strategy">
+      <div class="dec__top"><h3 class="dec__title">D1 · Posture for P6</h3><span class="fm-badge fm-badge--navy">scope</span></div>
+      <form onsubmit="return fmQueue(event,'strategy','Posture for P6')">
+        <div class="o-list">
+          <label class="o"><input type="radio" name="strategy" value="minimal patch + upstream PRs (4 PRs, env fixes in dotfiles)" checked><span class="o__body"><span class="o__label">Minimal patch + upstream PRs</span><span class="o__hint">Phases A-D as drawn above.</span></span><span class="o__rec">rec</span></label>
+          <label class="o"><input type="radio" name="strategy" value="minimal patch, local-only fork, no upstream PRs"><span class="o__body"><span class="o__label">Patch locally, skip upstreaming</span><span class="o__hint">Faster, but every upstream pull is a rebase of the same four patches forever.</span></span></label>
+          <label class="o"><input type="radio" name="strategy" value="stop after Phase A measurement and re-plan"><span class="o__body"><span class="o__label">Measure first, re-plan after Phase A</span><span class="o__hint">Bench the seams, then decide with the Windows test lane numbers in hand.</span></span></label>
+        </div>
+        <div class="dec__foot"><button type="submit" class="fm-btn fm-btn--sm fm-btn--primary">Queue this answer</button><span class="queued">queued for the agent</span></div>
+      </form>
+    </div>
+
+    <div class="fm-card fm-card--poster dec" data-lavish-question="pane-shell">
+      <div class="dec__top"><h3 class="dec__title">D2 · Crewmate pane shell (finding 6)</h3><span class="fm-badge fm-badge--danger">blocker</span></div>
+      <form onsubmit="return fmQueue(event,'pane-shell','Crewmate pane shell')">
+        <div class="o-list">
+          <label class="o"><input type="radio" name="pane-shell" value="firstmate herdr adapter sends 'exec bash -l' as the first pane command on MSYS (PR-4)" checked><span class="o__body"><span class="o__label">Adapter bootstraps bash in the tab</span><span class="o__hint">One MSYS-only branch in <code>herdr.sh</code>; your herdr stays on pwsh for everything else.</span></span><span class="o__rec">rec</span></label>
+          <label class="o"><input type="radio" name="pane-shell" value="switch herdr default_shell to bash globally in dotfiles"><span class="o__body"><span class="o__label">herdr <code>default_shell = "bash"</code></span><span class="o__hint">Zero firstmate change, but every manual herdr tab becomes Git Bash, which is not the dotfiles posture.</span></span></label>
+          <label class="o"><input type="radio" name="pane-shell" value="propose a config/pane-shell knob upstream so any platform can pick the crewmate shell"><span class="o__body"><span class="o__label">Upstream <code>config/pane-shell</code> knob</span><span class="o__hint">Most general; bigger PR and a docs/configuration.md schema change.</span></span></label>
+        </div>
+        <div class="dec__foot"><button type="submit" class="fm-btn fm-btn--sm fm-btn--primary">Queue this answer</button><span class="queued">queued for the agent</span></div>
+      </form>
+    </div>
+
+    <div class="fm-card fm-card--poster dec" data-lavish-question="proc-shim">
+      <div class="dec__top"><h3 class="dec__title">D3 · Process shim implementation (finding 2)</h3><span class="fm-badge fm-badge--danger">blocker</span></div>
+      <form onsubmit="return fmQueue(event,'proc-shim','Process shim implementation')">
+        <div class="o-list">
+          <label class="o"><input type="radio" name="proc-shim" value="one pwsh CIM query per chain walk, ps -W for cheap liveness (PR-2 as sketched)" checked><span class="o__body"><span class="o__label">pwsh CIM walk + <code>ps -W</code> liveness</span><span class="o__hint">Exact parent chain, measured 7/7 hops, ~300 ms per lock check, no new binaries.</span></span><span class="o__rec">rec</span></label>
+          <label class="o"><input type="radio" name="proc-shim" value="tiny Go helper binary (fm-proc.exe) shipped in bin/, built in CI"><span class="o__body"><span class="o__label">Small Go helper</span><span class="o__hint">Fast, but adds a build artifact to a repo that is pure scripts today; harder to upstream.</span></span></label>
+          <label class="o"><input type="radio" name="proc-shim" value="record the Win32 pid in state/.lock and probe with ps -W only; skip ancestry on Windows"><span class="o__body"><span class="o__label">Liveness only, no ancestry</span><span class="o__hint">Cheapest, but weakens the "this hook belongs to the lock owner" proof that gates auto-arm.</span></span></label>
+        </div>
+        <div class="dec__foot"><button type="submit" class="fm-btn fm-btn--sm fm-btn--primary">Queue this answer</button><span class="queued">queued for the agent</span></div>
+      </form>
+    </div>
+
+    <div class="fm-card fm-card--poster dec" data-lavish-question="events">
+      <div class="dec__top"><h3 class="dec__title">D4 · Event push vs. polling (finding 7)</h3><span class="fm-badge fm-badge--warn">degraded</span></div>
+      <form onsubmit="return fmQueue(event,'events','Event push vs polling')">
+        <div class="o-list">
+          <label class="o"><input type="radio" name="events" value="accept polling for P6; .NET AF_UNIX reader is a later optional PR-5" checked><span class="o__body"><span class="o__label">Accept polling for P6</span><span class="o__hint">Designed fallback; the watcher still sleeps on the fleet, just at poll cadence instead of sub-second.</span></span><span class="o__rec">rec</span></label>
+          <label class="o"><input type="radio" name="events" value="write herdr-eventwait.ps1 (.NET UnixDomainSocketEndPoint) in Phase B via FM_BACKEND_HERDR_EVENT_READER"><span class="o__body"><span class="o__label">Build the .NET reader in Phase B</span><span class="o__hint">Uses the existing reader override; needs its own wire-protocol verification on Windows.</span></span></label>
+        </div>
+        <div class="dec__foot"><button type="submit" class="fm-btn fm-btn--sm fm-btn--primary">Queue this answer</button><span class="queued">queued for the agent</span></div>
+      </form>
+    </div>
+
+    <div class="fm-card fm-card--poster dec" data-lavish-question="home" style="grid-column:1 / -1">
+      <div class="dec__top"><h3 class="dec__title">D5 · Where the firstmate home lives and how this repo relates to it</h3><span class="fm-badge fm-badge--navy">layout</span></div>
+      <form onsubmit="return fmQueue(event,'home','Firstmate home and repo layout')">
+        <div class="o-list">
+          <label class="o"><input type="radio" name="home" value="this repo becomes the fork (upstream remote + main tracking upstream/main); the live FM_HOME is a clone of it at C:\Users\ebatt\firstmate" checked><span class="o__body"><span class="o__label">This repo = fork; live home at <code>C:\Users\ebatt\firstmate</code></span><span class="o__hint">Patch branches here, PRs from here; the live home tracks the fork's main. On C:, outside OneDrive, LF checkout.</span></span><span class="o__rec">rec</span></label>
+          <label class="o"><input type="radio" name="home" value="this repo stays notes + patch files only; the live home is a plain upstream clone with a local branch"><span class="o__body"><span class="o__label">This repo = notes and patches; plain upstream clone is the home</span><span class="o__hint">Smaller repo, but patches live as files instead of branches and are harder to PR.</span></span></label>
+        </div>
+        <label style="font-size:var(--fs-xs);color:var(--text-muted);display:flex;flex-direction:column;gap:4px">Anything to add for the agent (optional)
+          <input class="freeform" name="note" type="text" placeholder="e.g. keep the home under ~/code instead" /></label>
+        <div class="dec__foot"><button type="submit" class="fm-btn fm-btn--sm fm-btn--primary">Queue this answer</button><span class="queued">queued for the agent</span></div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== RISKS ============================== -->
+<section id="risks">
+  <div class="sec-head">
+    <h2>Risks and open questions</h2>
+    <span class="fm-sign fm-sign--muted">what could still sink this</span>
+  </div>
+  <div class="risks">
+    <div class="fm-card risk"><span class="risk__k">R1</span><p><b>Hook shell on Windows: retired.</b> Measured in Phase A (finding 11): Claude Code runs project hooks in Git Bash with a forward-slash <code>CLAUDE_PROJECT_DIR</code>, and <code>exec "$CLAUDE_PROJECT_DIR"/bin/…</code> works unchanged.</p></div>
+    <div class="fm-card risk"><span class="risk__k">R2</span><p><b>Upstream velocity.</b> <code>bin/</code> changes daily and PR-2 touches four hot files. Mitigation: a leaf library the callers source, so the diff in each hot file is one function swap; rebase before every push; open the issue before the PR so Kun can steer the shape.</p></div>
+    <div class="fm-card risk"><span class="risk__k">R3</span><p><b>MSYS path conversion (finding 12).</b> A single <code>--match "/…"</code> or a regex handed to <code>herdr.exe</code> can be rewritten to <code>C:\…</code> silently. Audit every <code>fm_backend_herdr_cli</code> argument in Phase A; if any is hit, scope <code>MSYS2_ARG_CONV_EXCL</code> to that call rather than globally.</p></div>
+    <div class="fm-card risk"><span class="risk__k">R4</span><p><b>herdr Windows preview semantics.</b> Kun's spike flagged <code>foreground_process_group_id</code> as possibly absent on Windows, which downgrades the focus-safe idle-shell proof. Nested bash-in-pwsh (D2) also changes what <code>pane process-info</code> sees. Both are measurable in the lab session before PR-4 is written.</p></div>
+    <div class="fm-card risk"><span class="risk__k">R5</span><p><b>Containment.</b> Crewmates run <code>claude --dangerously-skip-permissions</code> in worktrees; on this machine the only containment is git + worktrees until P8 imaging. Same posture as the dotfiles <code>cc</code> alias, just multiplied by the fleet size. Keep the fleet at one or two crewmates until P8.</p></div>
+    <div class="fm-card risk"><span class="risk__k">R6</span><p><b>Test suite as instrument.</b> 15 tests touch <code>ps -o</code>/<code>lsof</code> and 23 branch on <code>uname</code>; some will fail on Windows for reasons that are test-harness assumptions, not product bugs. Phase A must classify each red test as product, test, or platform before Phase B chases it.</p></div>
+    <div class="fm-card risk"><span class="risk__k">Q1</span><p><b>Does Kun want Windows in the platform badge?</b> The spike workflow says he is measuring, not committing. If the answer is "not yet", PRs 1-3 are still neutral improvements (LF attributes, a proc lib, a path normalizer) and PR-4 can wait as a local delta.</p></div>
+    <div class="fm-card risk"><span class="risk__k">Q2</span><p><b>Presentation spaces (finding 9).</b> If the flat fallback is not graceful, is a flat one-workspace-per-home layout acceptable for P6, or is the disposable-workspace-per-task projection part of the experience you want?</p></div>
+  </div>
+</section>
+
+<div class="foot">
+  <span>firstmate-for-windows · plan v1.1 (D1-D5 locked) · sources: upstream f66be0f, ~/dotfiles @ 71d567a, claude-mem #28689 #28809 #28817 #28774</span>
+  <span>design: Firstmate Design System tokens (upstream bearings board), chosen because the artifact is about that product</span>
+</div>
+
+</main>
+
+<script>
+// Reversible local selection; one queued prompt per question on submit only.
+function fmQueue(ev, key, title) {
+  ev.preventDefault();
+  var form = ev.currentTarget;
+  var fd = new FormData(form);
+  var choice = fd.get(key);
+  if (!choice) return false;
+  var note = (fd.get('note') || '').toString().trim();
+  var text = title + ': ' + choice + (note ? ' (note: ' + note + ')' : '');
+  var card = form.closest('.dec');
+  if (window.lavish && typeof window.lavish.queuePrompt === 'function') {
+    window.lavish.queuePrompt('Decision ' + text, {
+      tag: 'decision', text: text, element: form, queueKey: key,
+      data: { question: key, answer: choice, note: note }
+    });
+    if (card) card.classList.add('is-queued');
+  } else {
+    if (card) { card.classList.add('is-queued'); card.querySelector('.queued').textContent = 'selected (open in Lavish to queue)'; }
+  }
+  return false;
+}
+</script>
+</body>
+</html>
