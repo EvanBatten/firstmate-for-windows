@@ -113,6 +113,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
 | portable serial 1-4 | job `timeout-minutes: 20` | Each balanced shard is about eleven minutes of measured script time, leaving roughly 2x hang-tripwire margin for job setup and runner-speed spread. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finish around 7 minutes, so the step bound is the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. |
+| portable parallel 1/2 on Windows | job `timeout-minutes: 60`; `--per-script-timeout-secs 300` | A process spawn under Git Bash costs roughly ten times what it does on Linux, so the same two shards measure at 15 and 11 minutes. `.github/workflows/windows-port.yml` owns those numbers. |
 
 Timeouts are hang tripwires rather than expected healthy durations.
 `.github/workflows/ci.yml` owns the exact numbers.

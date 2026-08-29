@@ -1,0 +1,170 @@
+name: Windows port
+
+# The count to beat for the Git Bash port. This lane is expected to be red
+# while the port lands; its job is to publish a reproducible pass/fail count on
+# a clean windows-latest runner so each Phase B slice can be measured against
+# it. docs/windows/measurement.md carries the classification of every red
+# script. Keep this lane off the required set until it is green.
+on:
+  push:
+    branches: [windows]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Without this Git Bash copies instead of linking, and the test harness's
+  # fakebin construction fails with "ln: failed to create symbolic link".
+  # Measured in docs/windows/measurement.md ("Portable lane results").
+  MSYS: winsymlinks:nativestrict
+
+jobs:
+  lint:
+    name: Lint (Windows)
+    runs-on: windows-latest
+    # ci.yml's Linux lint job needs no cap at all. Here the same lint was still
+    # running healthily after 25 minutes: fm-lint.sh hands ShellCheck the file
+    # set in a few large batches under --external-sources, and that cross-file
+    # analysis is far slower on this platform. CI also refuses --fast, so the
+    # full analysis is mandatory. A hang tripwire with margin, not the expected
+    # healthy end of the job.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install pinned ShellCheck and actionlint
+        run: |
+          set -eu
+          # RUNNER_TEMP is a native Windows path here (D:\a\_temp). Git Bash
+          # accepts it with a trailing POSIX component, and GITHUB_PATH wants
+          # the Windows spelling, so hand each side the form it reads.
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          cygpath -w "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Same single owner of the lint definition as ci.yml. Do not re-spell the
+      # checks here.
+      - run: bin/fm-lint.sh
+
+  # The two portable parallel shards, run strictly serially. --jobs N with N>1
+  # fails every script on this platform: the runner's own per-worker isolation
+  # check requires mode 0700 and reads back 755 on a noacl Git Bash mount
+  # (finding 21). Composition owner is still bin/fm-test-run.sh.
+  tests-portable-parallel-1:
+    name: Behavior portable parallel 1 (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck and actionlint
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          cygpath -w "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install tasks-axi
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      # First-run diagnostics. A missing runner tool should read as a named gap
+      # in the log, not as a mystery failure inside an unrelated test script -
+      # python3 in particular, which the --json artifact below hard-requires.
+      - name: Report the Git Bash toolchain
+        run: |
+          set -u
+          uname -srm
+          "$BASH" --version | head -1
+          for tool in jq node python3 git curl unzip shellcheck actionlint; do
+            printf '%s: %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
+          done
+      - name: Run portable parallel shard 1
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          rc=0
+          # A process spawn costs roughly ten times what it does on Linux, so
+          # the per-script bound is raised from the runner's default rather
+          # than letting a slow-but-healthy script read as a hang.
+          bin/fm-test-run.sh --lane portable-parallel-1 \
+            --per-script-timeout-secs 300 \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json" \
+            2>&1 | tee "$RUNNER_TEMP/fm-test/shard-1.log" || rc=$?
+          exit "$rc"
+      - name: Publish shard 1 count
+        if: always()
+        run: |
+          set -eu
+          grep '^FM_TEST_SUMMARY ' "$RUNNER_TEMP/fm-test/shard-1.log" \
+            >> "$GITHUB_STEP_SUMMARY" || echo 'no FM_TEST_SUMMARY line' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload shard 1 timing artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-test-windows-portable-parallel-1
+          path: ${{ runner.temp }}/fm-test/
+          if-no-files-found: warn
+
+  tests-portable-parallel-2:
+    name: Behavior portable parallel 2 (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck and actionlint
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          cygpath -w "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install tasks-axi
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      # First-run diagnostics. A missing runner tool should read as a named gap
+      # in the log, not as a mystery failure inside an unrelated test script -
+      # python3 in particular, which the --json artifact below hard-requires.
+      - name: Report the Git Bash toolchain
+        run: |
+          set -u
+          uname -srm
+          "$BASH" --version | head -1
+          for tool in jq node python3 git curl unzip shellcheck actionlint; do
+            printf '%s: %s\n' "$tool" "$(command -v "$tool" || echo MISSING)"
+          done
+      - name: Run portable parallel shard 2
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          rc=0
+          bin/fm-test-run.sh --lane portable-parallel-2 \
+            --per-script-timeout-secs 300 \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json" \
+            2>&1 | tee "$RUNNER_TEMP/fm-test/shard-2.log" || rc=$?
+          exit "$rc"
+      - name: Publish shard 2 count
+        if: always()
+        run: |
+          set -eu
+          grep '^FM_TEST_SUMMARY ' "$RUNNER_TEMP/fm-test/shard-2.log" \
+            >> "$GITHUB_STEP_SUMMARY" || echo 'no FM_TEST_SUMMARY line' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload shard 2 timing artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-test-windows-portable-parallel-2
+          path: ${{ runner.temp }}/fm-test/
+          if-no-files-found: warn

@@ -4,10 +4,11 @@
 # Downloads the official GitHub release archive for the host OS/arch, verifies
 # its per-archive SHA-256 pin, and installs the binary into the destination
 # directory. Supported platforms: linux amd64/x86_64, linux arm64/aarch64,
-# darwin amd64/x86_64, darwin arm64/aarch64. Pins come from the official
-# actionlint release checksums file. Verification uses sha256sum when present,
-# otherwise shasum -a 256. An unsupported OS/arch or a missing pin fails
-# without downloading.
+# darwin amd64/x86_64, darwin arm64/aarch64, and a Windows userland (Git Bash
+# MINGW*/MSYS*) on amd64/x86_64. Pins come from the official actionlint release
+# checksums file. Verification uses sha256sum when present, otherwise
+# shasum -a 256. An unsupported OS/arch or a missing pin fails without
+# downloading.
 #
 # Usage:
 #   fm-install-actionlint.sh <destination-directory>
@@ -44,8 +45,13 @@ case "${os}-${arch}" in
     ARCHIVE="actionlint_${VERSION}_darwin_arm64.tar.gz"
     SHA256=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
     ;;
+  # Git Bash and MSYS2 report MINGW64_NT-* / MSYS_NT-*.
+  MINGW*-x86_64|MINGW*-amd64|MSYS*-x86_64|MSYS*-amd64)
+    ARCHIVE="actionlint_${VERSION}_windows_amd64.zip"
+    SHA256=6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9
+    ;;
   *)
-    die "unsupported platform ${os}-${arch}; need linux or darwin on amd64/x86_64 or arm64/aarch64"
+    die "unsupported platform ${os}-${arch}; need linux or darwin on amd64/x86_64 or arm64/aarch64, or a Windows userland on amd64/x86_64"
     ;;
 esac
 [ -n "$SHA256" ] || die "no pinned checksum for ${os}-${arch}"
@@ -67,9 +73,9 @@ while ! curl -fsSL "$URL" -o "$TMP/$ARCHIVE"; do
 done
 
 if command -v sha256sum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
+  ACTUAL_SHA256=$(sha256sum <"$TMP/$ARCHIVE" | awk '{print $1}')
 elif command -v shasum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')
+  ACTUAL_SHA256=$(shasum -a 256 <"$TMP/$ARCHIVE" | awk '{print $1}')
 else
   die "need sha256sum or shasum to verify the actionlint archive"
 fi
@@ -78,7 +84,22 @@ fi
     "$ARCHIVE" "$SHA256" "$ACTUAL_SHA256" >&2
   exit 1
 }
-tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
+# The Windows asset is a zip holding actionlint.exe at its root, and the GNU tar
+# a Git Bash host provides cannot read a zip. Every other asset stays on the
+# exact tar call this script has always made.
+case "$ARCHIVE" in
+  *.zip)
+    command -v unzip >/dev/null 2>&1 || die "need unzip to extract $ARCHIVE"
+    unzip -q -o "$TMP/$ARCHIVE" -d "$TMP/extract"
+    EXTRACTED="$TMP/extract/actionlint.exe"
+    INSTALLED="$DESTINATION/actionlint.exe"
+    ;;
+  *)
+    tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
+    EXTRACTED="$TMP/actionlint"
+    INSTALLED="$DESTINATION/actionlint"
+    ;;
+esac
 mkdir -p "$DESTINATION"
-install -m 0755 "$TMP/actionlint" "$DESTINATION/actionlint"
-"$DESTINATION/actionlint" -version
+install -m 0755 "$EXTRACTED" "$INSTALLED"
+"$INSTALLED" -version

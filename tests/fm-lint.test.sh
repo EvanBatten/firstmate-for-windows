@@ -22,13 +22,14 @@ INSTALLER="$ROOT/bin/fm-install-shellcheck.sh"
 # The pinned version, read from the single source (the one owner itself).
 REQUIRED=$("$LINT" --required-version)
 
-# Official GitHub release asset sha256 values for shellcheck v0.11.0 .tar.xz
+# Official GitHub release asset sha256 values for the shellcheck v0.11.0
 # archives (https://github.com/koalaman/shellcheck/releases/tag/v0.11.0). Tests
 # compare installer behavior against these published digests, not script source.
 SHELLCHECK_SHA_LINUX_X86_64=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 SHELLCHECK_SHA_LINUX_AARCH64=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
 SHELLCHECK_SHA_DARWIN_X86_64=3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6
 SHELLCHECK_SHA_DARWIN_AARCH64=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
+SHELLCHECK_SHA_WINDOWS_X86_64=8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
 
 # fm_install_stub_uname <fakebin>: uname -s / uname -m from FM_TEST_UNAME_S/M.
 fm_install_stub_uname() {
@@ -109,7 +110,17 @@ if [ "$self" = shasum ]; then
   done
   [ "$algo" = 256 ] || exit 1
 fi
-printf '%s  %s\n' "${SHA256_STUB_HASH:?}" "$file"
+# GNU coreutils escapes a file operand containing a backslash and prefixes
+# the whole line with one, which is what a Windows RUNNER_TEMP (D:\a\_temp)
+# produces on a GitHub Actions runner.
+case "$file" in
+  *\\*)
+    printf '\\%s  %s\n' "${SHA256_STUB_HASH:?}" "$(printf '%s' "$file" | sed 's/\\/\\\\/g')"
+    ;;
+  *)
+    printf '%s  %s\n' "${SHA256_STUB_HASH:?}" "$file"
+    ;;
+esac
 SH
   chmod +x "$fakebin/$name"
 }
@@ -133,6 +144,42 @@ done
 exit 2
 SH
   chmod +x "$fakebin/tar"
+}
+
+fm_install_stub_unzip_shellcheck() {
+  local fakebin=$1
+  cat > "$fakebin/unzip" <<'SH'
+#!/usr/bin/env bash
+dest=
+archive=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d)
+      dest=$2
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      archive=$1
+      shift
+      ;;
+  esac
+done
+[ -n "$dest" ] || exit 2
+# Refuse an archive the installer never downloaded, so a wrong operand cannot
+# still produce a working install.
+[ -f "$archive" ] || exit 3
+mkdir -p "$dest"
+cat > "$dest/shellcheck.exe" <<'EOF'
+#!/usr/bin/env bash
+printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+EOF
+chmod +x "$dest/shellcheck.exe"
+exit 0
+SH
+  chmod +x "$fakebin/unzip"
 }
 
 fm_install_stub_sleep() {
@@ -506,7 +553,7 @@ test_installer_retries_transient_download_failure() {
 }
 
 test_installer_selects_platform_archive_url_and_checksum() {
-  local tmp fakebin destination out url_log uname_s uname_m archive sha
+  local tmp fakebin destination out url_log uname_s uname_m archive sha binary
   tmp=$(fm_test_tmproot fm-shellcheck-platform)
   fakebin=$(fm_fakebin "$tmp")
   destination="$tmp/bin"
@@ -516,9 +563,10 @@ test_installer_selects_platform_archive_url_and_checksum() {
   fm_install_stub_curl "$fakebin"
   fm_install_stub_hasher "$fakebin" sha256sum
   fm_install_stub_tar_shellcheck "$fakebin"
+  fm_install_stub_unzip_shellcheck "$fakebin"
   fm_install_stub_sleep "$fakebin"
 
-  while IFS=$'\t' read -r uname_s uname_m archive sha; do
+  while IFS=$'\t' read -r uname_s uname_m archive sha binary; do
     [ -n "$uname_s" ] || continue
     rm -rf "$destination"
     : > "$url_log"
@@ -531,16 +579,19 @@ test_installer_selects_platform_archive_url_and_checksum() {
     assert_contains "$(cat "$url_log")" \
       "https://github.com/koalaman/shellcheck/releases/download/v${REQUIRED}/${archive}" \
       "installer used the wrong URL for ${uname_s}/${uname_m}"
-    [ -x "$destination/shellcheck" ] || fail "installer did not install ShellCheck for ${uname_s}/${uname_m}"
+    [ -x "$destination/$binary" ] \
+      || fail "installer did not install $binary for ${uname_s}/${uname_m}"
   done <<EOF
-Linux	x86_64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64
-Linux	amd64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64
-Linux	aarch64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64
-Linux	arm64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64
-Darwin	x86_64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64
-Darwin	amd64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64
-Darwin	arm64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64
-Darwin	aarch64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64
+Linux	x86_64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64	shellcheck
+Linux	amd64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64	shellcheck
+Linux	aarch64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64	shellcheck
+Linux	arm64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64	shellcheck
+Darwin	x86_64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64	shellcheck
+Darwin	amd64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64	shellcheck
+Darwin	arm64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64	shellcheck
+Darwin	aarch64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64	shellcheck
+MINGW64_NT-10.0-26200	x86_64	shellcheck-v${REQUIRED}.zip	$SHELLCHECK_SHA_WINDOWS_X86_64	shellcheck.exe
+MSYS_NT-10.0-26200	x86_64	shellcheck-v${REQUIRED}.zip	$SHELLCHECK_SHA_WINDOWS_X86_64	shellcheck.exe
 EOF
   pass "ShellCheck installer selects the official archive, URL, and checksum per OS/arch"
 }
@@ -578,9 +629,7 @@ test_installer_falls_back_to_shasum() {
   destination="$tmp/bin"
   hasher_log="$tmp/hasher.log"
 
-  for tool in bash dirname mktemp rm awk mkdir install cat chmod; do
-    ln -s "$(command -v "$tool")" "$fakebin/$tool"
-  done
+  fm_fakebin_link "$fakebin" bash dirname mktemp rm awk mkdir install cat chmod
   fm_install_stub_uname "$fakebin"
   fm_install_stub_curl "$fakebin"
   fm_install_stub_hasher "$fakebin" shasum
@@ -626,6 +675,33 @@ test_installer_prefers_sha256sum_over_shasum() {
   pass "ShellCheck installer prefers sha256sum when both hashers are present"
 }
 
+# A Windows CI runner hands the installer a RUNNER_TEMP such as D:\\a\\_temp, so the
+# archive path holds backslashes. GNU coreutils then escapes the checksum line
+# and prefixes it with one, and awk '{print $1}' reads a digest with a leading
+# backslash. Hashing on stdin keeps the file name out of the output entirely.
+test_installer_verifies_a_checksum_under_a_backslash_temp_root() {
+  local tmp fakebin destination out runner_temp
+  tmp=$(fm_test_tmproot fm-shellcheck-backslash)
+  fakebin=$(fm_fakebin "$tmp")
+  destination="$tmp/bin"
+  runner_temp="$tmp/win\temp"
+  mkdir -p "$runner_temp"
+
+  fm_install_stub_uname "$fakebin"
+  fm_install_stub_curl "$fakebin"
+  fm_install_stub_hasher "$fakebin" sha256sum
+  fm_install_stub_tar_shellcheck "$fakebin"
+  fm_install_stub_sleep "$fakebin"
+
+  out=$(RUNNER_TEMP="$runner_temp" SHA256_STUB_HASH="$SHELLCHECK_SHA_LINUX_X86_64" \
+    FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    || fail "installer rejected a correct checksum under a backslash temp root"$'\n'"$out"
+  [ -x "$destination/shellcheck" ] \
+    || fail "installer did not install ShellCheck under a backslash temp root"
+  pass "ShellCheck installer verifies a checksum when the temp root holds backslashes"
+}
+
 test_installer_rejects_unsupported_platform() {
   local tmp fakebin destination out rc
   tmp=$(fm_test_tmproot fm-shellcheck-unsupported)
@@ -654,9 +730,7 @@ test_missing_shellcheck_fails_closed() {
   local tmp fakebin out rc tool
   tmp=$(fm_test_tmproot fm-lint-noshellcheck)
   fakebin=$(fm_fakebin "$tmp")
-  for tool in bash dirname; do
-    ln -s "$(command -v "$tool")" "$fakebin/$tool"
-  done
+  fm_fakebin_link "$fakebin" bash dirname
   rc=0
   out=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>&1) || rc=$?
   [ "$rc" -eq 1 ] || fail "missing ShellCheck expected exit 1, got $rc"$'\n'"$out"
@@ -1006,6 +1080,7 @@ test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
 test_installer_falls_back_to_shasum
 test_installer_prefers_sha256sum_over_shasum
+test_installer_verifies_a_checksum_under_a_backslash_temp_root
 test_installer_rejects_unsupported_platform
 test_missing_shellcheck_fails_closed
 test_rejects_wrong_shellcheck_version

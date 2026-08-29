@@ -67,12 +67,12 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | fm-cd-pretool-check | FAIL | "transport must fail open when node is unavailable: expected exit 0, got 127" | **test** - resolved in slice 4: a curated `PATH` of symlinked MSYS binaries cannot load `msys-2.0.dll`, so the child dies before the guard runs; the guard itself fails open correctly |
 | fm-captain-hold-lifecycle | TIMEOUT | exceeded the 300 s per-script bound (failed in 11 s without the env var) | unknown; hang once symlinks are real, investigate with `bash -x` |
 | fm-test-run | FAIL | "isolation failure: worker root mode is 755, expected 0700" | platform: row 21 (the runner's own `--jobs` isolation check) |
-| fm-lint | FAIL | "installer did not fall back to shasum -a 256" | test: exercises `fm-install-shellcheck.sh`, which dies on `uname` (row 19) before the fallback |
+| fm-lint | FAIL | "installer did not fall back to shasum -a 256" | **test** - resolved in slice 5: the test stubs `uname`, so row 19 was the wrong verdict; the cause is a fakebin of symlinked MSYS binaries with no `msys-2.0.dll` (slice 4's finding). Now 28/28 |
 
 ### Count to beat
 
 11 green, 12 red, 1 gate-skip across the 24 portable-parallel scripts, plus 14 of 15 in the real-herdr smoke test.
-Of the 12 red, 3 are row 21 (POSIX modes), 1 is row 19, 2 were the guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`, both green after slice 4), 1 is `fm-backend-herdr` (green after slice 3), 1 is a timeout, and 4 need a first look.
+Of the 12 red, 3 are row 21 (POSIX modes), 2 were the guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`, both green after slice 4), 1 is `fm-backend-herdr` (green after slice 3), 1 is `fm-lint` (green after slice 5), 1 is a timeout, and 4 need a first look.
 The 131-script portable-serial lane was not run in Phase A (roughly 3 hours at this box's spawn rate); Phase B runs it once the row 21 decision is applied.
 
 ## Phase B slice 1 (PR-2): process identity and liveness
@@ -629,6 +629,130 @@ No case there embeds an absolute path in its command, so none is affected today,
 `tests/fm-turnend-guard.test.sh` and `tests/fm-x-mode.test.sh` open-code the same fakebin loop at three more sites.
 They are slice 6's, and `fm_fakebin_link` is what they need.
 
+## Phase B slice 5: the Windows CI lane
+
+`.github/workflows/windows-port.yml` runs `bin/fm-lint.sh` and both portable parallel shards on `windows-latest` under Git Bash, triggered on push to `windows` and on `workflow_dispatch`.
+It is expected to be red while the port lands.
+Its job is to publish a reproducible count on a clean runner instead of on this one box, so a reviewer can see the same numbers this file claims.
+
+### Two defects stood between the lane and its first run
+
+**Row 19: the lint toolchain would not install at all.**
+`bin/fm-install-shellcheck.sh` and `bin/fm-install-actionlint.sh` die with `unsupported platform MINGW64_NT-10.0-26200-x86_64`, so a Windows lint job had nothing to run.
+Both projects publish an official Windows asset with a published digest, so each installer gained exactly one `MINGW*|MSYS*` case arm carrying the same `ARCHIVE` + `SHA256` shape the other four arms use:
+
+| Installer | Windows archive | Digest source |
+| --- | --- | --- |
+| `fm-install-shellcheck.sh` | `shellcheck-v0.11.0.zip` | the release asset's own `digest` field (`gh api repos/koalaman/shellcheck/releases/tags/v0.11.0`) |
+| `fm-install-actionlint.sh` | `actionlint_1.7.12_windows_amd64.zip` | `actionlint_1.7.12_checksums.txt`, the same file the four existing pins came from |
+
+Both archives are zips holding one `.exe` at the root, and the GNU tar a Git Bash host provides cannot read a zip, so the extraction step became a two-arm `case` on the archive suffix.
+The POSIX arm is the byte-identical `tar -xJf` / `tar -xzf` call each script has always made; `unzip` ships with Git for Windows at `C:\Program Files\Git\usr\bin\unzip.exe`, and its absence is a named `die` rather than a bare 127.
+Only `shellcheck` and `actionlint` gained an arm: herdr installs through its own `install.ps1` on Windows and treehouse publishes no Windows asset to pin, so those two keep failing closed on the exact message they had.
+
+**Every checksum verification failed under a Windows `RUNNER_TEMP`.**
+This is the finding worth carrying upstream, because it has nothing to do with the new arms and would have bitten any Windows lane:
+
+```
+$ RUNNER_TEMP='C:\Users\ebatt\AppData\Local\Temp\fm-slice5' bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+fm-install-shellcheck.sh: checksum mismatch for shellcheck-v0.11.0.zip
+  (expected 8a4e35ab...740e, got \8a4e35ab...740e)
+```
+
+The digest is correct; it arrives with a leading backslash.
+GNU coreutils escapes a checksum line whose file operand contains a backslash or a newline, and marks it by prefixing the whole line with one more:
+
+```
+$ sha256sum 'C:\Users\ebatt\AppData\Local\Temp\fm-slice5\f'
+\98ea6e4f...be4 *C:\\Users\\ebatt\\AppData\\Local\\Temp\\fm-slice5\\f
+$ sha256sum <'C:\Users\ebatt\AppData\Local\Temp\fm-slice5\f'
+98ea6e4f...be4 *-
+```
+
+`RUNNER_TEMP` on a GitHub Actions Windows runner is always a native path (`D:\a\_temp`), so `awk '{print $1}'` always read a digest with a leading `\` and the pin never matched.
+The fix is one redirection in each of the four installers - hash the archive on **stdin**, which keeps the file name out of the output entirely and cannot be escaped by any path shape.
+It is not a Windows branch: a POSIX path containing a backslash breaks the old form identically today, so this is a portability fix that happens to have been found on Windows.
+
+The other ~15 `shasum -a 256 "$file" | awk '{print $1}'` sites in `bin/` are left alone.
+They hash paths built from `$FM_HOME` and friends, which are POSIX-form on every host firstmate runs on; the four installers are the only scripts that take their temp root from a caller-supplied environment variable that a Windows CI runner fills with backslashes.
+
+### The lane's own shape
+
+- **Serial by construction.** No `--jobs`. `--jobs N` with `N>1` fails every script in the lane, because the runner's own per-worker isolation check requires mode 0700 and reads back 755 on a noacl mount (row 21). The workflow says so in a comment so nobody "optimizes" it back.
+- **`--per-script-timeout-secs 300`**, matching how both lanes were measured locally. A process spawn costs roughly ten times what it does on Linux, and the default bound reads a slow-but-healthy script as a hang.
+- **`timeout-minutes: 60` on the lint job.** The first draft said 20, which would have made the job fail on the clock for a reason that is not the port. `CI=true bin/fm-lint.sh` was still running healthily 25 minutes in on this box, and the cost is not the usual spawn tax: `fm-lint.sh` hands ShellCheck the whole file set in a few large batches under `--external-sources`, and one batch of ~70 `bin/*.sh` files alone was still going after seventeen minutes. CI also refuses `--fast`, so the full extended analysis is mandatory there. `ci.yml`'s Linux lint job needs no cap at all. Both bounds in this workflow are hang tripwires rather than expected durations, the way `docs/fm-test-portable-shards.md` describes.
+- **`MSYS: winsymlinks:nativestrict`** at workflow level. Without it the harness's fakebin construction fails with `ln: failed to create symbolic link`, which was measured in "Portable lane results" above.
+- **`cygpath -w` into `GITHUB_PATH`.** `$RUNNER_TEMP/bin` is a mixed path (`D:\a\_temp/bin`); Git Bash reads it fine, and `GITHUB_PATH` gets the unambiguous Windows spelling.
+- **A toolchain diagnostic step** prints `uname -srm`, the bash version, and the resolved path of `jq`, `node`, `git`, `curl`, `unzip`, `shellcheck` and `actionlint`, so a missing runner tool reads as a named gap in the log rather than as a mystery failure inside an unrelated test script.
+- **`FM_TEST_SUMMARY` into `$GITHUB_STEP_SUMMARY`**, so the count to beat is on the run page rather than buried in the log, and the whole `fm-test/` directory is uploaded on `always()`.
+
+### `tests/fm-lint.test.sh` was red for the fakebin reason, not row 19
+
+Phase A classified `fm-lint`'s failure as "test: exercises `fm-install-shellcheck.sh`, which dies on `uname` (row 19) before the fallback".
+That was wrong: the test stubs `uname`, so it never reaches the platform switch.
+The real cause is slice 4's finding, at the two sites this file open-codes:
+
+```
+$ PATH="$fakebin" "$fakebin/bash" -c 'mktemp -d /tmp/probe.XXXXXX'
+.../fakebin/bash: error while loading shared libraries: ?: cannot open shared object file
+rc=127
+```
+
+Windows resolves an MSYS executable's DLLs against the directory the image was launched from and then against `PATH`, so a symlinked `bash.exe` in a fakebin holding no `msys-2.0.dll` dies before the script under test runs a line.
+`fm_fakebin_link` (added in slice 4) is exactly the fix, and the four remaining open-coded loops in this family - two in `tests/fm-lint.test.sh`, two in `tests/fm-lint-workflows.test.sh` - now use it.
+`tests/fm-turnend-guard.test.sh`, `tests/fm-x-mode.test.sh`, `tests/fm-bearings-snapshot.test.sh` and `tests/fm-kimi-harness.test.sh` still open-code it; they are slice 6's.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"` with `RUNNER_TEMP` a native Windows path | installs `shellcheck.exe`, prints `version: 0.11.0` |
+| `bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"` likewise | installs `actionlint.exe`, prints `1.7.12 ... for windows/amd64` |
+| `bin/fm-lint-workflows.sh` (actionlint 1.7.12, pinned) | `4 workflow files valid` |
+| `command -v shellcheck` against the installed `shellcheck.exe`, then executing what it returns | resolves to the extensionless path, MSYS appends `.exe` on exec, `--version` parses as `0.11.0` and a real file is analyzed - so `bin/fm-lint.sh`'s own resolution chain (`command -v` into `SHELLCHECK_BIN`) needs no Windows branch |
+| `bin/fm-lint.sh` on the six changed shell files, by explicit path | clean (ShellCheck 0.11.0, full extended analysis) |
+| `tests/fm-lint.test.sh` | **28 / 28 on Windows** - was red at case 11 |
+| `tests/fm-lint-workflows.test.sh` | **17 / 17 on Windows** |
+| `bin/fm-test-run.sh --check-coverage` | `ok total=170 parallel=24 serial=134 serial_shards=4 herdr=12` |
+| Mutation: hash by name again in `fm-install-shellcheck.sh` | the backslash-temp-root case fails, showing `got \8c3be12b...` - the production defect itself |
+| Mutation: flip one hex digit of the Windows pin in `fm-install-actionlint.sh` | `installer failed for MINGW64_NT-10.0-26200/x86_64` |
+| Mutation: `elif command -v shasum` to `elif false` | `installer did not fall back to shasum -a 256`, so the `fm_fakebin_link` PATH really exercises the fallback |
+| Mutation: unzip an archive the installer never downloaded | `installer failed for MINGW64_NT-10.0-26200/x86_64` |
+
+Both suites' new coverage runs on any host, the way slices 1-4's does.
+The platform table gained a `MINGW64_NT-*` and an `MSYS_NT-*` row plus a fifth column for the expected binary name, driven by a stub `unzip`; the new backslash case creates a real directory whose name contains a backslash and points `RUNNER_TEMP` at it, and the stub hasher now reproduces coreutils' escaping exactly, so the case fails on Linux too if the redirection is reverted.
+
+### What the acceptance review changed
+
+The adversarial review's central question was whether hashing on stdin weakens the supply-chain check.
+It does not, and the argument is worth keeping: the redirection is an `O_RDONLY` open by the shell of the identical path the extraction step opens later, so the hash-then-extract window is byte-for-byte what it always was, and the archive still sits in a fresh `mktemp -d` 0700 directory either way.
+The reviewer measured the stdin form on GNU coreutils 8.32 here, perl `shasum -a 256`, Linux GNU and BusyBox: all four print the digest in field 1 with no file name at all, so no path shape can shift what `awk` selects.
+It is the *by-name* form that varies by input, which makes the change equal-or-stronger rather than a trade.
+It also reproduced both pins independently from the release API and the checksums file, and confirmed both `.exe` files sit at their zip roots.
+
+Two findings became changes:
+
+- **`python3` was missing from the toolchain probe** while `--json` hard-dies without it (`bin/fm-test-run.sh:1372`). It resolves on `windows-latest` today, but if that ever changed the failure would read as a mystery inside the test runner rather than a named gap. It is now in the probe list.
+- **The stub `unzip` ignored its archive operand**, so a mutation that extracted the wrong file still produced a working install and passed. It now refuses an archive that does not exist, and that mutation fails.
+
+Three findings are recorded rather than fixed: an interleaving risk in the `grep '^FM_TEST_SUMMARY '` step whose only consequence is the fallback line it already prints; the `set -uo pipefail` line implying `-e` was meant to be off when GitHub already passes it (the `| tee ... || rc=$?` pattern is correct either way); and a process note for anyone repeating this review.
+That note is worth stating plainly: `git checkout --` is the wrong restore mechanism against an uncommitted slice, because it restores to `HEAD` and so destroys the very thing under review.
+It did exactly that here, mid-review, and the recovery was from saved copies.
+Every file in this slice was afterwards compared byte-for-byte against a snapshot taken before the review started, and every one matched.
+
+### Not fixed here
+
+The bootstrap hint still prints `brew install` on Windows, which is the cosmetic half of row 19.
+
+`fm-install-herdr.sh` and `fm-install-treehouse.sh` still die on a Windows userland.
+They got the stdin fix because the defect was identical and two lines away, but neither has a Windows asset to pin, and herdr's own `install.ps1` is what `windows-herdr-spike.yml` already uses.
+
+The lane cannot be exercised from this branch: `workflow_dispatch` needs the workflow present on a branch GitHub will offer, and the push trigger is scoped to `windows`.
+Its first real count comes from the fork's `windows` branch.
+
+The lane runs the two parallel shards only, so it covers `tests/fm-lint.test.sh` but not `tests/fm-lint-workflows.test.sh`, which lives in the portable serial lane.
+Both were run here by hand for this slice; a Windows serial lane is slice 6's question, once its runtime is known.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -666,4 +790,12 @@ node bin/fm-arm-command-policy.mjs --command 'bin/fm-watch-arm.sh &' --root "$PW
 node bin/fm-arm-command-policy.mjs --command "source '$PWD/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180" --root "$PWD" --home "$PWD"
 node -e 'console.log(JSON.stringify(process.argv.slice(2)))' --root /c/fm --home /c/fm
 printf '%s' '{"tool_input":{"command":"bin/fm-watch-arm.sh &"}}' | bin/fm-arm-pretool-check.sh; echo $?
+# slice 5 (row 19, and the checksum defect; both installs failed before the fix)
+export RUNNER_TEMP='C:\Users\ebatt\AppData\Local\Temp\fm-probe'; mkdir -p "$RUNNER_TEMP"
+bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+echo hi > "$RUNNER_TEMP/f"
+sha256sum "$RUNNER_TEMP/f"    # leading backslash, and every field shifted
+sha256sum <"$RUNNER_TEMP/f"   # clean
+bin/fm-lint-workflows.sh
 ```

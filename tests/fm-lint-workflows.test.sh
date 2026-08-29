@@ -22,6 +22,7 @@ ACTIONLINT_SHA_LINUX_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc
 ACTIONLINT_SHA_LINUX_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
 ACTIONLINT_SHA_DARWIN_AMD64=5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644
 ACTIONLINT_SHA_DARWIN_ARM64=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+ACTIONLINT_SHA_WINDOWS_AMD64=6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9
 
 fm_install_stub_uname() {
   local fakebin=$1
@@ -96,7 +97,17 @@ if [ "$self" = shasum ]; then
   done
   [ "$algo" = 256 ] || exit 1
 fi
-printf '%s  %s\n' "${SHA256_STUB_HASH:?}" "$file"
+# GNU coreutils escapes a file operand containing a backslash and prefixes
+# the whole line with one, which is what a Windows RUNNER_TEMP (D:\a\_temp)
+# produces on a GitHub Actions runner.
+case "$file" in
+  *\\*)
+    printf '\\%s  %s\n' "${SHA256_STUB_HASH:?}" "$(printf '%s' "$file" | sed 's/\\/\\\\/g')"
+    ;;
+  *)
+    printf '%s  %s\n' "${SHA256_STUB_HASH:?}" "$file"
+    ;;
+esac
 SH
   chmod +x "$fakebin/$name"
 }
@@ -119,6 +130,42 @@ done
 exit 2
 SH
   chmod +x "$fakebin/tar"
+}
+
+fm_install_stub_unzip_actionlint() {
+  local fakebin=$1
+  cat > "$fakebin/unzip" <<'SH'
+#!/usr/bin/env bash
+dest=
+archive=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d)
+      dest=$2
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      archive=$1
+      shift
+      ;;
+  esac
+done
+[ -n "$dest" ] || exit 2
+# Refuse an archive the installer never downloaded, so a wrong operand cannot
+# still produce a working install.
+[ -f "$archive" ] || exit 3
+mkdir -p "$dest"
+cat > "$dest/actionlint.exe" <<'EOF'
+#!/usr/bin/env bash
+printf '1.7.12\n'
+EOF
+chmod +x "$dest/actionlint.exe"
+exit 0
+SH
+  chmod +x "$fakebin/unzip"
 }
 
 fm_install_stub_sleep() {
@@ -248,9 +295,7 @@ test_missing_actionlint_fails_closed() {
   fakebin=$(fm_fakebin "$tmp")
   mkdir -p "$tmp/.github/workflows"
   write_valid_workflow "$tmp/.github/workflows/ci.yml"
-  for tool in bash dirname find sort awk; do
-    ln -s "$(command -v "$tool")" "$fakebin/$tool"
-  done
+  fm_fakebin_link "$fakebin" bash dirname find sort awk
   rc=0
   out=$(PATH="$fakebin" "$LINT_WF" --root "$tmp" 2>&1) || rc=$?
   [ "$rc" -eq 1 ] || fail "missing actionlint expected exit 1, got $rc"$'\n'"$out"
@@ -316,7 +361,7 @@ test_installer_retries_transient_download_failure() {
 }
 
 test_installer_selects_platform_archive_url_and_checksum() {
-  local tmp fakebin destination out url_log uname_s uname_m archive sha
+  local tmp fakebin destination out url_log uname_s uname_m archive sha binary
   tmp=$(fm_test_tmproot fm-actionlint-platform)
   fakebin=$(fm_fakebin "$tmp")
   destination="$tmp/bin"
@@ -326,9 +371,10 @@ test_installer_selects_platform_archive_url_and_checksum() {
   fm_install_stub_curl "$fakebin"
   fm_install_stub_hasher "$fakebin" sha256sum
   fm_install_stub_tar_actionlint "$fakebin"
+  fm_install_stub_unzip_actionlint "$fakebin"
   fm_install_stub_sleep "$fakebin"
 
-  while IFS=$'\t' read -r uname_s uname_m archive sha; do
+  while IFS=$'\t' read -r uname_s uname_m archive sha binary; do
     [ -n "$uname_s" ] || continue
     rm -rf "$destination"
     : > "$url_log"
@@ -341,16 +387,19 @@ test_installer_selects_platform_archive_url_and_checksum() {
     assert_contains "$(cat "$url_log")" \
       "https://github.com/rhysd/actionlint/releases/download/v${REQUIRED}/${archive}" \
       "installer used the wrong URL for ${uname_s}/${uname_m}"
-    [ -x "$destination/actionlint" ] || fail "installer did not install actionlint for ${uname_s}/${uname_m}"
+    [ -x "$destination/$binary" ] \
+      || fail "installer did not install $binary for ${uname_s}/${uname_m}"
   done <<EOF
-Linux	x86_64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64
-Linux	amd64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64
-Linux	aarch64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64
-Linux	arm64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64
-Darwin	x86_64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64
-Darwin	amd64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64
-Darwin	arm64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64
-Darwin	aarch64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64
+Linux	x86_64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64	actionlint
+Linux	amd64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64	actionlint
+Linux	aarch64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64	actionlint
+Linux	arm64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64	actionlint
+Darwin	x86_64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64	actionlint
+Darwin	amd64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64	actionlint
+Darwin	arm64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64	actionlint
+Darwin	aarch64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64	actionlint
+MINGW64_NT-10.0-26200	x86_64	actionlint_${REQUIRED}_windows_amd64.zip	$ACTIONLINT_SHA_WINDOWS_AMD64	actionlint.exe
+MSYS_NT-10.0-26200	x86_64	actionlint_${REQUIRED}_windows_amd64.zip	$ACTIONLINT_SHA_WINDOWS_AMD64	actionlint.exe
 EOF
   pass "actionlint installer selects the official archive, URL, and checksum per OS/arch"
 }
@@ -388,9 +437,7 @@ test_installer_falls_back_to_shasum() {
   destination="$tmp/bin"
   hasher_log="$tmp/hasher.log"
 
-  for tool in bash dirname mktemp rm awk mkdir install cat chmod; do
-    ln -s "$(command -v "$tool")" "$fakebin/$tool"
-  done
+  fm_fakebin_link "$fakebin" bash dirname mktemp rm awk mkdir install cat chmod
   fm_install_stub_uname "$fakebin"
   fm_install_stub_curl "$fakebin"
   fm_install_stub_hasher "$fakebin" shasum
@@ -433,6 +480,33 @@ test_installer_prefers_sha256sum_over_shasum() {
     fail "installer invoked shasum even though sha256sum was present"$'\n'"$(cat "$hasher_log")"
   fi
   pass "actionlint installer prefers sha256sum when both hashers are present"
+}
+
+# A Windows CI runner hands the installer a RUNNER_TEMP such as D:\a\_temp, so the
+# archive path holds backslashes. GNU coreutils then escapes the checksum line
+# and prefixes it with one, and awk '{print $1}' reads a digest with a leading
+# backslash. Hashing on stdin keeps the file name out of the output entirely.
+test_installer_verifies_a_checksum_under_a_backslash_temp_root() {
+  local tmp fakebin destination out runner_temp
+  tmp=$(fm_test_tmproot fm-actionlint-backslash)
+  fakebin=$(fm_fakebin "$tmp")
+  destination="$tmp/bin"
+  runner_temp="$tmp/win\temp"
+  mkdir -p "$runner_temp"
+
+  fm_install_stub_uname "$fakebin"
+  fm_install_stub_curl "$fakebin"
+  fm_install_stub_hasher "$fakebin" sha256sum
+  fm_install_stub_tar_actionlint "$fakebin"
+  fm_install_stub_sleep "$fakebin"
+
+  out=$(RUNNER_TEMP="$runner_temp" SHA256_STUB_HASH="$ACTIONLINT_SHA_LINUX_AMD64" \
+    FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    || fail "installer rejected a correct checksum under a backslash temp root"$'\n'"$out"
+  [ -x "$destination/actionlint" ] \
+    || fail "installer did not install actionlint under a backslash temp root"
+  pass "actionlint installer verifies a checksum when the temp root holds backslashes"
 }
 
 test_installer_rejects_unsupported_platform() {
@@ -528,5 +602,6 @@ test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
 test_installer_falls_back_to_shasum
 test_installer_prefers_sha256sum_over_shasum
+test_installer_verifies_a_checksum_under_a_backslash_temp_root
 test_installer_rejects_unsupported_platform
 test_fm_lint_default_path_catches_broken_ci_yml

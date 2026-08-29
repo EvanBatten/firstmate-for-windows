@@ -4,10 +4,11 @@
 # Downloads the official GitHub release archive for the host OS/arch, verifies
 # its per-archive SHA-256 pin, and installs the binary into the destination
 # directory. Supported platforms: linux amd64/x86_64, linux arm64/aarch64,
-# darwin amd64/x86_64, darwin arm64/aarch64. Pins come from the official
-# ShellCheck release asset digests. Verification uses sha256sum when present,
-# otherwise shasum -a 256. An unsupported OS/arch or a missing pin fails
-# without downloading.
+# darwin amd64/x86_64, darwin arm64/aarch64, and a Windows userland (Git Bash
+# MINGW*/MSYS*) on amd64/x86_64. Pins come from the official ShellCheck release
+# asset digests. Verification uses sha256sum when present, otherwise
+# shasum -a 256. An unsupported OS/arch or a missing pin fails without
+# downloading.
 #
 # Usage:
 #   fm-install-shellcheck.sh <destination-directory>
@@ -25,8 +26,8 @@ DESTINATION=${1:?usage: fm-install-shellcheck.sh <destination-directory>}
 
 os=$(uname -s)
 arch=$(uname -m)
-# SHA-256 pins are the GitHub release asset digests for shellcheck v0.11.0
-# .tar.xz archives (https://github.com/koalaman/shellcheck/releases/tag/v0.11.0).
+# SHA-256 pins are the GitHub release asset digests for the shellcheck v0.11.0
+# archives (https://github.com/koalaman/shellcheck/releases/tag/v0.11.0).
 case "${os}-${arch}" in
   Linux-x86_64|Linux-amd64)
     ARCHIVE="shellcheck-v${VERSION}.linux.x86_64.tar.xz"
@@ -44,8 +45,14 @@ case "${os}-${arch}" in
     ARCHIVE="shellcheck-v${VERSION}.darwin.aarch64.tar.xz"
     SHA256=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
     ;;
+  # Git Bash and MSYS2 report MINGW64_NT-* / MSYS_NT-*. The release carries one
+  # Windows asset, an x86_64 zip; there is no arm64 Windows build to pin.
+  MINGW*-x86_64|MINGW*-amd64|MSYS*-x86_64|MSYS*-amd64)
+    ARCHIVE="shellcheck-v${VERSION}.zip"
+    SHA256=8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
+    ;;
   *)
-    die "unsupported platform ${os}-${arch}; need linux or darwin on amd64/x86_64 or arm64/aarch64"
+    die "unsupported platform ${os}-${arch}; need linux or darwin on amd64/x86_64 or arm64/aarch64, or a Windows userland on amd64/x86_64"
     ;;
 esac
 [ -n "$SHA256" ] || die "no pinned checksum for ${os}-${arch}"
@@ -67,9 +74,9 @@ while ! curl -fsSL "$URL" -o "$TMP/$ARCHIVE"; do
 done
 
 if command -v sha256sum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
+  ACTUAL_SHA256=$(sha256sum <"$TMP/$ARCHIVE" | awk '{print $1}')
 elif command -v shasum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')
+  ACTUAL_SHA256=$(shasum -a 256 <"$TMP/$ARCHIVE" | awk '{print $1}')
 else
   die "need sha256sum or shasum to verify the ShellCheck archive"
 fi
@@ -78,7 +85,22 @@ fi
     "$ARCHIVE" "$SHA256" "$ACTUAL_SHA256" >&2
   exit 1
 }
-tar -xJf "$TMP/$ARCHIVE" -C "$TMP"
+# The Windows asset is a zip holding shellcheck.exe at its root, and the GNU tar
+# a Git Bash host provides cannot read a zip. Every other asset stays on the
+# exact tar call this script has always made.
+case "$ARCHIVE" in
+  *.zip)
+    command -v unzip >/dev/null 2>&1 || die "need unzip to extract $ARCHIVE"
+    unzip -q -o "$TMP/$ARCHIVE" -d "$TMP/extract"
+    EXTRACTED="$TMP/extract/shellcheck.exe"
+    INSTALLED="$DESTINATION/shellcheck.exe"
+    ;;
+  *)
+    tar -xJf "$TMP/$ARCHIVE" -C "$TMP"
+    EXTRACTED="$TMP/shellcheck-v${VERSION}/shellcheck"
+    INSTALLED="$DESTINATION/shellcheck"
+    ;;
+esac
 mkdir -p "$DESTINATION"
-install -m 0755 "$TMP/shellcheck-v${VERSION}/shellcheck" "$DESTINATION/shellcheck"
-"$DESTINATION/shellcheck" --version
+install -m 0755 "$EXTRACTED" "$INSTALLED"
+"$INSTALLED" --version

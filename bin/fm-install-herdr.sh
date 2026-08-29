@@ -64,9 +64,9 @@ curl -fsSL --max-filesize "$FM_HERDR_CI_MAX_BYTES" "$URL" -o "$TMP/$ASSET" \
   || die "download failed for $URL (bounded at $FM_HERDR_CI_MAX_BYTES bytes)"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(sha256sum "$TMP/$ASSET" | awk '{print $1}')
+  ACTUAL_SHA256=$(sha256sum <"$TMP/$ASSET" | awk '{print $1}')
 elif command -v shasum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')
+  ACTUAL_SHA256=$(shasum -a 256 <"$TMP/$ASSET" | awk '{print $1}')
 else
   die "need sha256sum or shasum to verify the Herdr asset"
 fi
