@@ -1,0 +1,5 @@
+# Every text file is committed and checked out with LF so the bash
+# scripts run under Git Bash on Windows, where core.autocrlf=true is the
+# Git for Windows default and would otherwise rewrite each shebang to
+# "bash".
+* text=auto eol=lf
