@@ -380,7 +380,78 @@ fm_backend_herdr_workspace_label() {
 fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   local session=$1
   shift
+  if fm_backend_herdr_win32_cli; then
+    fm_backend_herdr_cli_win32 "$session" "$@"
+    return
+  fi
   HERDR_SESSION="$session" herdr "$@" --session "$session"
+}
+
+# fm_backend_herdr_win32_cli: is the `herdr` this adapter runs a native Win32
+# executable invoked from an MSYS (Git Bash) userland? That is the exact
+# condition under which MSYS argument conversion rewrites arguments before
+# herdr ever sees them - measured: `/clear` arrives as
+# `C:/Program Files/Git/clear` and `--match=/x` as `--match=X:/` - and so the
+# exact condition under which fm_backend_herdr_cli must turn conversion off
+# and convert `--cwd` itself.
+# Keyed on capability rather than on `uname`, for the same reason
+# bin/fm-proc-lib.sh is: the fake `herdr` every unit test puts on PATH is an
+# MSYS shell script, which the MSYS userland runs with no conversion at all,
+# so those tests go on asserting the byte-exact arguments they always did,
+# on Windows too. FM_BACKEND_HERDR_WIN32_CLI=1/0 forces the answer and exists
+# only so a test can drive the conversion branch with a shell-script fake.
+fm_backend_herdr_win32_cli() {
+  local bin magic=
+  case "${FM_BACKEND_HERDR_WIN32_CLI:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  command -v cygpath >/dev/null 2>&1 || return 1
+  bin=$(command -v herdr 2>/dev/null) || return 1
+  [ -n "$bin" ] || return 1
+  # Every Win32 PE image opens with "MZ"; a shell script opens with "#!".
+  # The magic itself is the answer, never read's exit status: a file too short
+  # to fill the request leaves `magic` empty and reports EOF, and MSYS's own
+  # `.exe` fallback means the extensionless path `command -v` prints still
+  # opens the real binary.
+  { IFS= LC_ALL=C read -r -n 2 magic < "$bin"; } 2>/dev/null
+  [ "$magic" = MZ ]
+}
+
+# fm_backend_herdr_win32_path: one Unix path in the Windows spelling herdr
+# needs, or the path unchanged when cygpath cannot convert it.
+fm_backend_herdr_win32_path() {  # <path>
+  local converted
+  converted=$(cygpath -w "$1" 2>/dev/null) && [ -n "$converted" ] || converted=$1
+  printf '%s' "$converted"
+}
+
+# fm_backend_herdr_cli_win32: the MSYS-only tail of fm_backend_herdr_cli.
+# MSYS2_ARG_CONV_EXCL='*' switches path conversion off for the whole call,
+# which is what `pane send-text`, `pane run` and any `--match` value need: a
+# literal `/clear` steered into a pane must arrive as `/clear`, not as this
+# machine's Git installation directory. The one conversion that IS wanted,
+# `--cwd`, is then done here explicitly, so herdr still receives a Windows
+# path. MSYS_NO_PATHCONV is deliberately not used: setting it to an EMPTY
+# value also disables conversion, which makes it a trap in a wrapper.
+fm_backend_herdr_cli_win32() {  # <session> <herdr-subcommand-and-args...>
+  local session=$1 arg cwd_next=0
+  local -a args=()
+  shift
+  for arg in "$@"; do
+    if [ "$cwd_next" = 1 ]; then
+      cwd_next=0
+      arg=$(fm_backend_herdr_win32_path "$arg")
+    else
+      case "$arg" in
+        --cwd) cwd_next=1 ;;
+        --cwd=*) arg="--cwd=$(fm_backend_herdr_win32_path "${arg#--cwd=}")" ;;
+      esac
+    fi
+    args+=("$arg")
+  done
+  MSYS2_ARG_CONV_EXCL='*' HERDR_SESSION="$session" \
+    herdr ${args[@]+"${args[@]}"} --session "$session"
 }
 
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
@@ -675,13 +746,40 @@ fm_backend_herdr_presentation_lock_namespace_uid() {
   fi
 }
 
+# fm_backend_herdr_presentation_lock_namespace_modeless: 0 when the filesystem
+# holding <dir> cannot represent POSIX modes at all, so the 700 a private
+# directory is created with is never the 700 that is read back. Measured on
+# Git Bash, where every MSYS mount is `noacl`: a directory asked for as 700
+# stats as 755 and no chmod changes that.
+# The probe is created BESIDE the namespace, never inside it. It has to sit on
+# the same filesystem to measure the same thing, and it has to sit where a
+# second process cannot swap it for a directory of its own choosing between
+# the create and the stat - which is exactly what a group-writable namespace
+# would let an attacker do. `mktemp -d` picks an unpredictable name and creates
+# it 0700, and the namespace's parent is /tmp, whose sticky bit then keeps
+# anyone but the owner from removing or renaming that entry.
+fm_backend_herdr_presentation_lock_namespace_modeless() {  # <dir>
+  local dir=$1 probe_dir mode
+  probe_dir=$(mktemp -d "$(dirname "$dir")/.fm-mode-probe.XXXXXX" 2>/dev/null) || return 1
+  mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$probe_dir")
+  rmdir "$probe_dir" 2>/dev/null
+  [ -n "$mode" ] && [ "$mode" != 700 ]
+}
+
 fm_backend_herdr_presentation_lock_namespace_valid() {
   local dir=$1 expected_uid owner mode
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   expected_uid=$(id -u 2>/dev/null) || return 1
   owner=$(fm_backend_herdr_presentation_lock_namespace_uid "$dir") || return 1
   mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$dir") || return 1
-  [ "$owner" = "$expected_uid" ] && [ "$mode" = 700 ]
+  [ "$owner" = "$expected_uid" ] || return 1
+  # Owner identity is required everywhere. The mode is required wherever a
+  # mode means something: on a filesystem that cannot carry one, 700 is
+  # unreachable by any means and demanding it only refuses the operator's own
+  # private directory. A namespace that is genuinely group- or world-readable
+  # on a mode-capable filesystem still fails here, because there the probe
+  # reads back the 700 it asked for.
+  [ "$mode" = 700 ] || fm_backend_herdr_presentation_lock_namespace_modeless "$dir"
 }
 
 # Resolve the one verified running named-session socket path as an absolute
@@ -701,6 +799,18 @@ fm_backend_herdr_canonical_socket_path() {  # <socket-path>
   [ -n "$socket" ] || return 1
   case "$socket" in
     /*) ;;
+    [A-Za-z]:[/\\]*)
+      # herdr on Windows reports its socket as a Win32 path
+      # (C:\Users\...\herdr.sock), both in `session list --json` and in the
+      # HERDR_SOCKET_PATH it injects into a pane. Fold that spelling into this
+      # shell's own namespace so the two reduce to one identity. Only a shell
+      # with cygpath can read that spelling at all; anywhere else it is not an
+      # absolute path, it is a relative one that happens to contain a colon,
+      # and it is refused exactly as it was before.
+      command -v cygpath >/dev/null 2>&1 || return 1
+      socket=$(cygpath -u "$socket" 2>/dev/null) || return 1
+      [ -n "$socket" ] || return 1
+      ;;
     *) return 1 ;;
   esac
   sock_dir=$(dirname "$socket")
@@ -711,6 +821,21 @@ fm_backend_herdr_canonical_socket_path() {  # <socket-path>
     socket="$sock_dir/$sock_base"
   fi
   printf '%s' "$socket"
+}
+
+# fm_backend_herdr_socket_paths_equal: do two already-canonicalized socket
+# paths name the same socket? A byte comparison everywhere; on a Windows
+# userland (the presence of cygpath is that userland's marker) also a
+# case-folded one, because the filesystem underneath is case-insensitive and
+# `C:\Users\...` and `c:\users\...` are one socket. Refusing a spawn over a
+# case difference there would be a false cross-session refusal. The fold only
+# ever runs after the byte comparison has already failed, so nothing changes
+# for a filesystem that does distinguish case.
+fm_backend_herdr_socket_paths_equal() {  # <canonical-a> <canonical-b>
+  [ "$1" = "$2" ] && return 0
+  command -v cygpath >/dev/null 2>&1 || return 1
+  [ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" \
+    = "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" ]
 }
 
 fm_backend_herdr_presentation_session_socket_path() {  # <session>
@@ -1564,7 +1689,7 @@ fm_backend_herdr_launcher_identity() {  # <session>
     echo "error: herdr session '$session' has no unambiguous socket to match against the launcher pane's own; refusing to place a worker from an unverifiable parent identity" >&2
     return 1
   }
-  if [ "$claimed_socket" != "$session_socket" ]; then
+  if ! fm_backend_herdr_socket_paths_equal "$claimed_socket" "$session_socket"; then
     echo "error: herdr launcher pane '$pane' belongs to the server at '$claimed_socket', not session '$session' at '$session_socket'; refusing to place a worker from a cross-session parent identity" >&2
     return 1
   fi

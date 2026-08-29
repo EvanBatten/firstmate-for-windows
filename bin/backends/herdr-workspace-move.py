@@ -22,6 +22,7 @@ Exit status:
 """
 
 import json
+import re
 import socket
 import sys
 import time
@@ -32,6 +33,15 @@ RESPONSE_TIMEOUT = 5.0
 RECV_CHUNK = 65536
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 REQUEST_ID = "fm-workspace-move"
+# herdr on Windows reports its control socket as a Win32 path
+# (C:\Users\...\herdr.sock), so an absolute socket path is not always one that
+# starts with "/". The check stays a shape check either way: a relative path is
+# still refused before any connection is attempted.
+_WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _is_absolute_socket_path(path):
+    return path.startswith("/") or bool(_WINDOWS_ABSOLUTE.match(path))
 
 
 def _read_line(sock, deadline):
@@ -57,7 +67,7 @@ def main(argv):
     if len(argv) != 4:
         return 2
     socket_path, workspace_id, raw_index = argv[1:]
-    if not socket_path.startswith("/") or not workspace_id:
+    if not _is_absolute_socket_path(socket_path) or not workspace_id:
         return 2
     if any(char in workspace_id for char in "\t\r\n"):
         return 2
@@ -66,6 +76,12 @@ def main(argv):
     except ValueError:
         return 2
     if insert_index < 0 or str(insert_index) != raw_index:
+        return 2
+
+    # Windows CPython has no AF_UNIX at all; reaching for it there raises
+    # AttributeError, not OSError. Report it as the invalid-transport case the
+    # caller already knows how to warn about and continue past.
+    if not hasattr(socket, "AF_UNIX"):
         return 2
 
     try:

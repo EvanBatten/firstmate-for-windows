@@ -182,6 +182,109 @@ On MSYS the session lock necessarily records the harness's WIN32 pid, because a 
 `bin/fm-lease-lib.sh:147` still probes the same pid with a bare `kill -0` inside `fm_lease_live`, so on Windows a live Pi lease reads as stale.
 That fails CLOSED, is gated on `PI_CODING_AGENT`/`FM_SUPERVISION_ACTOR` (bin/fm-lease-lib.sh:140-143), and Pi is not installed on this machine, so it is recorded here rather than folded into a patch whose blast radius is meant to be four files.
 
+## Phase B slice 2 (PR-3): the Windows-aware herdr CLI
+
+Closes rows 5, 9 and 12, and removes row 8's `/`-prefix half.
+Four changes, all in `bin/backends/herdr.sh` except the last, all keyed on a capability rather than on `uname`.
+
+### Socket identity (row 5)
+
+`fm_backend_herdr_canonical_socket_path` now accepts a `[A-Za-z]:[/\]`-shaped path and folds it through `cygpath -u`, and refuses it when there is no `cygpath` - a shell that cannot read that spelling is not looking at an absolute path, it is looking at a relative one with a colon in it, and it refuses exactly as it did before.
+That refusal is what keeps a POSIX host byte-identical; an earlier version of this slice returned such a path literally and quietly changed which error a Linux host printed.
+Both sides of the launcher's same-session proof - the `HERDR_SOCKET_PATH` herdr injects into a pane and the `socket_path` it reports in `session list --json` - come back through the same function, so they reduce to one identity.
+
+```
+$ herdr session list --json | jq -r '.sessions[]|select(.name=="default")|.socket_path'
+C:\Users\ebatt\AppData\Roaming\herdr\herdr.sock
+$ bash -c '. bin/backends/herdr.sh; fm_backend_herdr_presentation_session_socket_path default'
+/c/Users/ebatt/AppData/Roaming/herdr/herdr.sock     # was: refused
+```
+
+The comparison itself moved into `fm_backend_herdr_socket_paths_equal`, which folds case only when `cygpath` exists - the marker for a Windows userland, where the filesystem underneath is case-insensitive and `C:\Users` and `c:\users` are one socket.
+The fold runs only after a byte comparison has already failed, so a case-sensitive host is untouched.
+
+### The presentation lock namespace (row 9)
+
+`fm_backend_herdr_presentation_lock_namespace_valid` still requires owner identity unconditionally.
+The mode check is now conditional on the mode meaning something: when the directory does not read 700, `fm_backend_herdr_presentation_lock_namespace_modeless` creates one `mktemp -d` probe directory and reads its mode back.
+Only a filesystem that drops the mode answers with anything but 700, and a genuinely group-readable namespace on a mode-capable filesystem still fails, because there the probe reads back the 700 it asked for.
+
+The probe is created BESIDE the namespace, never inside it, and that placement is the whole security argument.
+The probe only ever runs when the namespace is not 700 - which is exactly the state in which an attacker may have write access to it - so a probe directory placed *inside* the namespace at a predictable name (`$$` is readable from `/proc`) could be pre-created by that attacker as a mode-000 or symlinked directory, surviving both the `rm -rf` and the `mkdir`, and answering "this filesystem drops modes" on a Linux box where it does not.
+`mktemp -d` in the namespace's parent removes both halves of that: the name is unpredictable, and the parent is `/tmp`, whose sticky bit stops anyone but the owner removing or renaming the entry.
+
+This is not a weakening of the privacy claim on Windows so much as a relocation of it: `/tmp` is `C:\Users\ebatt\AppData\Local\Temp`, which NTFS makes private to the user by ACL, and the `noacl` mount means no POSIX mode can be written there by anyone, attacker included.
+One deliberate widening to flag for review: the key is the capability ("this filesystem cannot carry a mode"), not the platform, so a Linux host whose `/tmp` sat on vfat or exfat would also take the relaxation.
+That is the same principle slice 1 settled on, and on such a mount the 700 requirement is unsatisfiable rather than protective - but it is broader than the plan's "when the mount reports noacl" wording, so it is called out rather than buried.
+
+```
+$ bash -c '. bin/backends/herdr.sh; fm_backend_herdr_presentation_session_lock_path default'
+/tmp/firstmate-herdr-presentation/order-24573fab66d57ed002cb6d72a028d5ef.lock   # was: refused
+```
+
+The three `herdr task kill could not acquire its session presentation lock; refusing an unlocked pane close` warnings the real-herdr smoke test printed in Phase A are gone.
+Per the plan this relaxation is confined to this one site; the other 32 mode-700 sites in `bin/` remain decision D6.
+
+### MSYS argument conversion (row 12)
+
+`fm_backend_herdr_cli` now routes through `fm_backend_herdr_cli_win32` when `fm_backend_herdr_win32_cli` says the `herdr` on PATH is a native Win32 binary.
+That branch sets `MSYS2_ARG_CONV_EXCL='*'` for the whole call and converts `--cwd` (both the `--cwd <path>` and `--cwd=<path>` spellings) itself with `cygpath -w`, which is exactly the split the Phase A finding asked for.
+
+```
+$ herdr tab list --workspace /clear --session default
+{"error":{"code":"workspace_not_found","message":"workspace C:/Program Files/Git/clear not found"}}
+$ MSYS2_ARG_CONV_EXCL='*' herdr tab list --workspace /clear --session default
+{"error":{"code":"workspace_not_found","message":"workspace /clear not found"}}
+```
+
+`MSYS_NO_PATHCONV` is deliberately not used: setting it to an EMPTY value also disables conversion, which makes it a trap inside a wrapper.
+
+### The probe that keeps every existing test honest
+
+`fm_backend_herdr_win32_cli` asks whether `command -v herdr` resolves to a file whose first two bytes are `MZ`.
+That is not a proxy for Windows - it is the exact condition under which MSYS converts arguments, because MSYS converts for native binaries and not for the MSYS shell scripts it runs itself.
+Which means the fake `herdr` that every unit test in `tests/` puts on PATH keeps the plain branch, on Windows too, and goes on asserting the byte-exact argument lists it always did.
+This is the same lesson slice 1 recorded about `uname`, arrived at from the other direction.
+`FM_BACKEND_HERDR_WIN32_CLI=1/0` forces the answer so a test can drive the conversion branch with a shell-script fake.
+
+### The workspace mover (row 8)
+
+`bin/backends/herdr-workspace-move.py` accepts the same Windows path shape, and returns its existing "invalid transport" status 2 when `socket.AF_UNIX` is absent instead of raising `AttributeError`.
+The adapter itself now hands it the already-folded `/c/...` path, so the shape acceptance only matters when the helper is run directly, as its own docstring describes; the `AF_UNIX` guard is the part that runs.
+Windows CPython still has no `AF_UNIX`, so ordering still degrades to a warning; row 8 stays DEGRADED, but for the one honest reason rather than two.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `bin/fm-lint.sh` on all three touched shell files | clean (ShellCheck 0.11.0, full extended analysis) |
+| `python3 -m py_compile bin/backends/herdr-workspace-move.py` | clean |
+| `tests/fm-backend-herdr-windows.test.sh` (new, 21 cases) | 21 / 21 on Windows (one documented skip: MSYS will not put an empty file on PATH) |
+| `bin/fm-test-run.sh --check-coverage` | `ok total=169 parallel=24 serial=133 serial_shards=4 herdr=12` |
+| `tests/fm-backend-herdr.test.sh` | fails at the identical assertion as Phase A (`the ambiguity refusal did not name the candidate workspaces`), 19 cases in |
+| `tests/fm-backend-herdr-smoke.test.sh` (real herdr, isolated lab session) | same 13 passes and the same single row-13 failure as Phase A, now with zero presentation-lock warnings |
+
+One shellcheck lesson: adding a local named `probe` to this file made SC2100 fire on an unrelated pre-existing line, `identity=probe-absent`, which ShellCheck then read as arithmetic on a known variable.
+The local is `probe_dir`.
+
+One `set -u` lesson, caught by making the new test file run every snippet under `set -u`: `local magic` followed by a `read` that never fires leaves the variable UNSET, not empty, and the next `[ "$magic" = MZ ]` aborts the whole script with "unbound variable".
+Every local whose only assignment is a command that may not run has to be initialized at the `local`.
+
+### What the acceptance review changed
+
+An adversarial review of the slice before it landed produced two changes that are already in the numbers above, both in the direction of "do less on a POSIX host":
+the `mktemp -d` probe placement described under row 9, and the `cygpath`-required refusal described under row 5.
+It also confirmed the parts that do not move: on a POSIX host the new `fm_backend_herdr_cli` gate is two `command -v` builtins and no extra process, `fm_backend_herdr_socket_paths_equal` reaches its `tr` fold only where `cygpath` exists, and the `--cwd` handling covers every shape the ~70 call sites in this adapter actually emit.
+
+Two accepted limitations, recorded rather than fixed:
+a `pane send-text` payload that is literally `--cwd=<path>` would be converted (the scan is positional-blind), which is contrived and strictly better than the pre-change MSYS behavior;
+and a `herdr` installed as a `.bat`/`.cmd` shim would be native to MSYS without being a PE image, so it would take the plain branch and get its arguments mangled - the official installer ships an `.exe`.
+
+### Not fixed here
+
+`tests/fm-backend-herdr.test.sh`'s ambiguity-refusal assertion fails on Windows against stderr that visibly contains the expected `w1 w7`.
+It is unchanged by this slice and belongs to slice 6's triage, but it is worth naming: it stops the largest herdr test 19 cases in, so its true Windows pass count is still unknown.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -199,10 +302,14 @@ bash -c '. bin/fm-proc-lib.sh; fm_pid_alive <win32 pid>; echo $?'
 env -u CLAUDECODE -u CURSOR_AGENT -u PI_CODING_AGENT -u GROK_AGENT bin/fm-harness.sh
 # row 4
 ln -s target link && readlink link
-# row 9
+# rows 5 and 9 (the shipped adapter; both printed a refusal before PR-3)
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_presentation_session_socket_path default'
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_presentation_lock_namespace_valid /tmp/firstmate-herdr-presentation; echo $?'
 mount; mkdir -m 700 /tmp/probe; stat -c %a /tmp/probe
-# row 12
-herdr pane get /clear
+# row 12 (the conversion, then the shipped adapter's answer to it)
+herdr tab list --workspace /clear --session default
+MSYS2_ARG_CONV_EXCL='*' herdr tab list --workspace /clear --session default
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_win32_cli; echo $?'
 # row 13 (needs a lab session; see bin/fm-herdr-lab.sh)
 herdr tab create --workspace w1 --cwd C:\path --env 'PROMPT_COMMAND=printf "\033]9;9;%s\033\\" "$(cygpath -w "$PWD")"' --no-focus --session <lab>
 herdr pane run <pane> "& 'C:\Program Files\Git\usr\bin\bash.exe' --login" --session <lab>
