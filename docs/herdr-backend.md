@@ -313,6 +313,20 @@ Its before/after tripwire requires the live default-session snapshot to remain b
 The helper's header and `--help` own exact commands.
 Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never duplicate the destructive policy.
 
+## Windows (Git Bash / MSYS)
+
+Herdr on Windows opens every pane in its configured `default_shell`, which is a Windows shell, and `tab create` has no shell flag.
+Everything Firstmate types into a task pane is POSIX shell, so on MSYS the adapter bootstraps Git Bash itself: `fm_backend_herdr_task_tab_create` sends `& '<git bash>' --login` as the pane's first command, using `cygpath -w "$BASH"` so it names the interpreter Firstmate is actually running in.
+`exec bash -l` and a bare `bash` both fail there - `exec` is not a pwsh command and `bash` resolves to WSL.
+
+`pane get .foreground_cwd` is always `null` on the Windows build.
+`.cwd` is the live value instead, fed by an `ESC]9;9;<path>ESC\` sequence the pane's shell emits at each prompt, so the same `tab create` passes `--env PROMPT_COMMAND=<emitter>` and `--env SHELL=<git bash>`.
+The environment is the carrier on purpose: `treehouse get` spawns a fresh shell rather than `cd`ing, and only an exported variable reaches it.
+`fm_backend_herdr_current_path` falls back to `.cwd` through `cygpath -u`, gated on the pane host - on a POSIX host `.cwd` is frozen at pane creation and must never be substituted.
+
+Two more MSYS-only branches: `fm_backend_herdr_cli` sets `MSYS2_ARG_CONV_EXCL='*'` and converts `--cwd` itself, because MSYS otherwise rewrites `/`-leading arguments before a native `herdr.exe` sees them; and `fm_backend_herdr_canonical_socket_path` accepts `C:\...` socket paths.
+Every branch is selected by capability (is this `herdr` a PE image, is there a `cygpath`), never by `uname`, so the fake `herdr` in the test suites keeps taking the POSIX path on every host.
+
 ## Active limits
 
 - Herdr remains experimental.
@@ -327,6 +341,7 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 
 ```sh
 tests/fm-backend-herdr.test.sh
+tests/fm-backend-herdr-windows.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-herdr-submit-confirm-live-e2e.test.sh
 tests/fm-backend-herdr-smoke.test.sh

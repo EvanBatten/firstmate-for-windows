@@ -397,6 +397,14 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/windows/README.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/windows/measurement.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },

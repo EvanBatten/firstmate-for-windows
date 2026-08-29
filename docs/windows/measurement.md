@@ -49,7 +49,7 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | Script | Result | First failing assertion | Class (provisional) |
 | --- | --- | --- | --- |
 | fm-send-popup-settle, fm-tmux-submit-busy, fm-send-settle, fm-send-strict, fm-spawn-batch, fm-supervision-instructions | **PASS** | | |
-| fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | test (assertion text match; check for `\r` or quoting in the capture) |
+| fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | **product** - resolved in slice 3: Windows `jq` writes CRLF, so a multi-line read carries `w1\r` (see "New finding" below) |
 | fm-arm-pretool-check | FAIL | "D01 via codex must deny, got exit 0" for `bin/fm-watch-arm.sh &` | product-suspect: the watcher-protection guard fails OPEN on the codex path; top of the Phase B list |
 | fm-crew-state | FAIL | "timed-out no-mistakes falls back to pane (missing: 'state: working')" | unknown; timing or `ps`-based liveness (row 2) |
 | fm-herdr-lab | FAIL | "timed-out provision must fail: expected exit 1, got 0" | test/timing under slow spawn |
@@ -285,6 +285,172 @@ and a `herdr` installed as a `.bat`/`.cmd` shim would be native to MSYS without 
 `tests/fm-backend-herdr.test.sh`'s ambiguity-refusal assertion fails on Windows against stderr that visibly contains the expected `w1 w7`.
 It is unchanged by this slice and belongs to slice 6's triage, but it is worth naming: it stops the largest herdr test 19 cases in, so its true Windows pass count is still unknown.
 
+## Phase B slice 3 (PR-4): the crewmate pane on MSYS
+
+Rows 6 and 13 are one problem with two halves: herdr opens every Windows pane in `pwsh` and has no per-tab shell flag, and the only cwd field that moves on Windows is the one the adapter was told never to read.
+Both halves are now handled inside `bin/backends/herdr.sh`, and the acceptance run below shows them working together against a real herdr.
+
+### One funnel for every task pane (row 6)
+
+`tab create --workspace W --cwd C --label L --no-focus` appeared inline at three sites - the plain spawn path, the presentation projection, and the projection's husk replacement.
+All three produce a pane an agent is later launched into, so all three need the same treatment; they now go through `fm_backend_herdr_task_tab_create`, which emits exactly that argument list on a POSIX host and nothing else.
+`tests/fm-backend-herdr.test.sh`'s existing byte-exact assertions on that line are what proves the POSIX call did not move, and they still pass.
+
+On MSYS the same function adds two `--env` flags and then sends the pane's first command:
+
+```sh
+herdr tab create --workspace W --cwd C --label L \
+  --env "SHELL=C:\Program Files\Git\usr\bin\bash.exe" \
+  --env 'PROMPT_COMMAND=printf "\033]9;9;%s\033\\" "$(cygpath -w "$PWD")"' \
+  --no-focus
+herdr pane run <pane> "& 'C:\Program Files\Git\usr\bin\bash.exe' --login"
+```
+
+The launch line is pwsh's call operator because the measured alternatives do not work: `exec bash -l` fails (`exec` is not a pwsh command) and a bare `bash` is WSL's bash, not Git Bash.
+The path is not a constant; it is `cygpath -w "$BASH"`, the Windows spelling of the very interpreter firstmate is running in, so a Git installed anywhere still resolves.
+`cygpath -w` supplies the `.exe` suffix on its own: `cygpath -w /usr/bin/bash` prints `C:\Program Files\Git\usr\bin\bash.exe`.
+
+The branch is keyed on `fm_backend_herdr_win32_pane_bash`, which is `fm_backend_herdr_win32_cli` (slice 2's PE-magic probe) plus the path.
+That is the same capability-not-platform rule slices 1 and 2 established, and it is what keeps every unit test's shell-script `herdr` fake on the plain branch while running on Windows.
+
+### The environment is the carrier, not the keyboard (row 13)
+
+`PROMPT_COMMAND` is passed through `--env` rather than typed into the pane, and that is the load-bearing choice.
+`treehouse get` does not `cd`; it spawns a **fresh** shell inside the worktree, and a variable typed into the outer bash would not be in that child's environment.
+Arriving through `tab create --env` it is exported the whole way - herdr to pwsh to Git Bash to treehouse's subshell - so the emitter is still running in the exact shell whose cwd `fm-spawn.sh` is waiting to see.
+Verified on this machine: nothing in Git Bash's login chain (`/etc/profile`, `/etc/profile.d/*.sh`, `~/.bash_profile`, `~/.bashrc`) assigns `PROMPT_COMMAND` or `cd`s away from the pane's `--cwd`, so `--login` neither clobbers the emitter nor loses the project directory.
+
+`SHELL` is set for treehouse's benefit: it is a native Windows binary, and a POSIX `/usr/bin/bash` is not something it can spawn.
+Handing a bash session a Windows-spelled `SHELL` is only safe because nothing in `bin/` or `.agents/` reads `$SHELL` at all - checked, zero hits - so the only consumer is the one it is aimed at.
+
+`fm_backend_herdr_current_path` now reads both fields from **one** `pane get` and falls back from `.foreground_cwd` to `.cwd`, folded back through `cygpath -u`.
+The fallback is gated on the pane host, never on "`foreground_cwd` came back empty".
+That distinction is the safety argument: on a POSIX host an empty `foreground_cwd` means the read failed, and `.cwd` there really is the frozen creation-time value the original comment warns about, so substituting it would hand `fm-spawn.sh`'s worktree poll and the relaunch check a path the pane may have left long ago.
+On Windows `.cwd` is not a snapshot at all - it is the last path the pane's shell reported over OSC 9;9 - which is why the emitter above has to exist for the fallback to mean anything.
+One `pane get` rather than two also means the two fields cannot disagree about a pane that is moving.
+
+### Acceptance run (lab session, real herdr 0.8.2)
+
+An isolated `fm-lab-pr4-*` session, provisioned and torn down with `bin/fm-herdr-lab.sh`; the default session was never touched and no server was stopped.
+The probe called the shipped adapter functions directly.
+
+```
+win32_cli: yes
+pane_bash: C:\Program Files\Git\usr\bin\bash.exe
+workspace=w1 seeded_tab=w1:t1
+tab=w1:t2 pane=w1:p2
+
+-- pane transcript after task_tab_create --
+> & 'C:\Program Files\Git\usr\bin\bash.exe' --login
+ebatt@GeneralBerserk MINGW64 ~/firstmate-gnhf (gnhf/objective-finish-the-589b84)
+$
+
+-- before treehouse get --
+current_path=[/c/Users/ebatt/firstmate-gnhf]
+{"cwd":"C:\\Users\\ebatt\\firstmate-gnhf","foreground_cwd":null}
+
+-- treehouse get, then poll --
+moved after 3s: /c/Users/ebatt/.treehouse/firstmate-gnhf-503d65/1/firstmate-gnhf
+{"cwd":"C:\\Users\\ebatt\\.treehouse\\firstmate-gnhf-503d65\\1\\firstmate-gnhf","foreground_cwd":null}
+
+-- pane transcript tail --
+$ treehouse get
+[tree] Entered worktree at ~\.treehouse\firstmate-gnhf-503d65\1\firstmate-gnhf. Type 'exit' to return.
+ebatt@GeneralBerserk MINGW64 ~/.treehouse/firstmate-gnhf-503d65/1/firstmate-gnhf ((4f38fc5...))
+$
+
+-- what that path actually is --
+git rev-parse --show-toplevel   C:/Users/ebatt/.treehouse/firstmate-gnhf-503d65/1/firstmate-gnhf
+git rev-parse --git-common-dir  C:/Users/ebatt/firstmate-gnhf/.git
+```
+
+That is the acceptance test: the first pane command produced a Git Bash prompt, `treehouse get` ran in it, and three seconds later the pane's `.cwd` was the worktree and `fm_backend_herdr_current_path` reported it as a POSIX path a comparison can use.
+`foreground_cwd` stayed `null` throughout, confirming row 13's measurement rather than working around a transient.
+The emitter surviving into treehouse's own subshell - the hop that a typed `PROMPT_COMMAND` would not have survived - is what the last two lines prove.
+
+### New finding: Windows `jq` writes CRLF
+
+Not a row in the plan, found while verifying this slice, and it is the reason `tests/fm-backend-herdr.test.sh` stops 19 cases in on Windows.
+
+`jq` on Windows puts stdout in text mode, so every record it prints ends `\r\n`:
+
+```sh
+$ printf '{"a":["x","y"]}' | jq -r '.a[]' | od -c
+0000000   x  \r  \n   y  \r  \n
+```
+
+Both builds present on this machine do it (anaconda's mingw-w64 `jq-1.6` and WinGet's `jq-1.8.2`), so it is the platform's behavior and not a bad package.
+
+The saving grace is narrow but real: MSYS bash strips the trailing `\r\n` in command substitution, so every **single-value** `jq` read - the overwhelming majority in this adapter - is already correct on Windows.
+Only **multi-line** reads are damaged, and only in their non-final records:
+
+```sh
+$ m=$(printf '{"a":["w1","w7"]}' | jq -r '.a[]'); printf '[%s]' "${m//$'\n'/ }" | od -c
+0000000   [   w   1  \r       w   7   ]
+```
+
+That is exactly the ambiguity-refusal assertion that fails: `bin/backends/herdr.sh:1974` builds its message from a multi-line `jq` read, and the message really does contain `w1\r w7`.
+The consequence is worse than a test failure wherever such a value is fed back to herdr - `herdr tab close "w1:t2\r"` is not a tab id - so this is a product defect on Windows, not a fixture assumption.
+`bin/backends/herdr.sh` has eight `jq -r` reads of an iterated array (husk tab ids, projection pane ids, workspace id lists), and other `bin/` scripts have their own.
+It is slice 6's, not this slice's: the fix is one decision about where to normalize, and it must not cost a process per call on macOS and Linux.
+
+Two facts to build that fix on: `jq --raw-output0` (1.7+) is not available on the `jq-1.6` this machine resolves first, and the CR is produced by `jq` itself, so no MSYS mount option or shell flag suppresses it.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `bin/fm-lint.sh bin/backends/herdr.sh tests/fm-backend-herdr-windows.test.sh` | clean (ShellCheck 0.11.0, full extended analysis) |
+| `tests/fm-backend-herdr-windows.test.sh` (21 cases + 11 new) | 32 / 32 on Windows |
+| `tests/fm-backend-herdr.test.sh`, POSIX identity of the refactored sites | all 16 `create_task` / `--no-focus` / husk-replacement cases and `current_path` pass |
+| Lab acceptance run against real herdr | transcript above |
+| `tests/fm-backend-herdr-smoke.test.sh` (real herdr, isolated lab session) | **16 / 16, exit 0** - was 14/15 in Phase A and 13 + the same single failure in slice 2 |
+| `bin/fm-test-run.sh --check-coverage` | `ok total=169 parallel=24 serial=133 serial_shards=4 herdr=12` (no new file, unchanged) |
+| `tests/fm-documentation-audiences.test.sh` | 4 / 4 - was red since Phase A |
+
+That last row is a debt this port created and had not paid: `docs/windows/README.md` and `docs/windows/measurement.md` were added in Phase A without an entry in `docs/documentation-audiences.json`, and the audience check has failed on `unclassified:` ever since.
+Both are now registered as `maintainer-verification`, in place, without reordering the file.
+`docs/herdr-backend.md` also gains a "Windows (Git Bash / MSYS)" section covering all three slices' MSYS branches, which is what makes PR-4 self-contained upstream.
+
+The smoke test is the number that matters most here.
+Its one long-standing failure was `current_path did not report the pane's cwd after cd /tmp, got ''` - row 13 itself - and it is now green, which also means the run reaches the cases that were behind it.
+The `/tmp` round trip is exact rather than lucky: `cygpath` reads the MSYS mount table, so `cygpath -u "$(cygpath -w /tmp)"` returns `/tmp`, not `/c/Users/ebatt/AppData/Local/Temp`.
+
+The `tests/fm-backend-herdr.test.sh` row needed a workaround to reach those cases at all, because of the `jq` finding above.
+The suite was run with a CR-stripping `jq` shim on `PATH` (`jq.exe "$@" | tr -d '\r'; exit "${PIPESTATUS[0]}"`), which is a measurement tool and is not committed.
+With it the suite reached 114 passes and 0 failures before a 10-minute wall clock cut it off - and the cases this slice touches are all inside those 114.
+Without it the suite still stops at case 20, unchanged by this slice.
+
+### What the acceptance review changed
+
+An adversarial review before the slice landed cleared (a) POSIX byte-identity across all three call sites, (b) the MSYS bootstrap ordering under `set -e`/`set -u`, and (c) the fallback gate, and found one confirmed mutation survivor plus five smaller things.
+Four became changes:
+
+- **The emitter was only tested up to the `=`.** The tab-create assertion matched the needle `--env<US>PROMPT_COMMAND=`, so gutting the emitter to the empty string passed all 31 cases while shipping a pane whose `.cwd` never moves - a 60-second spawn timeout naming the wrong cause. The assertion now matches the whole emitter and pins `--no-focus` behind it. Confirmed by mutation: replacing the emitter's body, and separately dropping the `$(...)` call from the `--env` argument, each now fail.
+- **The funnel's success status was never asserted** in the only suite that runs clean on Windows. All three call sites branch on it, so a funnel that returned 1 on success would refuse every spawn that worked. One `expect_code 0` closes it, and mutation-fails as expected.
+- **A single quote in the Git Bash path** would have produced a pwsh parse error that `|| true` swallowed. pwsh doubles a quote inside a single-quoted string, so the path is now `${bash_win//\'/\'\'}`. A per-user Git install under `C:\Users\o'brien\...` is the case; `C:\Program Files` installs never were.
+- **A failed bootstrap was completely silent.** It still does not fail the spawn - `fm-spawn.sh`'s worktree poll is the real backstop - but it now prints a warning naming the pane and what the pane is still running, so the 60-second timeout downstream is not the first evidence.
+
+Two more were tightened without changing the product: a crash-blind POSIX `current_path` case now also asserts that `pane get` actually ran, and the "no bootstrap on a non-PE herdr" case now demands exit **1** rather than any non-zero, so an adapter that failed to source no longer reads as a refusal.
+A case for "tab create succeeded but the response carries no pane id" was added: the funnel returns success without bootstrapping, and the property worth pinning is that it never aims `pane run` at a guessed pane.
+
+One finding is recorded rather than fixed, in a comment on `fm_backend_herdr_current_path` and here.
+`.cwd` only advances when a prompt fires, so a pane whose foreground process left the worktree without a subsequent shell prompt still reports the last prompt's directory.
+The spawn poll is unaffected - it waits for a change and requires two agreeing reads - but the relaunch check, which asks whether an adopted pane is STILL in its worktree, is genuinely weaker on Windows than on POSIX.
+That is inherent to OSC 9;9 rather than to the fallback: `.foreground_cwd`, the field that would answer exactly that question, does not exist on the Windows build at all.
+
+One test-fixture lesson, found while hardening: `"${VAR:-{"result":{...}}}"` does not work.
+The braces inside the JSON close the parameter expansion early and the fake returns a truncated response, which in this case silently removed the pane id and therefore the whole bootstrap the test was asserting.
+A default that contains braces has to be an `if`.
+
+### Not fixed here
+
+`herdr tab create --env` is the only channel available, so a captain whose herdr `default_shell` is `cmd` rather than `pwsh` would get a first pane command in the wrong dialect.
+The `& '<path>' --login` form is pwsh's, locked as D2, and the installed configuration here is `default_shell = "pwsh"`.
+
+The bootstrap is fire-and-forget: `pane run` types the launch line immediately after `tab create` returns, with no wait for a prompt.
+It worked on every run here, and `fm-spawn.sh`'s own 60-second worktree poll is the backstop if it ever does not, but a pane that swallowed its first line would fail with "treehouse get did not enter a worktree" rather than something that names the real cause.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -310,8 +476,11 @@ mount; mkdir -m 700 /tmp/probe; stat -c %a /tmp/probe
 herdr tab list --workspace /clear --session default
 MSYS2_ARG_CONV_EXCL='*' herdr tab list --workspace /clear --session default
 bash -c '. bin/backends/herdr.sh; fm_backend_herdr_win32_cli; echo $?'
-# row 13 (needs a lab session; see bin/fm-herdr-lab.sh)
-herdr tab create --workspace w1 --cwd C:\path --env 'PROMPT_COMMAND=printf "\033]9;9;%s\033\\" "$(cygpath -w "$PWD")"' --no-focus --session <lab>
-herdr pane run <pane> "& 'C:\Program Files\Git\usr\bin\bash.exe' --login" --session <lab>
-herdr pane get <pane> --session <lab> | jq .result.pane.cwd
+# rows 6 and 13 (the shipped adapter; needs a lab session, see bin/fm-herdr-lab.sh)
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_win32_pane_bash; echo'
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_task_tab_create <lab> w1 "$PWD" fm-probe'
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_current_path <lab>:<pane>'
+herdr pane get <pane> --session <lab> | jq -c '.result.pane | {cwd, foreground_cwd}'
+# the CRLF finding
+printf '{"a":["x","y"]}' | jq -r '.a[]' | od -c
 ```

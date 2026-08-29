@@ -454,6 +454,93 @@ fm_backend_herdr_cli_win32() {  # <session> <herdr-subcommand-and-args...>
     herdr ${args[@]+"${args[@]}"} --session "$session"
 }
 
+# fm_backend_herdr_win32_pane_bash: the Windows spelling of THIS Git Bash's own
+# bash.exe, printed on stdout - or a non-zero return when the panes herdr opens
+# on this host already run a POSIX shell and need no bootstrap at all.
+#
+# herdr has no per-tab shell flag (`tab create --help` offers only
+# --workspace/--cwd/--env/--label/--focus), so on Windows every pane it opens
+# runs the configured default_shell, which is pwsh here. Everything firstmate
+# types into a task pane - `treehouse get`, `export GOTMPDIR=...`, the agent
+# launch line - is POSIX shell, and measured in the lab: `exec bash -l` fails in
+# pwsh (`exec` is not a command) and a bare `bash` resolves to WSL's bash, not
+# Git Bash. So the adapter launches Git Bash by full Windows path as the pane's
+# first command (decision D2).
+#
+# Keyed on fm_backend_herdr_win32_cli for the same reason the argument-
+# conversion branch is: a native Win32 herdr client is exactly the herdr whose
+# panes run a Windows shell, and every unit test's fake herdr is an MSYS shell
+# script, so those tests keep asserting the byte-exact POSIX call sequence they
+# always did - on Windows too. $BASH is this very shell's own interpreter, so
+# the path names the Git Bash that is actually running firstmate rather than a
+# guessed install location; cygpath -w supplies the .exe suffix.
+fm_backend_herdr_win32_pane_bash() {
+  local win
+  fm_backend_herdr_win32_cli || return 1
+  win=$(cygpath -w "$BASH" 2>/dev/null) && [ -n "$win" ] || return 1
+  printf '%s' "$win"
+}
+
+# fm_backend_herdr_win32_pane_prompt_command: the PROMPT_COMMAND a bootstrapped
+# Git Bash pane needs so herdr keeps seeing where that pane actually is.
+#
+# On the Windows build `pane get .foreground_cwd` is always null (measured; the
+# real-herdr smoke test fails on exactly that and nothing else), so the only
+# live cwd herdr exposes is `.cwd`, which on Windows is NOT the frozen
+# creation-time value it is elsewhere: herdr feeds it from an OSC 9;9 sequence
+# that its pwsh integration emits at every prompt. A bash child inherits none of
+# that, so firstmate supplies the same emitter for bash. Measured live: with it,
+# `.cwd` followed two `cd`s exactly.
+#
+# It is passed through `tab create --env` rather than typed into the pane
+# because the environment is what survives the hop that matters - pwsh to bash
+# to the FRESH bash `treehouse get` opens inside the worktree - so the emitter is
+# still running in the subshell whose cwd fm-spawn.sh is waiting to see.
+fm_backend_herdr_win32_pane_prompt_command() {
+  # shellcheck disable=SC2016 # Nothing here may expand HERE: this is source for
+  # the pane's own bash to evaluate at each of ITS prompts, so $PWD and the
+  # cygpath call have to survive as text all the way into that shell.
+  printf '%s' 'printf "\033]9;9;%s\033\\" "$(cygpath -w "$PWD")"'
+}
+
+# fm_backend_herdr_task_tab_create: the ONE `tab create` every firstmate TASK
+# pane comes from - the plain spawn path, the presentation projection, and the
+# projection's husk replacement. Echoes herdr's raw JSON response.
+#
+# On a POSIX host this is byte-for-byte the call each site made inline before:
+# `tab create --workspace W --cwd C --label L --no-focus`. On MSYS it also
+# carries SHELL (so treehouse's own subshell is Git Bash rather than whatever a
+# native Windows binary would pick) and PROMPT_COMMAND, and then sends the Git
+# Bash launch line as the pane's first command. Both halves belong here because
+# both must hold for every pane an agent is ever launched into.
+fm_backend_herdr_task_tab_create() {  # <session> <workspace> <cwd> <label>
+  local session=$1 workspace=$2 cwd=$3 label=$4 out pane bash_win quoted
+  local -a env_args=()
+  if bash_win=$(fm_backend_herdr_win32_pane_bash); then
+    env_args=(--env "SHELL=$bash_win" \
+      --env "PROMPT_COMMAND=$(fm_backend_herdr_win32_pane_prompt_command)")
+  fi
+  out=$(fm_backend_herdr_cli "$session" tab create \
+    --workspace "$workspace" --cwd "$cwd" --label "$label" \
+    ${env_args[@]+"${env_args[@]}"} --no-focus 2>/dev/null) || return 1
+  printf '%s' "$out"
+  [ -n "$bash_win" ] || return 0
+  pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  [ -n "$pane" ] || return 0
+  # pwsh's call operator: the path is quoted because it contains spaces, and a
+  # bare `bash` here would be WSL's. --login gives the same profile chain an
+  # interactive Git Bash window gets; measured on this machine, nothing in that
+  # chain reassigns PROMPT_COMMAND or cd's away from the pane's --cwd.
+  # pwsh escapes a single quote inside a single-quoted string by DOUBLING it,
+  # which is what a per-user Git install under a path like C:\Users\o'brien
+  # needs to parse at all.
+  quoted=${bash_win//\'/\'\'}
+  fm_backend_herdr_cli "$session" pane run "$pane" \
+    "& '$quoted' --login" >/dev/null 2>&1 ||
+    echo "warning: herdr pane $pane was created but its Git Bash bootstrap command could not be sent; the pane is still running its default Windows shell" >&2
+  return 0
+}
+
 # fm_backend_herdr_tool_check: refuse loudly if herdr or jq is missing.
 fm_backend_herdr_tool_check() {
   command -v herdr >/dev/null 2>&1 || { echo "error: backend=herdr selected but the 'herdr' CLI is not installed (https://herdr.dev) (dual-licensed AGPL-3.0-or-later/commercial)" >&2; return 1; }
@@ -2138,7 +2225,7 @@ fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_ta
 $dup_tabs
 EOF
   fi
-  out=$(fm_backend_herdr_cli "$session" tab create --workspace "$wsid" --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_task_tab_create "$session" "$wsid" "$cwd" "$label") || return 1
   tab_id=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
   pane_id=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   if [ -z "$tab_id" ] || [ -z "$pane_id" ]; then
@@ -2231,9 +2318,8 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
     echo "error: herdr presentation task-tab create could not capture exact active workspace and tab; refusing a focus-unsafe projection" >&2
     return 1
   }
-  if out=$(fm_backend_herdr_cli "$session" tab create \
-    --workspace "$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID" \
-    --cwd "$cwd" --label "$task_label" --no-focus 2>/dev/null); then
+  if out=$(fm_backend_herdr_task_tab_create "$session" \
+    "$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID" "$cwd" "$task_label"); then
     :
   else
     fm_backend_herdr_projection_focus_restore "$session" "$focus_before" "task-tab create" || true
@@ -2452,8 +2538,8 @@ fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <h
     echo "warning: herdr presentation reclaim for $id would replace the active tab; spawning flat" >&2
     return 2
   fi
-  if ! out=$(fm_backend_herdr_cli "$session" tab create \
-    --workspace "$meta_workspace" --cwd "$cwd" --label "$task_label" --no-focus 2>/dev/null); then
+  if ! out=$(fm_backend_herdr_task_tab_create "$session" \
+    "$meta_workspace" "$cwd" "$task_label"); then
     fm_backend_herdr_projection_focus_restore "$session" "$focus_before" "husk replacement create" || return 1
     echo "warning: herdr presentation reclaim for $id could not create an exact replacement; spawning flat" >&2
     return 2
@@ -2649,10 +2735,39 @@ fm_backend_herdr_target_ready() {  # <target>
 # `.result.pane.foreground_cwd` tracks the ACTUALLY RUNNING foreground
 # process's cwd instead, which is what changes when `treehouse get` enters its
 # worktree subshell - confirmed live against a real treehouse acquisition.
+#
+# Windows inverts that pair, so the MSYS branch below reads the OTHER field.
+# Measured: on the Windows build `.foreground_cwd` is ALWAYS null - herdr has no
+# foreground-process probe there - while `.cwd` is live, because on Windows it is
+# not a creation-time snapshot at all but the last cwd the pane's shell reported
+# through OSC 9;9 (which is why fm_backend_herdr_task_tab_create hands the
+# bootstrapped Git Bash a PROMPT_COMMAND that emits it). The fallback is gated on
+# the pane host, never on "foreground_cwd happened to be empty": on a POSIX host
+# an empty foreground_cwd means the read genuinely failed, and substituting the
+# frozen creation-time cwd there would hand fm-spawn.sh's worktree poll and the
+# relaunch check a path the pane may have left long ago. The Windows spelling is
+# folded back to POSIX with cygpath -u so every caller keeps comparing paths in
+# the one form this shell can `cd` into.
+#
+# The Windows read is weaker than the POSIX one in one way worth naming: `.cwd`
+# only advances when a prompt actually fires, so a pane whose foreground process
+# wandered off without a subsequent shell prompt (a long-running agent, or a
+# non-emitting program launched after a cd) still reports the last prompt's
+# directory. That is fine for the spawn poll, which is waiting for a change and
+# requires two agreeing reads, and it is a real weakening of the relaunch check
+# in fm-spawn.sh, which asks whether an adopted pane is STILL in its worktree.
+# It is inherent to OSC 9;9 rather than to this fallback: `.foreground_cwd`,
+# which would answer exactly that question, does not exist on Windows at all.
 fm_backend_herdr_current_path() {  # <target>
+  local info path
   fm_backend_herdr_target_ready "$1" || return 0
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
-    | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
+  info=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || info=
+  path=$(printf '%s' "$info" | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
+  if [ -z "$path" ] && fm_backend_herdr_win32_pane_bash >/dev/null; then
+    path=$(printf '%s' "$info" | jq -r '.result.pane.cwd // empty' 2>/dev/null)
+    [ -z "$path" ] || path=$(cygpath -u "$path" 2>/dev/null) || path=
+  fi
+  printf '%s\n' "$path"
 }
 
 # fm_backend_herdr_send_text_line: send one line of TEXT then submit,
