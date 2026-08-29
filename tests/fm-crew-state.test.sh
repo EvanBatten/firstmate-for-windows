@@ -127,13 +127,20 @@ SH
 }
 
 make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
-  local dir=$1 tb="$1/notimeoutbin" tool real
+  local tb="$1/notimeoutbin" tool
+  local tools='bash git grep sed head cut tail dirname perl'
   mkdir -p "$tb"
-  for tool in bash git grep sed head cut tail dirname perl; do
-    real=$(command -v "$tool" || true)
-    [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
-    ln -s "$real" "$tb/$tool"
+  for tool in $tools; do
+    command -v "$tool" >/dev/null 2>&1 \
+      || fail "missing tool for no-timeout path: $tool"
   done
+  # This toolbin becomes the WHOLE PATH below, so it goes through the shared
+  # helper rather than open-coded symlinks: a symlinked MSYS binary in a
+  # directory holding no msys-2.0.dll dies with exit 127 before the script
+  # under test runs a line, and the helper writes an exec wrapper there and
+  # the same symlink everywhere else.
+  # shellcheck disable=SC2086  # deliberate word split of the tool list
+  fm_fakebin_link "$tb" $tools
   printf '%s\n' "$tb"
 }
 

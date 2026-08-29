@@ -61,6 +61,20 @@ write_maintenance_section_with_eol() {
   done < <(write_maintenance_section)
 }
 
+# Whether the file's lines end with CRLF, decided without a text-processing
+# tool. Git for Windows ships grep, sed and awk patched to drop a trailing CR
+# before matching, so `grep -q $'\r$'` answers "no" for every CRLF file there
+# and the section below would be appended LF-terminated inside a CRLF file.
+# Bash's own `read` strips the newline and nothing else on every platform, so
+# this is one answer everywhere rather than a Windows branch.
+file_uses_crlf() {  # <path>
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in *$'\r') return 0 ;; esac
+  done < "$1"
+  return 1
+}
+
 # Idempotently append the canonical self-governance section to AGENTS.md when it
 # is absent. Sets MAINT_INJECTED=1 when it appends and 0 when the section is
 # already present, so callers can report whether the file changed.
@@ -72,7 +86,7 @@ ensure_maintenance_section() {
     return 0
   fi
   local eol=$'\n' sep=''
-  if LC_ALL=C grep -q $'\r$' "$AGENTS"; then
+  if file_uses_crlf "$AGENTS"; then
     eol=$'\r\n'
   fi
   if [ -s "$AGENTS" ]; then

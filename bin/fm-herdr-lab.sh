@@ -54,6 +54,19 @@ fm_herdr_lab_raw() { # <session> <herdr arguments...>
   HERDR_SESSION="$name" herdr "$@" --session "$name"
 }
 
+# The same call, REPLACING the calling shell. Only for the backgrounded server
+# below: `some_function &` forks a wrapper shell that then runs herdr as a
+# CHILD (bash exec-optimizes a backgrounded simple command and a backgrounded
+# subshell, but never a backgrounded function call), so `$!` names the wrapper
+# and TERMing it leaves the real server running and reparented. `exec` makes
+# the background job's pid the server's own pid, which is the pid
+# fm_herdr_lab_cancel_provision has always assumed it had.
+fm_herdr_lab_raw_exec() { # <session> <herdr arguments...>
+  local name=$1
+  shift
+  HERDR_SESSION="$name" exec herdr "$@" --session "$name"
+}
+
 fm_herdr_lab_session_list() { # <session>
   fm_herdr_lab_raw "$1" session list --json
 }
@@ -195,7 +208,7 @@ fm_herdr_lab_provision() { # <session>
   else
     fm_herdr_lab_prepare "$name" || return 1
   fi
-  fm_herdr_lab_raw "$name" server >/dev/null 2>&1 &
+  fm_herdr_lab_raw_exec "$name" server >/dev/null 2>&1 &
   server_pid=$!
   attempt=0
   max_attempts=300

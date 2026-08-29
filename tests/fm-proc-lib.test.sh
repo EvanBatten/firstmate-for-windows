@@ -54,9 +54,11 @@ case "$pid:$field" in
   600:comm=) printf '%s\n' bash ;;
   600:args=) printf '%s\n' 'bash /repo/bin/fm-harness.sh' ;;
   600:ppid=) printf '%s\n' '  700 ' ;;
+  600:pgid=) printf '%s\n' ' 600  ' ;;
   *:comm=) printf '%s\n' bash ;;
   *:args=) printf '%s\n' bash ;;
   *:ppid=) printf '%s\n' 1 ;;
+  *:pgid=) printf '%s\n' 1 ;;
 esac
 SH
   chmod +x "$1/ps"
@@ -133,11 +135,19 @@ make_fake_proc() {  # <dir>
   printf '%s' /usr/bin/bash > "$root/600/exename"
   printf '%s' 601 > "$root/600/ppid"
   printf '%s' 90600 > "$root/600/winpid"
+  # Deliberately NOT 601, which is this pid's ppid: a mutation reading
+  # /proc/<pid>/ppid instead has to be visible in the value.
+  printf '%s' 600 > "$root/600/pgid"
   printf 'bash\0/repo/bin/fm-harness.sh\0' > "$root/600/cmdline"
   printf '%s' /usr/bin/bash > "$root/601/exename"
   printf '%s' 1 > "$root/601/ppid"
   printf '%s' 90601 > "$root/601/winpid"
+  printf '%s' 601 > "$root/601/pgid"
   printf '/usr/bin/bash\0--login\0' > "$root/601/cmdline"
+  # A process whose pgid file exists but holds no number: the VALUE, not the
+  # file's presence, has to decide the answer.
+  mkdir -p "$root/602"
+  printf '%s' 'not-a-pid' > "$root/602/pgid"
 }
 
 # Run one library expression with <fakebin> shadowing the tools. `kill` is a
@@ -189,6 +199,35 @@ test_posix_helpers_run_todays_ps_calls() {
   assert_grep 'ps -o args= -p 700' "$dir/args.log" "fm_proc_args must run today's exact ps invocation"
   assert_grep 'ps -o ppid= -p 600' "$dir/ppid.log" "fm_proc_ppid must run today's exact ps invocation"
   pass "proc-lib: the POSIX helpers run exactly the ps invocations their callers ran before"
+}
+
+test_posix_pgid_runs_todays_ps_call() {
+  local dir fakebin got
+  dir="$TMP_ROOT/posix-pgid"
+  fakebin=$(fm_fakebin "$dir")
+  make_posix_ps "$fakebin"
+  # bin/fm-procevent.sh and bin/fm-watch.sh compare this against a pid, so a
+  # padded answer that keeps its whitespace never equals its own leader.
+  got=$(FM_PS_LOG="$dir/pgid.log" lib_eval "$fakebin" 'fm_proc_pgid 600')
+  [ "$got" = 600 ] || fail "posix fm_proc_pgid returned '$got', expected the whitespace stripped"
+  # Both callers write `pgid=$(fm_proc_pgid ...) || <refuse>`, so a success that
+  # reports failure kills every runner start while the value above still reads
+  # right.
+  FM_PS_LOG="$dir/status.log" lib_eval "$fakebin" 'fm_proc_pgid 600 >/dev/null' \
+    || fail "posix fm_proc_pgid must exit 0 when it answers"
+  [ "$(grep -c . "$dir/pgid.log")" = 1 ] \
+    || fail "fm_proc_pgid must run exactly one ps: $(cat "$dir/pgid.log")"
+  assert_grep 'ps -o pgid= -p 600' "$dir/pgid.log" \
+    "fm_proc_pgid must run today's exact ps invocation"
+  # A pid that is not a pid never reaches ps at all, on either branch.
+  : > "$dir/pgid.log"
+  FM_PS_LOG="$dir/pgid.log" lib_eval "$fakebin" 'fm_proc_pgid "" >/dev/null' \
+    && fail "fm_proc_pgid must refuse an empty pid"
+  FM_PS_LOG="$dir/pgid.log" lib_eval "$fakebin" 'fm_proc_pgid abc >/dev/null' \
+    && fail "fm_proc_pgid must refuse a non-numeric pid"
+  [ ! -s "$dir/pgid.log" ] \
+    || fail "a refused pid must run no ps at all: $(cat "$dir/pgid.log")"
+  pass "proc-lib: fm_proc_pgid is today's exact ps call and refuses a non-pid without forking"
 }
 
 test_posix_comm_propagates_a_dead_pid_as_nonzero() {
@@ -420,7 +459,32 @@ test_msys_liveness_falls_back_to_the_winpid_column() {
   pass "proc-lib: MSYS liveness falls back to the ps -W WINPID column for native processes"
 }
 
+test_msys_pgid_reads_proc_and_forks_nothing() {
+  local dir fakebin got
+  dir="$TMP_ROOT/msys-pgid"
+  fakebin=$(msys_env "$dir")
+  got=$(FM_PS_LOG="$dir/pgid.log" FM_PWSH_LOG="$dir/pgid.pwsh.log" \
+    FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_pgid 600')
+  [ "$got" = 600 ] || fail "msys fm_proc_pgid returned '$got', expected /proc/600/pgid"
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_pgid 600 >/dev/null' \
+    || fail "msys fm_proc_pgid must exit 0 when it answers"
+  # The whole point of reading the file: MSYS ps rejects -o, and a pwsh walk
+  # would cost a process to answer something already on disk.
+  [ ! -s "$dir/pgid.log" ] \
+    || fail "the MSYS pgid read must run no ps: $(cat "$dir/pgid.log")"
+  [ ! -s "$dir/pgid.pwsh.log" ] \
+    || fail "the MSYS pgid read must run no pwsh: $(cat "$dir/pgid.pwsh.log")"
+  # A pid with no pgid file at all, and one whose file holds something that is
+  # not a pid: both must fail rather than hand a caller a bogus group to signal.
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_pgid 604 >/dev/null' \
+    && fail "an absent /proc entry must make fm_proc_pgid fail"
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_pgid 602 >/dev/null' \
+    && fail "a non-numeric pgid file must make fm_proc_pgid fail"
+  pass "proc-lib: MSYS fm_proc_pgid reads /proc/<pid>/pgid and validates it, with no ps and no pwsh"
+}
+
 test_posix_helpers_run_todays_ps_calls
+test_posix_pgid_runs_todays_ps_call
 test_posix_comm_propagates_a_dead_pid_as_nonzero
 test_posix_prime_costs_nothing_and_memoises_nothing
 test_posix_chain_walks_and_stops_at_init
@@ -433,3 +497,4 @@ test_msys_lookup_without_a_memo_still_answers
 test_msys_prime_rooted_at_a_win32_pid_needs_no_second_walk
 test_msys_chain_terminates_cleanly_without_a_working_pwsh
 test_msys_liveness_falls_back_to_the_winpid_column
+test_msys_pgid_reads_proc_and_forks_nothing

@@ -49,13 +49,13 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | Script | Result | First failing assertion | Class (provisional) |
 | --- | --- | --- | --- |
 | fm-send-popup-settle, fm-tmux-submit-busy, fm-send-settle, fm-send-strict, fm-spawn-batch, fm-supervision-instructions | **PASS** | | |
-| fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | **product** - resolved in slice 3: Windows `jq` writes CRLF, so a multi-line read carries `w1\r` (see "New finding" below) |
+| fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | **product** - NOT resolved in slice 3 (that verdict was wrong); settled in slice 6: a native `jq.exe` writes CRLF, so the two-row read is `w1\r\nw7` and the refusal renders `w1\r w7`. Still red; the fix is a PR-3 follow-up |
 | fm-arm-pretool-check | FAIL | "D01 via codex must deny, got exit 0" for `bin/fm-watch-arm.sh &` | **product** - resolved in slice 4: the watcher seatbelt was inert on Windows for three separate reasons (`node:path`, MSYS argument conversion, `jq` CRLF); now 145/145 |
-| fm-crew-state | FAIL | "timed-out no-mistakes falls back to pane (missing: 'state: working')" | unknown; timing or `ps`-based liveness (row 2) |
-| fm-herdr-lab | FAIL | "timed-out provision must fail: expected exit 1, got 0" | test/timing under slow spawn |
-| fm-pr-merge | FAIL | "github-zero-exit-queue-required: refusal did not name the concrete observed state" | unknown (fake `gh` fixture) |
-| fm-ensure-agents-md | FAIL | "CRLF AGENTS.md injection did not preserve CRLF line endings" | unknown; the one test that wants CRLF kept, worth a look next to row 1 |
-| fm-composer-lib | FAIL | "a half-block rule row must count as a structural edge" | unknown; text-width or locale handling of block glyphs |
+| fm-crew-state | FAIL | "timed-out no-mistakes falls back to pane (missing: 'state: working')" | **test** - resolved in slice 6: `make_no_timeout_toolbin`'s symlinked MSYS binaries became the child's whole `PATH`; now green |
+| fm-herdr-lab | FAIL | "timed-out provision must fail: expected exit 1, got 0" | **test + product** - resolved in slice 6: the fixture raced the poll loop, and removing the race exposed a cross-platform cancellation bug in `fm_herdr_lab_provision`; now 7/7 |
+| fm-pr-merge | FAIL | "github-zero-exit-queue-required: refusal did not name the concrete observed state" | **platform: row 21** - settled in slice 6: `fm_pr_poll_prepare`'s mode-600 check, so `error: could not prepare PR poll`. The D6 trigger for Phase C |
+| fm-ensure-agents-md | FAIL | "CRLF AGENTS.md injection did not preserve CRLF line endings" | **product** - resolved in slice 6: Git for Windows' grep, sed and awk strip a trailing CR, so the CRLF probe was always false; now green |
+| fm-composer-lib | FAIL | "a half-block rule row must count as a structural edge" | **test** - resolved in slice 6: bash does not expand `\uHHHH` without a UTF-8 `LANG`, so the fixture held literal escape text; now green |
 
 ### portable-parallel-1: 5 green / 5 red / 1 gate-skip of 11 (903 s)
 
@@ -65,15 +65,16 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | fm-pi-primary-types | gate-skip | pi not installed | |
 | fm-x-mode | FAIL | "poll auth error must write a dedupe marker" (next assertion wants `state/` at mode 700) | platform: row 21 |
 | fm-cd-pretool-check | FAIL | "transport must fail open when node is unavailable: expected exit 0, got 127" | **test** - resolved in slice 4: a curated `PATH` of symlinked MSYS binaries cannot load `msys-2.0.dll`, so the child dies before the guard runs; the guard itself fails open correctly |
-| fm-captain-hold-lifecycle | TIMEOUT | exceeded the 300 s per-script bound (failed in 11 s without the env var) | unknown; hang once symlinks are real, investigate with `bash -x` |
+| fm-captain-hold-lifecycle | TIMEOUT | exceeded the 300 s per-script bound (failed in 11 s without the env var) | **product + platform** - settled in slice 6: not a hang. `fm-procevent.sh start` died on `ps -o pgid=` (fixed), and the script needs 1091 s here, so the bound was too small. Now 17/17 |
 | fm-test-run | FAIL | "isolation failure: worker root mode is 755, expected 0700" | platform: row 21 (the runner's own `--jobs` isolation check) |
 | fm-lint | FAIL | "installer did not fall back to shasum -a 256" | **test** - resolved in slice 5: the test stubs `uname`, so row 19 was the wrong verdict; the cause is a fakebin of symlinked MSYS binaries with no `msys-2.0.dll` (slice 4's finding). Now 28/28 |
 
 ### Count to beat
 
 11 green, 12 red, 1 gate-skip across the 24 portable-parallel scripts, plus 14 of 15 in the real-herdr smoke test.
-Of the 12 red, 3 are row 21 (POSIX modes), 2 were the guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`, both green after slice 4), 1 is `fm-backend-herdr` (green after slice 3), 1 is `fm-lint` (green after slice 5), 1 is a timeout, and 4 need a first look.
-The 131-script portable-serial lane was not run in Phase A (roughly 3 hours at this box's spawn rate); Phase B runs it once the row 21 decision is applied.
+Of the 12 red, 3 are row 21 (POSIX modes), 2 were the guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`, both green after slice 4), 1 is `fm-lint` (green after slice 5), 1 is a timeout, and 5 needed a first look.
+Slice 6 settled every one of them; the standing count is **19 green, 4 red, 1 gate-skip**, and all four remaining reds are named in "Phase B slice 6" below.
+The 134-script portable-serial lane was not run in Phase A (roughly 3 hours at this box's spawn rate); it is still the next unit of work.
 
 ## Phase B slice 1 (PR-2): process identity and liveness
 
@@ -753,6 +754,242 @@ Its first real count comes from the fork's `windows` branch.
 The lane runs the two parallel shards only, so it covers `tests/fm-lint.test.sh` but not `tests/fm-lint-workflows.test.sh`, which lives in the portable serial lane.
 Both were run here by hand for this slice; a Windows serial lane is slice 6's question, once its runtime is known.
 
+## Phase B slice 6: triaging the parallel lanes' remaining reds
+
+Measured 2026-08-29, same machine and toolchain as Phase A.
+Phase A left 12 red scripts across the two portable-parallel lanes with a provisional class for each.
+Slices 4 and 5 closed three of them.
+This section settles the remaining nine, with a measured cause rather than a guess, and fixes what turned out to be product.
+
+One Phase A verdict was wrong and is corrected in place above: `fm-backend-herdr` was marked "resolved in slice 3", but slice 3's own verification section says the opposite ("fails at the identical assertion as Phase A, 19 cases in"). It is still red, and its cause is settled below.
+
+### Verdicts
+
+| Script | Phase A note | Measured cause | Class |
+| --- | --- | --- | --- |
+| `fm-composer-lib` | "text-width or locale handling of block glyphs" | Git Bash's bash does not expand `\uHHHH` unless `LANG`/`LC_ALL` names a UTF-8 locale, and Git Bash starts with `LANG` empty. The fixture's `printf '\u2580'` produced the six literal characters `\u2580`, so `fm_composer_row_has_edge` was asked about a row that had no half-block glyph in it. | **test** - fixed |
+| `fm-ensure-agents-md` | "the one test that wants CRLF kept" | Real defect: `LC_ALL=C grep -q $'\r$'` answers *no* for every CRLF file on Git for Windows, so the self-governance section was appended LF-terminated into a CRLF file. | **product** - fixed |
+| `fm-crew-state` | "timing or `ps`-based liveness (row 2)" | Neither: `make_no_timeout_toolbin` symlinked nine MSYS binaries into a directory that then became the child's whole `PATH`, and a symlinked MSYS binary cannot load `msys-2.0.dll`. Slice 4's finding, at one of the four sites it left. | **test** - fixed |
+| `fm-herdr-lab` | "test/timing under slow spawn" | The fixture held the fake server for 30 s and assumed the 300-attempt provisioning poll finishes long before that; each attempt spawns a `herdr` and a `jq`, so on this box the loop outlasted the delay and the "late" launch arrived first. Removing the timing assumption then exposed a real cross-platform bug underneath it: `fm_herdr_lab_cancel_provision` never cancelled anything. | **test** + **product** - both fixed |
+| `fm-backend-herdr` | "resolved in slice 3" (wrong) | Never fixed. A native `jq.exe` writes CRLF, so a MULTI-row read carries an interior CR: `matches` is `w1\r\nw7`, and `${matches//$'\n'/ }` makes the refusal say `w1\r w7`, which looks right on a terminal and does not match. | **product** - not fixed here |
+| `fm-captain-hold-lifecycle` | "hang once symlinks are real, investigate with `bash -x`" | Not a hang and not symlinks. Two independent things: the script needs ~700 s here (17 cases, ~60 s each) so the 300 s per-script bound killed it mid-run, and `fm-procevent.sh start` died on `ps -o pgid=`. | **product** (the pgid read) + **platform** (spawn cost) - fixed / documented |
+| `fm-pr-merge` | "unknown (fake `gh` fixture)" | Nothing to do with `gh`. `fm-pr-check.sh` refuses with `error: could not prepare PR poll` because `fm_pr_private_file_valid "$tmp" 600` can never hold where `chmod 0600` reads back 644. | **platform: row 21**, and the one that blocks Phase C |
+| `fm-x-mode` | "platform: row 21" | Confirmed unchanged (`state/` at mode 700). | **platform: row 21** |
+| `fm-test-run` | "platform: row 21" | Confirmed unchanged (the runner's own `--jobs` worker-root isolation check). | **platform: row 21** |
+
+### `grep`, `sed` and `awk` on Git for Windows silently drop a trailing CR
+
+`bin/fm-ensure-agents-md.sh` keeps an existing AGENTS.md's line endings when it injects its self-governance section, and decides which they are with one probe:
+
+```sh
+if LC_ALL=C grep -q $'\r$' "$AGENTS"; then eol=$'\r\n'; fi
+```
+
+That probe is always false here.
+Git for Windows patches GNU grep (3.0), sed and awk to strip a trailing CR before matching, and the mounts are all `binary`, so it is the tools and not the mount:
+
+```
+$ printf 'a\r\nb\r\n' > t.txt && od -c t.txt | head -1
+0000000   a  \r  \n   b  \r  \n
+$ LC_ALL=C grep -q $'\r$' t.txt; echo $?          # 1
+$ LC_ALL=C grep -q $'\r'  t.txt; echo $?          # 1  (anywhere, not just anchored)
+$ LC_ALL=C grep -q $'\r$' < t.txt; echo $?        # 1  (stdin too)
+$ LC_ALL=C awk '/\r$/{f=1} END{exit !f}' t.txt; echo $?   # 1
+$ LC_ALL=C sed -n '/\r$/p' t.txt | wc -c          # 0
+$ tr -dc '\r' < t.txt | od -c | head -1           # \r      - tr is binary-safe
+$ IFS= read -r l < t.txt; printf '%s' "$l" | od -c | head -1   # a \r  - bash read keeps it
+```
+
+So a Windows user's CRLF AGENTS.md came back with an LF-terminated section stitched onto the end of it - a mixed-line-ending file that every subsequent diff shows as noise.
+
+The fix replaces the probe with a `file_uses_crlf` helper built out of bash's own `read`, which strips the newline and nothing else on every platform.
+`grep -U` would also have worked on MSYS, but `-U` means something different in BSD grep, so it is not a portable spelling.
+This is not a Windows branch: it is one answer everywhere, and on macOS and Linux it answers exactly what the `grep` did.
+
+The blast radius was checked rather than assumed. Every other CR test in `bin/` is a bash `case` on a variable (`*$'\r'*`), which bash evaluates itself; `bin/fm-ensure-agents-md.sh:75` was the only one that asked a text tool.
+`bin/fm-branch-outcome.sh:68`'s `gsub(/\r/, "\\r", line)` is a display escape whose input arrives CR-free on Windows, so it is a no-op there rather than a defect.
+
+### MSYS `ps` has no `-o pgid=` either, in three more callers
+
+Slice 1 gave `bin/fm-proc-lib.sh` `comm`, `args`, `ppid`, `chain` and `pid_alive`, and wired the four callers that used them.
+It missed `pgid`, which four call sites read the same broken way. What each one did on Windows:
+
+| Site | Windows behavior before |
+| --- | --- |
+| `bin/fm-procevent.sh:339` (`require_runner_group`) | `pgid` empty, so `fm-procevent.sh start <source>` **always** died with `error: cannot inspect runner process group`. Every captured-result channel - lavish, remote-reply, the captain-hold answer intake - was dead on this platform. |
+| `bin/fm-procevent.sh:678` (`stop_runner_pid`) | returns 2, so a live runner could never be stopped by group. |
+| `bin/fm-watch.sh:933` | `pgid` empty, so the `[ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ]` guard is skipped and the watcher's proof that its check subshell leads its own group never ran. |
+| `bin/fm-sessionstart-nudge.sh:33` | the ancestry walk stopped at its first hop, so `lock_is_in_ancestry` was false for every session and the SessionStart nudge fired at a primary that had already run `fm-session-start.sh`. |
+
+MSYS publishes the answer as a file, in the same `/proc/<pid>/` directory `fm_proc_comm` and `fm_proc_ppid` already read, so the new `fm_proc_pgid` costs no process at all there and is literally `ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]'` everywhere else:
+
+```
+$ ps -o pgid= -p $$          # ps: unknown option -- o
+$ cat /proc/$$/pgid          # 13823, and $$ is 13823
+```
+
+`bin/fm-sessionstart-nudge.sh` also had a second Windows defect in the same four lines: its `kill -0 "$lock_pid"` liveness probe. Slice 1 made the session lock record the harness's **Win32** pid on a Windows userland, and `kill -0` reports a Win32 pid as absent. Both now go through the library, and the walk gets the `fm_proc_chain_prime` call every other caller has, so an MSYS-to-Win32 ancestry costs one pwsh process instead of one per hop.
+
+`bin/fm-teardown.sh`'s three `ps -o pgid=` reads and `bin/fm-remote-entrypoint.sh`'s two `ps -o ppid=` reads are deliberately untouched: the first is inside a tmux-only `lsof`-unavailable fallback that fails safe (it prints a warning and returns 0) and is unreachable on a herdr backend, and the second runs on the remote host, which is never Windows. Both are named here so the next sweep does not have to rediscover them.
+
+### `\uHHHH` in a test fixture depends on the ambient locale
+
+Git Bash starts with `LANG` empty, and bash's `\uHHHH` expansion - in `$'...'`, in `printf`, and in `printf %b` - falls back to emitting the escape literally when the locale's charset is not UTF-8:
+
+```
+$ echo $LANG            # (empty)
+$ x=$'\u2580\u2580'; printf '%s' "$x" | od -c | head -1
+0000000   \   u   2   5   8   0   \   u   2   5   8   0
+$ LANG=C.UTF-8 LC_ALL=C.UTF-8 bash -c 'printf "%s" $'"'"'\u2580'"'"'' | od -c | head -1
+0000000 342 226 200
+```
+
+`tests/fm-composer-lib.test.sh` built its herdr half-block rule fixture that way, so on this host it asserted that a row containing the ASCII text `\u2580\u2580\u2580` is a structural edge - which it is not, and should not be.
+The fixture now uses the literal UTF-8 glyphs, which is what `bin/fm-composer-lib.sh`'s own `case` patterns have always used, and what the rest of this same test file already used for `❯`, `›`, `⟩` and `→`.
+On a UTF-8 host the bytes are identical; on a host without a locale the test now tests what it says it tests.
+This is not Windows-specific - a Linux container with no `LANG` behaves the same way - so it is a portability fix rather than a platform branch.
+
+Four other test files still carry shell `\uHHHH` escapes (`fm-afk-pi-herdr-return-e2e`, `fm-calm-pi-extension`, `fm-pi-watch-extension`, `fm-turnend-guard`). All four are in the portable **serial** lane, so they are triaged with that lane rather than guessed at here.
+
+### The herdr-lab fixture raced its own poll loop, and hid a real bug when it did
+
+`test_timed_out_provision_cancels_late_launch` claims to prove that a provisioning attempt which times out cancels the background `herdr server` it started.
+It expressed "the server never becomes ready" as a 30-second delay, which is a fact about wall time and not about the loop - and `fm_herdr_lab_provision` polls 300 times, spawning a `herdr` and a `jq` each time, so here the server won the race and provisioning returned 0.
+
+Raising the delay would only have moved the race. The fake now records its own pid and holds for ten minutes without ever reporting ready, and the test asserts that **that pid is not alive** after teardown. There is no timing left in the assertion at all.
+
+That is what turned up the real defect. `fm_herdr_lab_provision` launched the server as `fm_herdr_lab_raw "$name" server &` and cancelled it by TERMing `$!`. Bash exec-optimizes a backgrounded simple command and a backgrounded subshell, but **never a backgrounded function call**, so `$!` was a wrapper shell and `herdr` was its child:
+
+```
+$ f() { local n=$1; shift; HERDR_SESSION="$n" /usr/bin/sleep 30 "$@"; }
+$ f x >/dev/null 2>&1 & p=$!
+$ ps -f | awk -v p="$p" '$3==p {print "CHILD:", $2, $NF}'
+CHILD: 22683 /usr/bin/sleep
+$ kill -TERM "$p"; ps -f | awk '{print $2, $3, $NF}' | grep sleep
+22683 1 /usr/bin/sleep          # reparented to init, still running
+```
+
+So a timed-out lab provision left its `herdr server` running, on every platform, since the function was written. The fix is a `fm_herdr_lab_raw_exec` sibling used only for that one backgrounded launch: `exec` makes the background job's pid the server's own pid, which is the pid the canceller always assumed it had. This is the one place in the slice where macOS and Linux behavior changes, and it changes from "leaks the server" to "kills it".
+
+The rewritten test is the proof: green with `fm_herdr_lab_raw_exec`, and `timed-out provision left its lab server running after teardown (pid 42481)` the moment it is mutated back to `fm_herdr_lab_raw`. The earlier gate-file version of this fixture passed on Windows either way - its orphan's bounded wait expired during the slow poll loop - which is exactly the kind of pass this rewrite removes.
+
+### `fm-backend-herdr` is still red, and the reason is the jq CRLF finding again
+
+Phase A's table said "resolved in slice 3". It was not: slice 3's own "Not fixed here" paragraph says the assertion fails unchanged and hands it to this triage. The cause is now settled.
+
+`bin/backends/herdr.sh:1698` reads a MULTI-row jq answer:
+
+```sh
+matches=$(printf '%s' "$list" | jq -r --arg want "$label" \
+  '.result.workspaces[]? | select(.label == $want) | .workspace_id')
+```
+
+Bash's command substitution strips the trailing `\r\n` on MSYS, so a single-value read is clean - which is why almost everything in the adapter works. A two-row answer keeps its **interior** CR, so `matches` is `w1\r\nw7`, and `${matches//$'\n'/ }` renders the refusal as `w1\r w7`. On a terminal that prints as `w1 w7`, which is exactly why Phase A recorded "yet the captured stderr names `(w1 w7)`".
+
+This is the same defect class slice 4 fixed in the hook transport with `fm_hook_payload_string`, and it is a product defect rather than a test one: any operator reading that refusal gets a control character in the middle of the workspace list they are being asked to act on.
+
+It is **not fixed here**. The adapter has 62 `jq -r` reads, of which nine produce multiple rows, and several feed `while read` loops where each line would carry its own CR; the right shape is one `fm_backend_herdr_jq` funnel with those nine sites moved onto it, verified against the 60-plus-case `tests/fm-backend-herdr.test.sh`. That is a PR-3 follow-up slice, not part of this triage, and it is named here with its site list so it does not have to be rediscovered.
+
+### New finding: node's `spawn()` cannot execute a shebang script on Windows
+
+Fixing the nudge's ancestry walk took `tests/fm-sessionstart-nudge.test.sh` from red at case 7 to red at case 8, which exposed a second, unrelated Windows defect:
+
+```
+Error: spawn EFTYPE
+    at ChildProcess.spawn (node:internal/child_process:458:11)
+    at .opencode/plugins/fm-primary-sessionstart-nudge.js:9:19
+```
+
+Windows `CreateProcess` cannot run a `.sh` file, and `spawn()` reports that by **throwing synchronously**, which the plugin's `child.on("error", ...)` handler never sees - so the failure is not the documented silent one, it is an exception out of an OpenCode event hook.
+All five `.opencode/plugins/*.js` spawn a firstmate `.sh` through the same shape, so the whole OpenCode adapter is affected, not this one plugin.
+It is recorded rather than fixed here: the fix is one shape repeated five times plus five plugin suites to re-run, it is a different adapter from the one Phase C uses, and it belongs with the serial lane's triage.
+
+### Row 21 reaches Phase C through `fm-pr-merge`
+
+`fm-pr-merge` was Phase A's "unknown (fake `gh` fixture)". It is row 21, and it is the site that matters most:
+
+```
+$ : > f && chmod 0600 f && stat -c '%a' f
+644
+```
+
+`fm_pr_poll_prepare` (`bin/fm-pr-lib.sh:490`) validates its own freshly-`chmod 0600` temp file with `fm_pr_private_file_valid "$FM_PR_POLL_DATA_TMP" 600 ...`, which cannot hold on a `noacl` mount, so `bin/fm-pr-check.sh:99` prints `error: could not prepare PR poll` and exits 1 before any merge outcome is read.
+`tests/fm-procevent.test.sh` reaches the same wall one assertion later (`the captured result is private (missing: '600')`).
+
+Phase C's ship task ends in a crewmate delivering a PR and the captain saying "merge it", and that path runs straight through `fm_pr_poll_prepare`.
+This is the concrete D6 trigger the plan reserved: it is a mode check outside the herdr adapter that blocks Phase C, so the minimal `noacl` relaxation belongs at this site, modelled on `fm_backend_herdr_presentation_lock_namespace_valid`'s probe. It is not implemented in this slice, which is triage plus the product defects triage found; it is the first thing Phase C does.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `bin/fm-lint.sh` on all 15 changed shell files, by explicit path | clean (ShellCheck 0.11.0, full extended analysis) |
+| `bin/fm-lint-workflows.sh` | `4 workflow files valid` (actionlint 1.7.12, pinned) |
+| `bin/fm-test-run.sh --check-coverage` | `ok total=170 parallel=24 serial=134 serial_shards=4 herdr=12` |
+| `tests/fm-proc-lib.test.sh` | **15 / 15** (was 13; two new cases for `fm_proc_pgid`) |
+| `tests/fm-ensure-agents-md.test.sh` | **green** - was red on the CRLF injection case |
+| `tests/fm-composer-lib.test.sh` | **green** - was red on the half-block edge case |
+| `tests/fm-crew-state.test.sh` | **green** - was red on the no-timeout perl-bound case |
+| `tests/fm-herdr-lab.test.sh` | **7 / 7** - was red on the timed-out-provision case |
+| `tests/fm-captain-hold-lifecycle.test.sh` | **17 / 17 in 1091 s** - was killed by the 300 s bound after 5 cases, then red on `fm-procevent.sh start` |
+| `tests/fm-procevent.test.sh` | 1 case before the first failure at `HEAD`, **9** with this slice; the remaining red is the row-21 mode-600 assertion |
+| `tests/fm-sessionstart-nudge.test.sh` | red at case 7 (`owned lock nudge must be silent`) at `HEAD`, red at case 8 (the node `spawn` EFTYPE finding) with this slice |
+| `tests/fm-watcher-lock.test.sh` | 10 cases then `expected exactly one lock winner under concurrency, got 2` - **byte-identical at `HEAD`**, so not a regression |
+| Mutation: drop `| tr -d '[:space:]'` from the POSIX `fm_proc_pgid` | `posix fm_proc_pgid returned ' 600  '` |
+| Mutation: accept a non-numeric `/proc/<pid>/pgid` | `a non-numeric pgid file must make fm_proc_pgid fail` |
+| Mutation: force the MSYS branch through `ps` | `the MSYS pgid read must run no ps` |
+| Mutation: read `/proc/<pid>/ppid` instead of `/pgid` | `msys fm_proc_pgid returned '601', expected /proc/600/pgid` |
+| Mutation: `return 1` on the MSYS success path | `msys fm_proc_pgid must exit 0 when it answers` |
+| Mutation: `return 1` on the POSIX success path | `posix fm_proc_pgid must exit 0 when it answers` |
+| Mutation: `fm_herdr_lab_raw_exec` back to `fm_herdr_lab_raw` | `timed-out provision left its lab server running after teardown (pid 42481)` |
+
+### The lane counts
+
+Both lanes re-run end to end on this machine with `MSYS=winsymlinks:nativestrict` and `--per-script-timeout-secs 1500`:
+
+| Lane | Phase A | Now |
+| --- | --- | --- |
+| portable-parallel-1 | 5 green / 5 red / 1 gate-skip of 11 (903 s) | **8 green / 2 red / 1 gate-skip of 11 (2570 s)** |
+| portable-parallel-2 | 6 green / 7 red of 13 (670 s) | **11 green / 2 red of 13 (1805 s)** |
+| both | 11 green / 12 red / 1 gate-skip of 24 | **19 green / 4 red / 1 gate-skip of 24** |
+
+The four remaining reds are `fm-x-mode`, `fm-test-run` and `fm-pr-merge` (all row 21, all waiting on D6) and `fm-backend-herdr` (the jq CRLF defect above).
+
+The wall time roughly tripled because the whole lane now RUNS instead of dying early: `fm-captain-hold-lifecycle` alone contributes 1091 s and `fm-arm-pretool-check` 748 s, both of which used to stop in seconds. Two consequences for the Windows CI lane, both applied: its per-script bound goes from 300 s to 1500 s (two scripts already exceed 300 s), and `timeout-minutes` goes from 60 to 120, which was the real constraint.
+
+### What the acceptance review changed
+
+The adversarial review cleared the two questions that mattered most and then broke the slice open on a third.
+
+It cleared the **security question** with an argument rather than an assertion: every new failure mode of `fm_proc_pgid` on MSYS fails closed. The digits-only guard rejects a CR, whitespace, multiple fields and garbage, so `stop_runner_pid` can never be handed a group that is not the one it validated; an unreadable or racing `/proc` entry yields a non-zero status, which each caller already treats as "do not signal". It also settled the **exit-status** question at all four sites: the old `ps ... | tr` pipeline always exited 0 (tr's status), so the `|| die` and `|| return 2` arms beside it were dead code on every platform, and they stay dead on POSIX because the numeric guard is unreachable there. On MSYS they newly fire, always in the refusing direction. The only POSIX cost of the whole slice is one `uname -s` fork per script that gained the library.
+
+It returned two surviving mutations in the new tests, both now dead:
+
+- The fake `/proc` gave pid 600 the same value for `ppid` and `pgid`, so reading `/proc/<pid>/ppid` instead of `/pgid` passed everything. 600 now leads its own group, and that mutation fails.
+- Neither new case asserted the SUCCESS exit status - only the refusals - so `return 0` mutated to `return 1` passed while every caller would have died. Both branches now assert it, and both mutations fail.
+
+And it found the herdr-lab cancellation bug described above, by measuring bash's exec optimization for all three background shapes rather than assuming. That finding is why this slice contains a cross-platform behavior change at all.
+
+Three smaller findings became changes: four other test files copy `bin/fm-sessionstart-nudge.sh` into a fixture without its new library dependency (`fm-calm-pi-extension`, `fm-cursor-primary`, `fm-opencode-primary-live-e2e`, `fm-pi-primary-live-e2e` - two of them execute the nudge path); the `/proc/<pid>/pgid` comment claimed the file carries no trailing newline, which is true of `exename` beside it but not of `pgid`, `ppid` or `winpid` here; and the Windows lane's `timeout-minutes: 60` is now the binding constraint rather than the per-script bound.
+
+Two are recorded rather than fixed: `tests/fm-procevent.test.sh:196` and `tests/fm-home-summary-refresh.test.sh:266,271` read `ps -o pgid=` directly in TEST code and become the next red the moment row 21's D6 relaxation lands, and an empty `/proc/<pid>/pgid` file has no fixture (the `''` arm of the guard survives mutation, though every caller tolerates empty output).
+
+### Not fixed here
+
+`fm-x-mode`, `fm-test-run` and `fm-pr-merge` stay red: all three are row 21, and the D6 decision that unblocks them is Phase C's first move, not this slice's.
+
+The five `.opencode/plugins/*.js` cannot spawn a firstmate `.sh` on Windows (the EFTYPE finding above). `tests/fm-sessionstart-nudge.test.sh` therefore stays red one case later than it was.
+
+`tests/fm-watcher-lock.test.sh` fails `expected exactly one lock winner under concurrency, got 2` on this host - byte-for-byte the same failure at `HEAD` as with this slice applied, so it is a pre-existing Windows red rather than a regression. It lives in the portable serial lane and is triaged with it. It is worth flagging as a lead: it is the watcher SINGLETON lock, so if it is a real defect rather than a fixture assumption it matters more than its lane suggests.
+
+Four test files still build fixtures out of shell `\uHHHH` escapes and will have the composer-lib problem on any host with no `LANG`. All four are in the portable serial lane.
+
+`bin/fm-teardown.sh` and `bin/fm-remote-entrypoint.sh` still read `ps -o` directly, for the reasons given above.
+
+`tests/fm-cursor-primary.test.sh` (run here because it copies `bin/fm-sessionstart-nudge.sh` into a fixture) stops on its first case with `a C compiler is required to build the fake Cursor process`. Git for Windows ships no `cc`, so that is a toolchain gap in the serial lane rather than anything this slice touched, and it means the copy-list change above is verified by lint and by inspection there rather than by a run.
+
+The portable serial lane (134 scripts) has still not been run end to end here. It is the next unit of work, and it now has a measured per-script budget to plan against: `tests/fm-captain-hold-lifecycle.test.sh` alone needs 1091 s.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -798,4 +1035,16 @@ echo hi > "$RUNNER_TEMP/f"
 sha256sum "$RUNNER_TEMP/f"    # leading backslash, and every field shifted
 sha256sum <"$RUNNER_TEMP/f"   # clean
 bin/fm-lint-workflows.sh
+# slice 6 (each of these printed the wrong answer before the fix)
+printf 'a\r\nb\r\n' > /tmp/t.txt
+LC_ALL=C grep -q $'\r$' /tmp/t.txt; echo $?     # 1 - GfW grep strips the CR
+LC_ALL=C awk '/\r$/{f=1} END{exit !f}' /tmp/t.txt; echo $?   # 1 - so do awk and sed
+bash -c '. bin/fm-proc-lib.sh; fm_proc_pgid $$; echo rc=$?'
+ps -o pgid= -p $$ ; cat /proc/$$/pgid
+x=$'\u2580'; printf '%s' "$x" | od -c | head -1   # literal escape text, no LANG
+LANG=C.UTF-8 LC_ALL=C.UTF-8 bash -c 'printf "%s" $'"'"'\u2580'"'"'' | od -c | head -1
+f() { local n=$1; shift; HERDR_SESSION="$n" /usr/bin/sleep 30 "$@"; }
+f x >/dev/null 2>&1 & p=$!; ps -f | awk -v p="$p" '$3==p {print "CHILD:", $2, $NF}'
+kill -TERM "$p"; ps -f | awk '{print $2, $3, $NF}' | grep sleep   # orphaned, still alive
+: > /tmp/probe600 && chmod 0600 /tmp/probe600 && stat -c '%a' /tmp/probe600   # 644
 ```

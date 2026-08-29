@@ -10,6 +10,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$SCRIPT_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-primary-scope-lib.sh
@@ -27,10 +29,18 @@ lock_is_in_ancestry() {
   case "$lock_pid" in
     ''|*[!0-9]*|1) return 1 ;;
   esac
-  kill -0 "$lock_pid" 2>/dev/null || return 1
+  # Both the liveness probe and the walk go through bin/fm-proc-lib.sh, which
+  # runs exactly `kill -0` and `ps -o ppid= -p` on macOS and Linux. The lock
+  # this compares against is written by bin/fm-session-lock-lib.sh, which on a
+  # Windows userland records the harness's WIN32 pid - a pid `kill -0` reports
+  # as absent and a pid no MSYS ppid chain reaches - so without the library
+  # this ancestry test answered "no" for every session there and the nudge
+  # fired at a primary that had already taken the lock.
+  fm_pid_alive "$lock_pid" || return 1
+  fm_proc_chain_prime "$pid"
   for _ in 1 2 3 4 5 6 7 8; do
     [ "$pid" = "$lock_pid" ] && return 0
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    pid=$(fm_proc_ppid "$pid")
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
   done
   return 1

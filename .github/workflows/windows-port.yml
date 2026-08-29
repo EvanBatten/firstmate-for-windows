@@ -55,7 +55,10 @@ jobs:
   tests-portable-parallel-1:
     name: Behavior portable parallel 1 (Windows)
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Measured on the port machine, serially: shard 1 is 2570s and shard 2 is
+    # 1805s, and a hosted runner is not faster. 60 minutes was the binding
+    # constraint, not the per-script bound.
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -92,9 +95,11 @@ jobs:
           rc=0
           # A process spawn costs roughly ten times what it does on Linux, so
           # the per-script bound is raised from the runner's default rather
-          # than letting a slow-but-healthy script read as a hang.
+          # than letting a slow-but-healthy script read as a hang. 300s was
+          # measured too small: tests/fm-captain-hold-lifecycle.test.sh is
+          # green on this port in 1091s (17 cases, ~60s each).
           bin/fm-test-run.sh --lane portable-parallel-1 \
-            --per-script-timeout-secs 300 \
+            --per-script-timeout-secs 1500 \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json" \
             2>&1 | tee "$RUNNER_TEMP/fm-test/shard-1.log" || rc=$?
           exit "$rc"
@@ -115,7 +120,10 @@ jobs:
   tests-portable-parallel-2:
     name: Behavior portable parallel 2 (Windows)
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Measured on the port machine, serially: shard 1 is 2570s and shard 2 is
+    # 1805s, and a hosted runner is not faster. 60 minutes was the binding
+    # constraint, not the per-script bound.
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -151,7 +159,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/fm-test"
           rc=0
           bin/fm-test-run.sh --lane portable-parallel-2 \
-            --per-script-timeout-secs 300 \
+            --per-script-timeout-secs 1500 \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json" \
             2>&1 | tee "$RUNNER_TEMP/fm-test/shard-2.log" || rc=$?
           exit "$rc"

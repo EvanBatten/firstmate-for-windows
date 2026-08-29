@@ -43,8 +43,16 @@ case "$1 ${2:-}" in
     fi
     ;;
   "server --session")
-    if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
-      "$FM_FAKE_HERDR_REAL_SLEEP" "$FM_FAKE_HERDR_SERVER_DELAY"
+    if [ -n "${FM_FAKE_HERDR_SERVER_PIDFILE:-}" ]; then
+      # Record this process and then hold, without ever reporting ready. The
+      # cancellation test asserts on whether THIS pid is still alive after a
+      # timed-out provision, which is a fact about the cancel; the delay it
+      # used to assert on was a race against the provisioning poll loop, which
+      # spends its life in process spawns and so takes wildly different
+      # wall-clock time on Git Bash and on Linux. `exec` keeps the recorded pid
+      # the one actually sleeping, so a successful cancel leaves nothing.
+      printf '%s\n' "$$" > "$FM_FAKE_HERDR_SERVER_PIDFILE"
+      exec "$FM_FAKE_HERDR_REAL_SLEEP" 600
     fi
     printf '%s\n' running > "$state/$session"
     ;;
@@ -79,7 +87,7 @@ run_with_fake() {
     FM_FAKE_HERDR_STATE="$FAKE_STATE" \
     FM_FAKE_HERDR_LOG="$FAKE_LOG" \
     FM_FAKE_HERDR_REAL_SLEEP="$REAL_SLEEP" \
-    FM_FAKE_HERDR_SERVER_DELAY="${FM_FAKE_HERDR_SERVER_DELAY:-0}" \
+    FM_FAKE_HERDR_SERVER_PIDFILE="${FM_FAKE_HERDR_SERVER_PIDFILE:-}" \
     FM_FAKE_HERDR_FAST_POLL="${FM_FAKE_HERDR_FAST_POLL:-}" \
     FM_FAKE_HERDR_DELETE_FAIL="${FM_FAKE_HERDR_DELETE_FAIL:-}" \
     FM_HERDR_LAB_STATE_DIR="$TRIPWIRES" \
@@ -209,7 +217,8 @@ test_failed_delete_retains_tripwire() {
 }
 
 test_timed_out_provision_cancels_late_launch() {
-  local name="fm-lab-late-launch-$$" status=0
+  local name="fm-lab-late-launch-$$" status=0 server_pid=
+  local pidfile="$TMP_ROOT/late-launch.server-pid"
   cat > "$FAKEBIN/sleep" <<'SH'
 #!/usr/bin/env bash
 if [ "${FM_FAKE_HERDR_FAST_POLL:-}" = 1 ]; then
@@ -219,7 +228,8 @@ exec "$FM_FAKE_HERDR_REAL_SLEEP" "$@"
 SH
   chmod +x "$FAKEBIN/sleep"
   : > "$FAKE_LOG"
-  FM_FAKE_HERDR_FAST_POLL=1 FM_FAKE_HERDR_SERVER_DELAY=30 \
+  rm -f "$pidfile"
+  FM_FAKE_HERDR_FAST_POLL=1 FM_FAKE_HERDR_SERVER_PIDFILE="$pidfile" \
     run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
   expect_code 1 "$status" "timed-out provision must fail"
   assert_present "$TRIPWIRES/$name.fleet-state.json" \
@@ -227,9 +237,19 @@ SH
   run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after timed-out provision failed"
   assert_absent "$TRIPWIRES/$name.fleet-state.json" \
     "teardown after timed-out provision did not remove its tripwire"
-  "$REAL_SLEEP" 1.1
-  if [ -f "$FAKE_STATE/$name" ] && [ "$(cat "$FAKE_STATE/$name")" = running ]; then
-    fail "timed-out provision left a late-starting lab session after teardown"
+  # The launch has to be DEAD, not merely late. The fake server recorded its own
+  # pid and then held for ten minutes without ever reporting ready, so this is a
+  # fact about the cancel and not about how long anything took: the old form
+  # (wait 1.1 s, check that a 30-second delay has not fired yet) passed on every
+  # host whether the cancel worked or not.
+  [ -s "$pidfile" ] || fail "the fake lab server never recorded its pid"
+  IFS= read -r server_pid < "$pidfile"
+  case "$server_pid" in
+    ''|*[!0-9]*) fail "the fake lab server recorded '$server_pid', not a pid" ;;
+  esac
+  if kill -0 "$server_pid" 2>/dev/null; then
+    kill -KILL "$server_pid" 2>/dev/null || true
+    fail "timed-out provision left its lab server running after teardown (pid $server_pid)"
   fi
   pass "fm-herdr-lab: timed-out provisioning cancels the launch before teardown"
 }
