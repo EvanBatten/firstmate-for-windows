@@ -16,6 +16,15 @@
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-cursor-lib.sh"
 
+# bin/fm-proc-lib.sh is the one owner of "which process is this, and is it
+# alive". On macOS and Linux its helpers run exactly the `ps -o ...` and
+# `kill -0` calls this file used to run itself; on Git Bash they are the only
+# thing that can answer, and there the walk yields the harness's WIN32 pid, so
+# the pid this file hands bin/fm-lock.sh to record in state/.lock is a Win32
+# pid and must be probed with fm_pid_alive rather than a bare `kill -0`.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+
 # Known harness command names; extend when a new adapter is verified.
 FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 
@@ -108,9 +117,10 @@ fm_harness_process_matches() {  # <comm> <args>
 # reported and the callers below decide what they need from it.
 fm_harness_ancestry_pids() {
   local pid=$$ comm args extending=0 printed=0
+  fm_proc_chain_prime "$pid"
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    comm=$(fm_proc_comm "$pid") || break
+    args=$(fm_proc_args "$pid")
     if fm_harness_process_matches "$comm" "$args"; then
       printf '%s\n' "$pid"
       printed=1
@@ -119,7 +129,7 @@ fm_harness_ancestry_pids() {
     elif [ "$extending" -eq 1 ]; then
       break
     fi
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    pid=$(fm_proc_ppid "$pid")
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
   done
   [ "$printed" -eq 1 ]
@@ -146,9 +156,10 @@ EOF
 # True if $1 is a live process that looks like a verified harness.
 fm_harness_pid_alive() {
   local pid=$1 comm args
-  kill -0 "$pid" 2>/dev/null || return 1
-  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  args=$(ps -o args= -p "$pid" 2>/dev/null)
+  fm_pid_alive "$pid" || return 1
+  fm_proc_chain_prime "$pid"
+  comm=$(fm_proc_comm "$pid") || return 1
+  args=$(fm_proc_args "$pid")
   fm_harness_process_matches "$comm" "$args"
 }
 

@@ -485,8 +485,8 @@ tr.blk td{background:color-mix(in srgb,var(--rust-050) 55%,transparent)}
       <thead><tr><th>#</th><th>Subsystem</th><th>Upstream assumes</th><th>Measured here</th><th>Verdict</th><th>Fix owner</th></tr></thead>
       <tbody>
         <tr class="blk"><td class="n">1</td><td class="sub">Line endings at checkout</td><td>LF scripts; no <code>.gitattributes</code> in the repo.</td><td><code>core.autocrlf=true</code> (system + global). 151 of 151 <code>bin/*.sh</code> checked out with CRLF; <code>#!/usr/bin/env bash\r</code> cannot exec.<span class="ev">grep -l $'\r' bin/*.sh | wc -l → 151</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-1: <code>.gitattributes</code> with <code>* text=auto eol=lf</code>. Local: <code>git -c core.autocrlf=false clone</code>. Also fixes Kun's own spike, which sources <code>fm-backend.sh</code> on windows-latest.</td></tr>
-        <tr class="blk"><td class="n">2</td><td class="sub">Harness identity and liveness</td><td><code>ps -o comm=/ppid=/args= -p</code> ancestry walk and <code>kill -0 &lt;pid&gt;</code> in <code>fm-harness.sh</code>, <code>fm-session-lock-lib.sh</code>, <code>fm-wake-lib.sh</code>, <code>fm-backend.sh</code>.</td><td>MSYS <code>ps</code>: "unknown option -- o". Hook bash reports PPID 1. <code>kill -0</code> on a Win32 PID: "No such process". <code>CLAUDECODE=1</code> env marker still identifies the harness <em>type</em>. CIM walk recovers the full 7-hop chain.<span class="ev">Get-CimInstance Win32_Process -Filter ProcessId=… → ParentProcessId</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-2: <code>bin/fm-proc-lib.sh</code> with <code>fm_proc_comm</code>, <code>fm_proc_ppid</code>, <code>fm_proc_args</code>, <code>fm_pid_alive</code>; MSYS branch uses <code>/proc/&lt;pid&gt;/winpid</code> plus one pwsh CIM call; Darwin/Linux branches stay byte-identical.</td></tr>
-        <tr class="blk"><td class="n">3</td><td class="sub"><code>kill -0</code> on native PIDs</td><td>Any pid the lock recorded can be probed.</td><td>Fails for claude.exe/herdr.exe; works for MSYS pids (watcher, daemon). <code>ps -W</code> lists Win32 pids cheaply.<span class="ev">ps -W | awk '$4==215332' → herdr.exe</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Folded into PR-2 (<code>fm_pid_alive</code>).</td></tr>
+        <tr class="blk"><td class="n">2</td><td class="sub">Harness identity and liveness</td><td><code>ps -o comm=/ppid=/args= -p</code> ancestry walk and <code>kill -0 &lt;pid&gt;</code> in <code>fm-harness.sh</code>, <code>fm-session-lock-lib.sh</code>, <code>fm-wake-lib.sh</code>, <code>fm-backend.sh</code>.</td><td>MSYS <code>ps</code>: "unknown option -- o". Hook bash reports PPID 1. <code>kill -0</code> on a Win32 PID: "No such process". <code>CLAUDECODE=1</code> env marker still identifies the harness <em>type</em>. The walk is HYBRID: MSYS <code>/proc</code> carries <code>exename</code>, real <code>cmdline</code> and correct <code>ppid</code> between MSYS processes for free, and one pwsh <code>Get-Process</code>/<code>.Parent</code> walk from the boundary's <code>winpid</code> reaches claude.exe → node.exe → pwsh.exe → herdr.exe. The CIM query this plan first sketched costs 22-24 s per chain and was dropped.<span class="ev">fm-harness.sh with every marker unset → claude (was unknown), 2.4 s</span></td><td><span class="fm-badge fm-badge--online">works</span></td><td>PR-2 landed: <code>bin/fm-proc-lib.sh</code> with <code>fm_proc_comm/ppid/args/chain/chain_prime</code> and <code>fm_pid_alive</code>, wired into <code>fm-harness.sh</code>, <code>fm-session-lock-lib.sh</code> and <code>fm-wake-lib.sh</code>; <code>fm-backend.sh</code>'s only <code>ps</code> use is Darwin-gated and untouched. The branch is picked by CAPABILITY (does this <code>ps</code> accept <code>-o</code>), so Darwin/Linux are byte-identical and every ps-faking test keeps working on Windows.</td></tr>
+        <tr class="blk"><td class="n">3</td><td class="sub"><code>kill -0</code> on native PIDs</td><td>Any pid the lock recorded can be probed.</td><td>Fails for claude.exe/herdr.exe; works for MSYS pids (watcher, daemon). <code>ps -W</code> lists Win32 pids cheaply, in column 4 (WINPID); column 1 is the unrelated MSYS pid space and is deliberately not matched.<span class="ev">ps -W | awk '$4==215332' → herdr.exe</span></td><td><span class="fm-badge fm-badge--online">works</span></td><td>Folded into PR-2 (<code>fm_pid_alive</code>): <code>kill -0</code> first everywhere, then the <code>ps -W</code> WINPID column on MSYS only.</td></tr>
         <tr class="blk"><td class="n">4</td><td class="sub">Symlink-based lock</td><td><code>ln -s "$ownerdir" "$lockdir"</code> is atomic; <code>readlink</code> proves ownership (<code>fm-wake-lib.sh:418</code>).</td><td>Default MSYS <code>ln -s</code> deep-copied the directory; <code>readlink</code> failed. With <code>MSYS=winsymlinks:nativestrict</code> a real link was created (Developer Mode is ON, reg value 0x1).<span class="ev">plain: not a symlink · strict: lrwxrwxrwx → target</span></td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>dotfiles <code>settings.ps1</code>: persist user env <code>MSYS=winsymlinks:nativestrict</code>. Zero firstmate change. Kun's spike already probes this exact mode.</td></tr>
         <tr class="blk"><td class="n">5</td><td class="sub">herdr socket path shape</td><td><code>fm_backend_herdr_canonical_socket_path</code> refuses any path not starting with <code>/</code>; used for the launcher same-session proof and the presentation lock.</td><td><code>herdr status --json</code> reports <code>C:\Users\ebatt\AppData\Roaming\herdr\herdr.sock</code>; herdr injects the same form as <code>HERDR_SOCKET_PATH</code>, so every spawn is refused as "unverifiable parent identity".</td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-3 (~10 lines): accept <code>[A-Za-z]:[\\/]</code>, normalize through <code>cygpath -u</code> when present, compare case-insensitively.</td></tr>
         <tr class="blk"><td class="n">6</td><td class="sub">Crewmate pane shell</td><td>New tab opens a POSIX shell; spawn types <code>treehouse get</code>, <code>export GOTMPDIR=…</code>, <code>export TRACEPARENT=…</code>, then the launch line.</td><td>herdr <code>default_shell = "pwsh"</code> (dotfiles choice). <code>herdr tab create --help</code> has <code>--cwd/--env/--label</code> but no shell or command flag. Measured: <code>exec bash -l</code> fails in pwsh (<code>exec</code> is not a command) and bare <code>bash</code> resolves to WSL, so the adapter must launch Git Bash by full path.</td><td><span class="fm-badge fm-badge--danger">blocker</span></td><td>Upstream PR-4: on MSYS the herdr adapter sends <code>&amp; 'C:\Program Files\Git\usr\bin\bash.exe' --login</code> as the first pane command before the spawn sequence (locked as D2; see row 13 for the cwd half).</td></tr>
@@ -570,55 +570,80 @@ tr.blk td{background:color-mix(in srgb,var(--rust-050) 55%,transparent)}
 <section>
   <div class="cols">
     <div class="fm-card fm-card__pad">
-      <span class="fm-sign fm-sign--eyebrow">PR-2 sketch · the one non-trivial patch</span>
-      <p style="font-size:var(--fs-sm);margin-top:8px">One leaf library owns "what process is this and is it alive", so the four callers stop spelling <code>ps -o</code> themselves. Non-MSYS branches are literally today's commands.</p>
-<pre><code># bin/fm-proc-lib.sh (sketch)
+      <span class="fm-sign fm-sign--eyebrow">PR-2 as shipped · the one non-trivial patch</span>
+      <p style="font-size:var(--fs-sm);margin-top:8px">One leaf library owns "what process is this and is it alive", so the callers stop spelling <code>ps -o</code> themselves. Non-MSYS branches are literally today's commands. The sketch's one-CIM-call-per-hop walk was measured at 22-24&nbsp;s and replaced: MSYS <code>/proc</code> answers for the MSYS half of the chain for free, and one pwsh <code>Get-Process</code>/<code>.Parent</code> walk from the boundary <code>winpid</code> answers for the Win32 half in 0.83&nbsp;s.</p>
+<pre><code># bin/fm-proc-lib.sh (shipped)
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*) FM_PROC_OS=msys ;;
   *)                    FM_PROC_OS=posix ;;
 esac
+# capability, not platform, has the last word: a `ps` that
+# accepts -o answers everything, so every ps-faking test
+# in tests/ keeps working on Windows too
+if [ "$FM_PROC_OS" = msys ] \
+   &amp;&amp; LC_ALL=C ps -o comm= -p $$ &gt;/dev/null 2&gt;&amp;1
+then
+  FM_PROC_OS=posix
+fi
 
-# bash's own Win32 id; a Win32 pid passes through unchanged
-fm_proc_winpid() {
-  cat "/proc/$1/winpid" 2>/dev/null || printf '%s' "$1"
+# Segment 1: MSYS processes, straight from /proc. No fork.
+# exename is what `ps -o comm=` prints, cmdline is the
+# REAL argument vector, ppid is right between MSYS procs.
+_fm_proc_msys_row() {  # &lt;pid&gt;
+  # these files have NO trailing newline, so read sets the
+  # variable and THEN reports EOF: judge by value, and
+  # bracket each redirection so a race stays silent
+  { read -r exe  &lt; "/proc/$1/exename"; } 2&gt;/dev/null
+  { read -r ppid &lt; "/proc/$1/ppid";    } 2&gt;/dev/null
+  args=$({ tr '\0\n\t' '   ' \
+             &lt; "/proc/$1/cmdline"; } 2&gt;/dev/null)
+  printf '%s\t%s\t%s\t%s\n' "$1" "$ppid" "$exe" "$args"
 }
 
-# One pwsh call prints the whole parent chain, one line per
-# hop: winpid TAB ppid TAB name TAB cmdline
-fm_proc_chain_msys() {  # &lt;pid&gt;
-  pwsh -NoProfile -NonInteractive -Command "
-    \$p=$(fm_proc_winpid "$1")
-    for(\$i=0; \$i -lt 12 -and \$p; \$i++){
-      \$x=Get-CimInstance Win32_Process \`
-           -Filter \"ProcessId=\$p\"
-      if(-not \$x){ break }
-      \"\$(\$x.ProcessId)`t\$(\$x.ParentProcessId)`t\" +
-      \"\$(\$x.Name)`t\$(\$x.CommandLine)\"
-      \$p=\$x.ParentProcessId
-    }"
+# Segment 2: from the boundary (the MSYS process reporting
+# PPID 1) upward, in ONE pwsh process. .CommandLine is NOT
+# read - it costs a hidden CIM query per process, 38 s for
+# six hops - so a native ancestor reports its path as args.
+_fm_proc_win_chain() {  # &lt;win32 pid&gt;
+  FM_PROC_QUERY_PID=$1 pwsh -NoProfile -NonInteractive \
+    -Command '
+    $ErrorActionPreference = "SilentlyContinue"
+    $p = Get-Process -Id ([int]$env:FM_PROC_QUERY_PID)
+    for ($i = 0; $i -lt 16 -and $p; $i++) {
+      $q = $null; try { $q = $p.Parent } catch {}
+      $c = $p.ProcessName
+      try { if ($p.Path) { $c = $p.Path } } catch {}
+      "{0}`t{1}`t{2}" -f $p.Id, `
+        $(if ($q) { $q.Id } else { 0 }), $c
+      $p = $q
+    }'
+  # bash then strips CR, turns \ into /, and drops a
+  # trailing .exe so basename and ^pi$ still match. Doing
+  # that here rather than inside pwsh is what lets a Linux
+  # test drive this branch.
 }
 
 fm_proc_comm() {  # &lt;pid&gt;
   if [ "$FM_PROC_OS" = msys ]; then
-    fm_proc_chain_msys "$1" | head -1 | cut -f3
+    _fm_proc_msys_field "$1" comm  # memo, /proc, or pwsh
   else
-    ps -o comm= -p "$1" 2>/dev/null        # today's line
+    ps -o comm= -p "$1" 2&gt;/dev/null       # today's line
   fi
 }
 
 fm_pid_alive() {  # &lt;pid&gt;
-  kill -0 "$1" 2>/dev/null && return 0
+  kill -0 "$1" 2&gt;/dev/null &amp;&amp; return 0
   [ "$FM_PROC_OS" = msys ] || return 1
   ps -W | awk -v p="$1" '$4==p{f=1} END{exit !f}'
 }</code></pre>
-      <p style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:10px">Callers: <code>fm-harness.sh detect_own</code> (loop over the chain instead of one <code>ps</code> per hop), <code>fm-session-lock-lib.sh fm_harness_pid_alive</code> and its ancestry walk, <code>fm-wake-lib.sh fm_pid_alive</code>, <code>fm-backend.sh</code> cmux ancestry (Darwin-only, untouched). Lock files should record the Win32 pid on MSYS so <code>fm_pid_alive</code> can probe it.</p>
+      <p style="font-size:var(--fs-xs);color:var(--text-muted);margin-top:10px">Callers: <code>fm-harness.sh detect_own</code>, <code>fm-session-lock-lib.sh fm_harness_pid_alive</code> and its ancestry walk, <code>fm-wake-lib.sh fm_pid_alive</code>, <code>fm-backend.sh</code> cmux ancestry (Darwin-only, untouched). Each keeps its own per-hop loop and gains ONE line, <code>fm_proc_chain_prime "$pid"</code> before it: a caller's field reads happen inside <code>$(...)</code>, and a subshell cannot write back, so the chain has to be memoised in the caller's own shell or the walk pays one pwsh process per hop. The MSYS ancestry necessarily yields the harness's WIN32 pid, so that is what <code>fm-lock.sh</code> records in <code>state/.lock</code> and what <code>fm_pid_alive</code> probes.</p>
     </div>
     <div class="fm-card fm-card__pad fm-card--warm">
       <span class="fm-sign fm-sign--eyebrow">Why this is enough</span>
       <ul style="margin-top:8px;font-size:var(--fs-sm)">
         <li><b>Harness type</b> already resolves through the <code>CLAUDECODE=1</code> marker (layer 1), so only lock identity and liveness were blind.</li>
         <li><b>Watcher and daemon</b> are MSYS processes; their mutual <code>kill -0</code>, <code>/proc</code>, <code>mkfifo</code>, <code>trap</code>, and <code>wait</code> paths already work (verified <code>/proc/$$/stat</code>).</li>
-        <li><b>Cost</b>: one pwsh start (~300 ms) per lock check; the Stop hook fires once per turn, not per poll. The watcher's poll loop uses herdr <code>agent get</code>, not <code>ps</code>.</li>
+        <li><b>Cost</b> (measured, not estimated): 0.9&nbsp;s per ancestry walk - 0.06&nbsp;s of <code>/proc</code> reads plus one 0.83&nbsp;s pwsh start; the Stop hook fires once per turn, not per poll. The watcher's poll loop uses herdr <code>agent get</code>, not <code>ps</code>.</li>
         <li><b>Test story</b>: PR-2 ships <code>tests/fm-proc-lib.test.sh</code> that fakes <code>uname</code> and a <code>pwsh</code> stub emitting a canned chain, so Linux CI covers the MSYS branch too, mirroring how upstream fakes <code>herdr</code> in <code>fm-backend-herdr.test.sh</code>.</li>
         <li><b>Rejected</b>: <code>wmic</code> (removed in current Win11), <code>tasklist</code> (no parent id), a Go helper (new build artifact for one query).</li>
       </ul>

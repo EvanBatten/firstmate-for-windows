@@ -1,4 +1,8 @@
-# Windows measurement (Phase A)
+# Windows measurement
+
+Phase A's findings ledger is the table below; each Phase B slice appends its own section as it lands.
+
+## Phase A findings ledger
 
 Measured 2026-08-29 on Windows 11 26200 against upstream `f66be0f` (2026-08-28).
 Toolchain: Git Bash 5.2.37 (MINGW64), herdr 0.8.2 stable (protocol 20), treehouse 2.3.0, no-mistakes 1.57.0, Claude Code 2.1.251 (native `claude.exe`), gh 2.89, jq 1.6, node 24, tasks-axi 0.2.5, quota-axi 0.1.33, shellcheck 0.11, actionlint 1.7.12.
@@ -71,6 +75,113 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 Of the 12 red, 3 are row 21 (POSIX modes), 1 is row 19, 2 are guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`), 1 is a timeout, and 5 need a first look.
 The 131-script portable-serial lane was not run in Phase A (roughly 3 hours at this box's spawn rate); Phase B runs it once the row 21 decision is applied.
 
+## Phase B slice 1 (PR-2): process identity and liveness
+
+Measured 2026-08-29, same machine and toolchain as Phase A.
+Rows 2 and 3 of the ledger are closed by `bin/fm-proc-lib.sh`, wired into `bin/fm-harness.sh`, `bin/fm-session-lock-lib.sh` and `bin/fm-wake-lib.sh`.
+`bin/fm-backend.sh`'s only `ps` use is inside `fm_backend_detect_cmux_app_is_ancestor`, reachable solely from `fm_backend_detect_cmux_fallback`, whose first line is `[ "$(uname 2>/dev/null)" = Darwin ] || return 1` (bin/fm-backend.sh:174), so it has no non-Darwin path and is untouched.
+
+### The plan's CIM sketch was 25x too slow
+
+The plan sketched one `Get-CimInstance Win32_Process -Filter "ProcessId=N"` per hop and estimated ~300 ms.
+Timed here against the real six-hop chain (bash -> bash -> claude.exe -> node.exe -> pwsh.exe -> herdr.exe):
+
+| Approach | Wall time |
+| --- | --- |
+| one filtered `Get-CimInstance` per hop (the sketch) | 22.0 / 23.2 / 24.1 s |
+| one bulk `Get-CimInstance Win32_Process` for the whole table | 4.7 / 5.1 s |
+| `Get-Process -Id` plus repeated `.Parent` | 0.96 s |
+| bare `pwsh -NoProfile -NonInteractive -Command 1` (the floor) | 0.75 / 0.79 s |
+| reading `.CommandLine` off each PS7 Process object | 38.3 s |
+| `ps -W` | 0.91 s |
+
+`.CommandLine` on a PowerShell 7 `Process` is a hidden per-process CIM query, which is where the 38 s goes, so it is not read at all.
+
+### `.Parent` alone cannot walk out of a Git Bash child
+
+`Get-Process -Id <winpid>` on the interactive tool shell walked the full chain, but the same call from any `bash script.sh` or `bash -c` CHILD returned a null `.Parent`.
+The child's recorded Win32 parent exists but is dead - MSYS emulates `fork()`, so the Win32 parent of a bash-spawned process is a transient that has already exited.
+`Get-CimInstance` reports the same dead `ParentProcessId`, so this is not a `.Parent` artifact.
+
+```sh
+# from a child shell: CIM PPID 288144, Get-Process -Id 288144 -> nothing
+bash -c 'W=$(cat /proc/$$/winpid); pwsh -NoProfile -NonInteractive -Command "
+  \$c = Get-CimInstance Win32_Process -Filter \"ProcessId=$W\"; \$c.ParentProcessId"'
+```
+
+What does work is the MSYS process table, which has correct PPIDs *between MSYS processes* and only loses the trail at the boundary (PPID 1).
+So the walk is hybrid, and the MSYS half is not just correct but free - MSYS `/proc/<pid>/` carries `exename` (exactly what `ps -o comm=` prints), `ppid`, `winpid`, and the real NUL-separated `cmdline`:
+
+```sh
+$ ls /proc/$$/
+cmdline  ctty  cwd@  environ  exe@  exename  fd/  gid  maps  mountinfo  mounts
+pgid  ppid  root@  sid  stat  statm  status  uid  winexename  winpid
+$ cat /proc/$$/exename   # -> /usr/bin/bash   (no trailing newline)
+```
+
+Those files carry no trailing newline, so `read -r x < file` sets the variable and *then* reports EOF; the value, not `read`'s status, is what says whether it worked. That cost one debugging round.
+
+Measured result of the hybrid walk, from a script two bash levels down:
+
+```
+/proc segment (2 hops, 64 ms)   59037 -> 59034, boundary winpid 263684
+pwsh segment (5 hops, 828 ms)   263684 -> 168628 -> 283196 claude.exe
+                                -> 186224 node.exe -> 178968 pwsh.exe -> 215332 herdr.exe
+```
+
+### The memo has to be primed by the caller
+
+Every caller reads fields inside `$(...)`, and a subshell cannot write back to its parent, so a memo filling itself lazily would be discarded on every hop and the walk would cost one pwsh process per field.
+Each caller therefore gains exactly one line, `fm_proc_chain_prime "$pid"`, before its loop; on macOS and Linux that line returns 0 without forking.
+`tests/fm-proc-lib.test.sh` asserts the cost contract directly by counting invocations of a fake `pwsh`.
+
+### The branch is chosen by capability, not by uname
+
+An early version keyed only on `uname -s`. That silently broke every test in `tests/` that shims a `ps` to model a process table: on Windows the library ignored the fixture and walked the real tree.
+The final version asks `uname` first and then, only if that said Windows, probes `LC_ALL=C ps -o comm= -p $$`; a `ps` that accepts `-o` wins.
+macOS and Linux never run the probe (~90 ms, MSYS only). The `LC_ALL=C` pin is not cosmetic: `tests/fm-watcher-lock.test.sh` records the locale its stub `ps` was called under and fails if any call arrives without the pin.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `bin/fm-lint.sh <every touched file>` | clean (ShellCheck 0.11.0, full extended analysis) |
+| `tests/fm-proc-lib.test.sh` | 13 / 13, both branches |
+| `bin/fm-test-run.sh --check-coverage` | `ok total=168 parallel=24 serial=132 serial_shards=4 herdr=12` |
+| `bin/fm-harness.sh` with every marker unset | `claude` in 2.4 s (was `unknown`) |
+| `fm_harness_ancestry_pid` | `283196`, claude.exe's Win32 pid (was: could not resolve) |
+| `tests/fm-grok-harness.test.sh` | green before and after |
+| `fm-session-lock-ancestry`, `fm-secondmate-harness`, `fm-kimi-harness`, `fm-procevent`, `fm-backend-herdr`, `fm-test-run` | fail at the identical assertion before and after, in a worktree at `HEAD` |
+| `tests/fm-watcher-lock.test.sh` | one real regression, found and fixed (the locale pin above); now fails only at the pre-existing concurrency assertion |
+
+A bare `bin/fm-lint.sh` on this branch exits 0 while seeing NONE of this patch.
+On a non-default branch it runs changed-mode and builds its roots from `git diff --name-only <merge-base>` (bin/fm-lint.sh:239), which cannot see untracked files, and both new files were untracked.
+Passing the paths explicitly reported SC2034, SC1007 and SC2016 - all real, all now fixed.
+Lint every new file BY PATH before trusting a green run on this branch.
+
+### `--jobs N` with N>1 cannot be used on Windows
+
+The first attempt to re-run the lanes used `--jobs 4` and returned 24 failed of 24, including scripts that were green in Phase A and one that was a gate-skip.
+The cause is the runner's own per-worker isolation check, which is an instance of row 21:
+
+```
+fm-test-run: isolation failure: worker root mode is 755, expected 0700 (/tmp/fm-test-run.OMvN8M/w7)
+```
+
+Every worker root is created at mode 700 and re-read; on a `noacl` mount it reads back 755 and the runner aborts the shard, so a concurrent lane run reports a whole-lane failure that says nothing about the scripts.
+Windows lanes must run serially until D6 is decided, and the Windows CI lane in slice 5 must not pass `--jobs`.
+
+A serial re-run was started and stopped after 3 of 24 scripts (`fm-backend-herdr`, `fm-arm-pretool-check`, `fm-crew-state`, 6 minutes for those three).
+All three failed at the same assertion Phase A recorded, which is consistent with no regression, but a full lane count is slice 6's deliverable and is NOT claimed here.
+This slice's no-regression evidence is the per-script before/after comparison in the table above, taken against a `git worktree` at `HEAD`.
+
+### Known consequence, not fixed here
+
+On MSYS the session lock necessarily records the harness's WIN32 pid, because a native `claude.exe` has no MSYS pid at all.
+`fm_harness_pid_alive` and `fm_pid_alive` handle that.
+`bin/fm-lease-lib.sh:147` still probes the same pid with a bare `kill -0` inside `fm_lease_live`, so on Windows a live Pi lease reads as stale.
+That fails CLOSED, is gated on `PI_CODING_AGENT`/`FM_SUPERVISION_ACTOR` (bin/fm-lease-lib.sh:140-143), and Pi is not installed on this machine, so it is recorded here rather than folded into a patch whose blast radius is meant to be four files.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -82,8 +193,10 @@ The 131-script portable-serial lane was not run in Phase A (roughly 3 hours at t
 ```sh
 # row 1
 file bin/*.sh | grep -c CRLF
-# row 2
-pwsh -NoProfile -c "\$p=$(cat /proc/$$/winpid); for(\$i=0;\$i -lt 8 -and \$p;\$i++){ \$x=Get-CimInstance Win32_Process -Filter \"ProcessId=\$p\"; if(-not \$x){break}; \$x.ProcessId,\$x.ParentProcessId,\$x.Name -join ' '; \$p=\$x.ParentProcessId }"
+# rows 2 and 3 (the shipped walk; prints the whole chain to herdr.exe)
+bash -c '. bin/fm-proc-lib.sh; fm_proc_chain_prime "$$"; printf "%s\n" "$FM_PROC_CHAIN_MEMO"'
+bash -c '. bin/fm-proc-lib.sh; fm_pid_alive <win32 pid>; echo $?'
+env -u CLAUDECODE -u CURSOR_AGENT -u PI_CODING_AGENT -u GROK_AGENT bin/fm-harness.sh
 # row 4
 ln -s target link && readlink link
 # row 9

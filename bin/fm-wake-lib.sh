@@ -9,22 +9,21 @@ STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
+# bin/fm-proc-lib.sh owns fm_pid_alive, which this file used to define as a bare
+# `kill -0`. That is still exactly what it runs on macOS and Linux; on Git Bash
+# it also answers for a native Windows pid, which `kill -0` reports as dead. It
+# is a leaf library and safe to source before anything else here.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-proc-lib.sh"
 # Resolved once at source time: fm_pid_identity and fm_path_mtime run inside 0.2s
 # confirm and 0.5s attach polls, and forking uname per call is a measurable cost on
-# the platform (Git Bash/MSYS) that already pays the highest fork price.
-_FM_UNAME=$(uname 2>/dev/null || echo unknown)
+# the platform (Git Bash/MSYS) that already pays the highest fork price. The leaf
+# library above has already paid for that one fork, so reuse its answer.
+_FM_UNAME=$FM_PROC_UNAME
 mkdir -p "$STATE"
 
 fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
-}
-
-fm_pid_alive() {
-  local pid=$1
-  case "$pid" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  kill -0 "$pid" 2>/dev/null
 }
 
 fm_pid_identity() {
