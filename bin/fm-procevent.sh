@@ -124,6 +124,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$SCRIPT_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -336,7 +338,7 @@ require_runner_group() {
   local pgid
   [ "${FM_PROCEVENT_RUNNER_GROUP:-}" = "$$" ] \
     || die "runner process group was not isolated"
-  pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]') \
+  pgid=$(fm_proc_pgid "$$") \
     || die "cannot inspect runner process group"
   [ -n "$pgid" ] || die "cannot inspect runner process group"
   [ "$pgid" = "$$" ] || die "runner does not lead its process group"
@@ -673,7 +675,7 @@ stop_runner_pid() {  # <pid> <identity>
     0)
       # A live identity-matched leader still owns its group, so prove the group
       # really is the one this pid leads before signalling it.
-      pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 2
+      pgid=$(fm_proc_pgid "$pid") || return 2
       [ "$pgid" = "$pid" ] || return 2
       ;;
     3)

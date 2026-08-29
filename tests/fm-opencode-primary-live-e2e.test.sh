@@ -159,6 +159,7 @@ run_ahoy_transcript_regressions() {
     "$AHOY_PROJECT/.opencode/plugins/"
   cp \
     "$ROOT/bin/fm-sessionstart-nudge.sh" \
+    "$ROOT/bin/fm-proc-lib.sh" \
     "$ROOT/bin/fm-primary-scope-lib.sh" \
     "$ROOT/bin/fm-gate-refuse-lib.sh" \
     "$ROOT/bin/fm-operational-input.sh" \

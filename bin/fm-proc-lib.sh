@@ -11,8 +11,9 @@
 #
 # ON macOS AND LINUX EVERY HELPER RUNS EXACTLY THE COMMAND ITS CALLER RAN
 # BEFORE. fm_proc_comm is `ps -o comm= -p`, fm_proc_args is `ps -o args= -p`,
-# fm_proc_ppid is `ps -o ppid= -p` piped through `tr`, fm_pid_alive is
-# `kill -0`, and fm_proc_chain_prime is a no-op that returns 0 without forking.
+# fm_proc_ppid is `ps -o ppid= -p` piped through `tr`, fm_proc_pgid is
+# `ps -o pgid= -p` piped through `tr`, fm_pid_alive is `kill -0`, and
+# fm_proc_chain_prime is a no-op that returns 0 without forking.
 # Those platforms must see no behavior change at all; the MSYS branches below
 # are the only new code that ever executes, and callers still start their walks
 # at $$ exactly as they did before.
@@ -375,6 +376,32 @@ fm_proc_ppid() {
   else
     ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]'
   fi
+}
+
+# fm_proc_pgid <pid>: the process group id, whitespace stripped, or empty.
+#
+# Not part of the chain rows: a process group is not ancestry, nothing walks it,
+# and all three callers (bin/fm-procevent.sh's runner-isolation proof and its
+# group stop, bin/fm-watch.sh's check-subshell proof) ask about one pid once.
+# MSYS has no `ps -o`, but it does publish the answer as a file -
+# /proc/<pid>/pgid, the same directory fm_proc_comm and fm_proc_ppid already
+# read - so this needs no PowerShell and no extra process at all.
+fm_proc_pgid() {
+  local pid=$1 pgid=
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$FM_PROC_OS" = msys ]; then
+    [ -r "$FM_PROC_MSYS_PROC_ROOT/$pid/pgid" ] || return 1
+    # This one is newline-terminated on Cygwin (unlike `exename` beside it), but
+    # `read`'s status is ignored either way: the VALUE is what says whether the
+    # read worked, and the digits-only test below is what says it is usable.
+    { read -r pgid < "$FM_PROC_MSYS_PROC_ROOT/$pid/pgid"; } 2>/dev/null || true
+    case "$pgid" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s\n' "$pgid"
+    return 0
+  fi
+  ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]'
 }
 
 # fm_pid_alive <pid>: true when the pid names a live process.
