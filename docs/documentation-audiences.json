@@ -405,6 +405,30 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/windows/prs.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/windows/upstream/issue.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/windows/upstream/pr-1.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/windows/upstream/pr-2.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/windows/upstream/pr-3.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/windows/upstream/pr-4.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },

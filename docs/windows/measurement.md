@@ -9,6 +9,7 @@ Toolchain: Git Bash 5.2.37 (MINGW64), herdr 0.8.2 stable (protocol 20), treehous
 Developer Mode ON; user env `MSYS=winsymlinks:nativestrict`.
 Same shape as the upstream `windows-herdr-spike.yml` table so the two can be read side by side.
 The plan that owns the fix list is [plan.html](plan.html) (findings ledger numbers below match it).
+Rows 22-25 were added by Phase C rather than Phase A and live in the "Phase C" section below; the plan's ledger carries all of them.
 
 | # | Subsystem | Result | Measured detail | Fix owner |
 | --- | --- | --- | --- | --- |
@@ -990,6 +991,348 @@ Four test files still build fixtures out of shell `\uHHHH` escapes and will have
 
 The portable serial lane (134 scripts) has still not been run end to end here. It is the next unit of work, and it now has a measured per-script budget to plan against: `tests/fm-captain-hold-lifecycle.test.sh` alone needs 1091 s.
 
+## Phase B slice 7: splitting the integration branch into four upstream branches
+
+Phase B's six slices are six commits on one integration branch, and no upstream reviewer would want them in that shape.
+This slice cuts the four branches the plan scoped - `pr-1-gitattributes`, `pr-2-proc-lib`, `pr-3-herdr-windows-cli`, `pr-4-herdr-windows-pane` - from `upstream/main` at `f66be0f`, verifies each one on its own on this machine, and pushes them to the fork only.
+The full map, including what each branch carries and what is deliberately held back, is in [prs.md](prs.md); this section records how the split was verified and the two things that turned out not to be mechanical.
+
+### The split is not a straight cherry-pick, in two places
+
+`pr-2-proc-lib` cannot be one cherry-pick, because the process library was built in slice 1 and extended in slice 6, and slice 6's commit also carries the CRLF fix, the herdr-lab fix and three test-fixture fixes that belong nowhere near it.
+Cherry-picking the whole of `0865847` into a branch named for the process library would have been the easy answer and the wrong one.
+
+What makes the path-scoped alternative exact rather than a shortcut is a property that had to be checked, not assumed:
+
+```
+$ git log --oneline upstream/main..0865847 -- bin/fm-proc-lib.sh
+0865847 9286fe7
+$ git log --oneline upstream/main..0865847 -- bin/fm-procevent.sh
+0865847
+```
+
+Each of the ten files in `pr-2` is touched by slice 1, or slice 6, or both, and by no other slice.
+So the file's content at `0865847` **is** the whole of the process-library work on it, and `git checkout 0865847 -- <those ten paths>` reproduces it byte for byte.
+The same query is what proves `bin/backends/herdr.sh` belongs to slices 2 and 3 only, and `tests/lib.sh` to slice 4 only.
+
+`pr-4-herdr-windows-pane` is stacked on `pr-3` rather than cut from `upstream/main`.
+Both change `bin/backends/herdr.sh` and `tests/fm-backend-herdr-windows.test.sh`; the pane work reads as a diff against the CLI work and would conflict against bare upstream.
+That is a property of the code, not of the split, and it is the one ordering constraint among the four.
+
+Cherry-picking each slice commit onto a branch without `docs/windows/` produces exactly two conflicts every time - `modify/delete` on `measurement.md` and `plan.html` - which is the expected shape and is resolved with `git rm`.
+No conflict ever appeared in `bin/` or `tests/`.
+
+### Nothing was lost and nothing drifted
+
+Two checks, both mechanical, both run over every path:
+
+The first compares each file on its branch against the integration branch, `git diff <branch>:<path> 0865847:<path>`.
+The four branches touch twenty distinct paths; nineteen are byte-identical at the branch that finally carries them, and the twentieth, `bin/fm-test-run.sh`, is byte-identical on **no** branch and cannot be - each branch carries only its own registration line, while the integration copy also registers the guard test from slice 4.
+For that file the property that holds instead is that each branch's diff against `upstream/main` is a strict subset of the integration diff, and `--check-coverage` passes on each branch.
+
+That correction came out of the acceptance review, and its cause is worth recording: the first version of this check iterated a path list written by hand, which silently omitted `bin/fm-test-run.sh` and then reported `fail=0`.
+A verification loop whose input is typed rather than derived proves whatever it was given.
+
+The second is the inverse and is the one that would catch an omission: every path in `git diff --name-only upstream/main 0865847` was resolved to the branch that carries it, or to `INTEGRATION-ONLY`.
+Forty-four paths, all accounted for, none unclassified.
+The integration-only set is the guard fixes, the CI lane and installers, three cross-platform bug fixes and the port's own documents, each with its reason in [prs.md](prs.md).
+
+One dependency was worth checking rather than assuming: slice 4 added `fm_fakebin_link` to `tests/lib.sh`, and `tests/lib.sh` is integration-only.
+None of `pr-2`'s six test files references it, and `pr-3`/`pr-4`'s test file does not either - which their green runs confirm.
+Had one of them, the branch would have been green here and red for a reviewer.
+
+### Verification
+
+Each branch was checked out and verified on its own, with no other slice's code present.
+
+| Branch | Check | Result |
+| --- | --- | --- |
+| all four | cut from `upstream/main` at `f66be0f`, pushed to `origin` only | `pr-1` `0fd5857`, `pr-2` `94ddb42`, `pr-3` `d15d309`, `pr-4` `4937c52` |
+| `pr-2-proc-lib` | `bin/fm-test-run.sh --check-coverage` | `ok total=168 parallel=24 serial=132 serial_shards=4 herdr=12` |
+| `pr-2-proc-lib` | `shellcheck -x` on all seven changed shell files | clean |
+| `pr-2-proc-lib` | `tests/fm-proc-lib.test.sh` | 15 / 15, exit 0 |
+| `pr-2-proc-lib` | `tests/fm-sessionstart-nudge.test.sh` | red at case 8, byte-for-byte the documented `spawn()` EFTYPE red, not a split artifact |
+| `pr-3-herdr-windows-cli` | `--check-coverage`, `shellcheck -x bin/backends/herdr.sh` | `ok` line, clean |
+| `pr-3-herdr-windows-cli` | `tests/fm-backend-herdr-windows.test.sh` | 21 / 21, exit 0 |
+| `pr-4-herdr-windows-pane` | `--check-coverage`, `shellcheck -x bin/backends/herdr.sh` | `ok` line, clean |
+| `pr-4-herdr-windows-pane` | `tests/fm-backend-herdr-windows.test.sh` | 32 / 32, exit 0 |
+
+`--check-coverage` is the check that would catch the family-map hazard: `bin/fm-test-run.sh` is edited by both `pr-2` and `pr-3`, each registering one new test file, and a branch that registered a test it does not carry (or carried one it does not register) fails there.
+Both hunks land in different `case` arms 60 lines apart, so the two branches also do not conflict with each other.
+
+`pr-1-gitattributes` has nothing to run; its effect is the checkout, and it is the precondition for every other branch's shebangs executing at all.
+
+### What the acceptance review changed
+
+The review was given the five claims this slice makes and told to break them.
+It verified four in substance - faithful, complete, self-standing, correctly ordered - and broke the fifth, which was the prose rather than the split.
+
+Three findings, all now applied above: the byte-identity overstatement and its cause, the `pr-2` test-file count (six, not four), and the hunk distance (61 lines, not 60).
+
+Three of its confirmations are worth keeping because they were derived independently rather than restated:
+
+- `pr-4` genuinely requires `pr-3`, and it proved it rather than assuming it: `git diff pr-3 pr-4 -- bin/backends/herdr.sh` adds two calls to `fm_backend_herdr_win32_cli`, and `git grep` finds no such symbol at `upstream/main`. The stacking is a code dependency.
+- No branch references a slice-4-only helper. It checked both `fm_fakebin_link` and `fm_hook_payload_string`, and separately confirmed that the guard-script lines inside `tests/fm-cursor-primary.test.sh` are pre-existing upstream lines rather than anything `pr-2` adds.
+- `* text=auto eol=lf` is safe for this repository specifically: upstream has zero `.bat`, `.cmd`, `.ps1` or `.sln` files, which are the file types that would want CRLF preserved.
+
+### The Phase D bodies are written, not sent
+
+With Phase B frozen, the four PR bodies no longer depend on anything still moving, so they were written in the same pass: `docs/windows/upstream/pr-1.md` through `pr-4.md`.
+Each carries the defect it fixes with its live before/after output, the design choice that is worth arguing about, the POSIX-identity argument, the verification table, and the open items a reviewer should be told rather than left to find.
+PR-4's body states the stacking requirement in its first three lines, because that is the one thing a maintainer could get wrong by merging in the obvious order.
+
+`docs/windows/upstream/issue.md` is deliberately not written yet.
+It is the cover letter, and the most persuasive thing it can say is whether the captain's flow actually runs on this machine, which is Phase C's answer and not yet known.
+
+Nothing has been sent: no issue, no pull request, no push to `upstream`, and the README platform badge is untouched.
+
+### Not fixed here
+
+No pull request was opened and nothing was pushed to `upstream`.
+The branches sit on `EvanBatten/firstmate-for-windows` waiting for the captain.
+
+The four branches are also not the whole port.
+The guard fixes are the strongest candidate for a fifth PR - three fail-opens in a security seatbelt is a different argument from a portability patch - and the installer checksum fix is portable enough to stand alone as a sixth.
+Both are named in [prs.md](prs.md) with the reason they are held rather than bundled.
+
+`tests/fm-backend-herdr.test.sh`'s jq CRLF red is still open inside `pr-3`'s area and is called out in that branch's row in [prs.md](prs.md), so a reviewer meets it as a known follow-up rather than as a surprise.
+It can land as an additional commit on the pushed branch; none of the four may be force-pushed.
+
+## Phase C: the captain flow on this machine
+
+Run 2026-08-29 against the live firstmate home at `C:\Users\ebatt\firstmate`, fast-forwarded to `0865847` (Phase B slices 1-6).
+Timestamps below are GitHub's, because the machine suspended and resumed partway through and its own clock is not a reliable narrator of this run (that is finding 25).
+The primary is a real `claude --dangerously-skip-permissions` session in a herdr tab of the DEFAULT session, steered only through `herdr pane send-text` / `send-keys` and observed only through `herdr pane read`.
+Everything below is what actually happened, in order, including the five things that did not work.
+The loop itself - order, crewmate, worktree, PR, merge, teardown - ran clean twice; the failures are all in the machinery around it, and each one is a ledger row at the end of this section.
+
+### C0. Preconditions
+
+```sh
+git -C C:/Users/ebatt/firstmate fetch origin
+git -C C:/Users/ebatt/firstmate merge --ff-only origin/gnhf/objective-finish-the-589b84
+#   Updating 4f38fc5..0865847 - Fast-forward, 42 files changed, 3898 insertions(+), 216 deletions(-)
+```
+
+The home is left on `windows`, clean, and nothing is ever pushed from it.
+
+The sandbox project is a new private repository, created for this and used for nothing else:
+
+```sh
+gh repo create EvanBatten/fm-windows-e2e --private --source=. --remote=origin --push
+```
+
+It is a five-file Node project with no dependencies: `src/slugify.js`, `test/slugify.test.js` (three cases, `node --test`), a `package.json`, a `ci.yml` that runs `npm test` on `ubuntu-latest`, and a `.gitattributes` carrying PR-1's rule for the same reason PR-1 exists.
+Exactly one case fails at the seed commit (`'  Ahoy, Captain!  '` slugifies to `-ahoy-captain-`, not `ahoy-captain`), and CI is red on `main` at the seed (run `33264772591`, failure, 21 s) so the task is real on a Linux runner as well as here.
+
+The detect-only bootstrap in the live home prints one line and exits 0:
+
+```sh
+FM_BOOTSTRAP_DETECT_ONLY=1 bin/fm-bootstrap.sh
+#   NOTICE: auto-detected herdr runtime (HERDR_ENV=1) - spawning into the EXPERIMENTAL herdr backend.
+```
+
+Zero `MISSING`, zero `TANGLE`, zero `BACKEND_INVALID` - row 14 holding on the ported tree.
+
+### C1. The primary comes up
+
+```sh
+herdr tab create --workspace w5 --cwd 'C:\Users\ebatt\firstmate' --label fm-primary --no-focus
+#   tab w5:t5, root pane w5:p6, cwd C:\Users\ebatt\firstmate\
+herdr pane run w5:p6 "claude --dangerously-skip-permissions"
+```
+
+Claude Code 2.1.251 starts in the pwsh pane and shows its folder-trust dialog, which needs one `down` and one `enter` through `pane send-keys`.
+Then `Ahoy. Start the session.`, and the first mate runs `bin/fm-session-start.sh` itself: 32 s, 8 lines, lock acquired, network checks 12 s, `gh` authenticated, no queued notifications, no registry yet.
+
+The session lock is the first place a Phase B slice shows up in production rather than in a test:
+
+```sh
+$ cat C:/Users/ebatt/firstmate/state/.lock
+255612
+$ pwsh -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process -Filter 'ProcessId=255612' | Select-Object ProcessId,ParentProcessId,Name"
+#   255612  218832  claude.exe
+$ kill -0 255612
+#   bash: kill: (255612) - No such process
+$ bash -c '. bin/fm-proc-lib.sh; fm_pid_alive 255612 && echo alive'
+#   alive
+```
+
+The lock names the primary's Win32 pid, `kill -0` calls it dead, and `fm_pid_alive` calls it alive.
+That is findings 2 and 3 held up against a real session: before slice 1 the lock could not be written at all here, and any liveness probe of it would have answered "dead".
+
+### C2. One order, one crewmate, one PR
+
+The captain's message registers the project and asks for the fix, explicitly delegated.
+The first mate:
+
+1. cloned into `projects/fm-windows-e2e` (its first attempt was refused by the cd guard for a top-level `cd`, which is the guard behaving, and it retried path-scoped),
+2. wrote `data/projects.md`:
+   `- fm-windows-e2e [direct-PR] - Sandbox Node project ... (added 2026-08-29)`,
+3. filed a backlog item and a brief, and ran
+   `bin/fm-spawn.sh slugify-trim-k1 projects/fm-windows-e2e --mode direct-PR --yolo off --effort low`.
+
+The spawn produced a crewmate tab in its own workspace, and `state/slugify-trim-k1.meta` records the whole shape of it:
+
+```
+window=default:w7:p2       backend=herdr        herdr_workspace_id=w7
+worktree=/c/Users/ebatt/.treehouse/fm-windows-e2e-e86758/1/fm-windows-e2e
+project=/c/Users/ebatt/firstmate/projects/fm-windows-e2e
+harness=claude  kind=ship  mode=direct-PR  yolo=off  effort=low
+```
+
+That is PR-3 and PR-4 doing their jobs together: the adapter accepted the drive-letter socket path (finding 5) instead of refusing the spawn, and the pane came up as a working shell in a treehouse worktree (findings 6 and 13).
+The crewmate hit the same folder-trust dialog; the first mate answered it through the guarded sender.
+
+Eleven minutes after the order:
+
+```
+state/slugify-trim-k1.status      done: PR https://github.com/EvanBatten/fm-windows-e2e/pull/1
+state/slugify-trim-k1.busy-state  state=idle source=claude-hook event=stop
+```
+
+PR #1, `trim leading and trailing dashes from slugs`, one file, two lines:
+
+```diff
+-    .replace(/[^a-z0-9]+/g, '-');
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-|-$/g, '');
+```
+
+Green on `ubuntu-latest` (run `33265421051`).
+
+### C3. Merge and teardown
+
+On the captain's `Merge it.`, the first mate ran the guarded merge script first, reported that it refused, and merged through the forge tool under the explicit instruction:
+
+```
+PR #1  MERGED 2026-08-29T17:36:47Z  merge commit 903a51c
+main CI run 33266092171  success  15 s
+```
+
+`bin/fm-teardown.sh slugify-trim-k1` then stopped the worker, returned the treehouse worktree to the pool, closed the crewmate tab (`herdr tab list` drops `w7:t2`), and cleared every `state/slugify-trim-k1.*` file.
+The backlog item is Done with its PR link.
+
+The whole chain held: register, clone, brief, spawn on herdr, trust dialog, work, PR, CI, merge, cleanup - the first mate's own summary of it, and it matches what GitHub and `state/` say.
+
+### C4. The Stop-hook wake: a measured blocker
+
+This is the one leg that does not work, and it is worth the space because the cause is exact.
+
+**The symptom.** At every turn end with work in flight, `bin/fm-turnend-guard.sh --claude` blocks the stop:
+
+```
+TURN WOULD END BLIND - SUPERVISION IS OFF
+1 task(s) in flight, but no live watcher holds this home lock (last beat: never).
+The Stop-owned auto-arm did not claim this home either, so recovery is NOT already under way.
+```
+
+`state/.claude-autoarm-epoch` did not exist, so `bin/fm-claude-stop-autoarm.sh` had not claimed a generation on any firing.
+
+**Not "the hook never runs".** That was the first mate's reading, and it is wrong.
+A throwaway project with two Stop hooks - one plain, one `"asyncRewake": true` - run under `claude -p --dangerously-skip-permissions` writes both markers:
+
+```sh
+$ ls /tmp/fm-asynchook/*.marker
+async.marker  sync.marker
+```
+
+Claude Code 2.1.251 fires `asyncRewake` Stop hooks on this Windows build.
+
+**What actually happens.** Replacing those two hooks with a probe that walks its own ancestry:
+
+```
+label=sync  msyspid=48216  winpid=289396
+--- Get-Process .Parent walk (what fm-proc-lib.sh uses) ---
+289396  0  bash
+--- Win32_Process ParentProcessId walk ---
+289396  293396  bash.exe
+293396  GONE
+```
+
+and the same for the async firing (`215548 -> 4808 -> GONE`).
+A Claude Code hook on Windows is spawned through an intermediate process that has **already exited** by the time the hook body runs.
+`Get-Process().Parent` returns null; `Win32_Process.ParentProcessId` returns the dead intermediate's pid and the walk ends there.
+Both routes dead-end, so `fm_proc_chain "$$"` inside a hook returns exactly one row with ppid 0 - the hook's own bash and nothing above it.
+
+`/proc/<pid>/ppid` is `1` inside the hook, which is the ordinary MSYS answer for "my parent is not an MSYS process", so the MSYS segment of the walk is one row too.
+This is not a defect in slice 1's walk: the same chain from an ordinary Bash-tool shell in the same session resolves all seven hops to `herdr.exe`.
+It is a property of how the harness starts a hook on Windows.
+
+**Why that stops the arm.** `fm_harness_ancestry_pids` starts at `$$`, asks `fm_harness_process_matches` about `/usr/bin/bash` (no match), asks for the parent, gets nothing, and returns 1.
+So `fm_session_lock_owned_by_self` is false, and the auto-arm takes its "not me" branch:
+
+```sh
+LOCK_PID=$(cat "$STATE/.lock")      # 255612, numeric - fine
+fm_harness_pid_alive "$LOCK_PID" && exit 0
+```
+
+`fm_pid_alive 255612` is true (slice 1 made it true), so the hook reads a healthy lock held by somebody else and **exits 0 silently**, which is exactly the correct behavior for a competing session.
+There is no bug in the gate. The input to the gate is unrecoverable.
+
+**The A/B that settles it.** The same script run by the first mate from an ordinary Bash tool call, in the same home and the same minute, gets past the identity gate and does its whole job:
+
+```
+state/.claude-autoarm-epoch:
+epoch=2 owner_pid=47483 outcome=rewake updated_at=1788024909
+```
+
+Same script, same state, same session - claims a generation from a Bash-tool shell, exits 0 silently from a hook.
+The only difference between the two processes is whether their Win32 parent still exists.
+
+**What it costs.** The watcher itself works: `state/.watch-deliveries.log` shows real deliveries,
+
+```
+44085  ...  signal: state/slugify-trim-k1.status state/slugify-trim-k1.turn-ended
+47670  ...  stale: default:w7:p2
+```
+
+and `state/.watch-cycle-exits.log` shows both cycles closing with an actionable reason (`actionable-signal`, `actionable-stale`).
+What is missing is the translation step: for a Claude primary, an actionable arm close is turned into a wake by the Stop hook exiting 2 with a banner on stderr, and by the same hook re-arming for the next cycle.
+Without an identity, neither happens, so each cycle is the last one and the first mate must arm the watcher by hand at every turn end - which it did, twice, and the turn-end guard blocked it twice more when a cycle closed before the next arm.
+
+**Verdict:** the crewmate-finishes-wakes-an-idle-primary proof cannot be produced on Windows with the current identity contract.
+This is a documented blocker with evidence, not an unexplained failure, and it is not fixable by a mode relaxation or an argument-conversion branch.
+A fix has to give a hook an identity that does not depend on its parent still being alive.
+The obvious candidate is the Stop payload's own `session_id`, recorded into the lock by the SessionStart hook that already exists (`bin/fm-sessionstart-nudge.sh`) and compared by equality in the hook - which would be *stronger* than an ancestry walk, not weaker, on every platform.
+That is an upstream design change to a security-relevant predicate, so it is written down here rather than implemented in a port slice.
+
+### C5. Findings this run added to the ledger
+
+| # | Subsystem | Result | Measured detail | Fix owner |
+| --- | --- | --- | --- | --- |
+| 22 | Hook process ancestry | **FAIL** | A Claude Code hook's Win32 parent has already exited when the hook body runs (`293396 GONE`), so `Get-Process().Parent` and `Win32_Process.ParentProcessId` both dead-end and `fm_proc_chain "$$"` returns one row. `fm_session_lock_owned_by_self` can never be true in a hook, so `bin/fm-claude-stop-autoarm.sh` exits 0 at its identity gate on every firing and tokenless watcher continuity is off. | open: needs a payload-`session_id` identity, not a port branch (C4) |
+| 23 | git path form vs shell path form | **FAIL** | `git rev-parse --show-toplevel` answers `C:/Users/ebatt/firstmate/projects/fm-windows-e2e` while `pwd -P` answers `/c/Users/ebatt/firstmate/projects/fm-windows-e2e`. Six sites compare the two forms directly (`bin/fm-fleet-sync.sh:315`, `bin/fm-spawn.sh:1744`, `bin/fm-teardown.sh:1207`, `bin/fm-control.sh:693`, `bin/fm-config-inherit-lib.sh:163`, and the isolation instruction `bin/fm-brief.sh` gives every crewmate). Measured effect: `bin/fm-fleet-sync.sh` skips every project clone, so a merged PR never reaches the local clone. | a Phase B follow-up slice; one comparison helper, not six branches |
+| 24 | Guarded PR merge | **FAIL** | `bin/fm-pr-merge.sh` refuses because it insists on the PR-poll registration that `fm_pr_poll_prepare` cannot do here (`error: could not prepare PR poll`, row 21 / D6). The captain's merge had to go through the forge tool directly. | row 21 / decision D6 |
+| 25 | Watcher identity across a clock step | **FAIL, provisional** | `fm_wake_identity`'s `proc-starttime` is `/proc/<pid>/stat` field 22, and its comment says that field is "immune to the wall-clock steps". That is true on Linux and false on Cygwin, which derives it from `btime` (`now - uptime`), so a wall-clock step shifts it for every pid at once. Observed once here: the recorded watcher identity `936149599` against a live `936148558`, a 1041-tick drift, after the machine slept and resumed mid-run - which made `fm_watcher_healthy` report a live, lock-holding watcher as dead. Field 22 and `/proc/stat`'s `btime` were both stable over 75 s with no step, so a step is what it takes. | a Phase B follow-up; the identity needs a step-immune component on MSYS |
+| 26 | Tracked symlink at checkout | **FAIL** | Git for Windows ships `core.symlinks=false` in its SYSTEM config, so a plain clone materializes a tracked symlink as a regular text file holding its target path. This repository has exactly one tracked symlink and it is `.claude/skills -> ../.agents/skills`, which is how Claude Code is shown firstmate's twenty skills. In the live home it was a 17-byte file, so `/bearings` answered `Unknown command: /bearings` and the first mate had run this entire session with zero skills loaded. `git config core.symlinks true` plus `git checkout -- .claude/skills` restored the link (Developer Mode is on, so no admin step), and Claude Code picked the skills up live in the already-running session: `20 skills available`. | PR-1's territory: a setup step, not a repo file - `.gitattributes` cannot express it |
+
+Row 24 is the D6 trigger the plan predicted in slice 6, arriving exactly where slice 6 said it would.
+
+Row 25 is labelled provisional on purpose.
+Its trigger was a suspend/resume of the machine partway through this run - which is also why the first mate's own elapsed-time readings in the transcript read as five and a half hours - and a deliberate re-measurement (sleep the machine, re-read one long-lived pid's field 22) was not done.
+The mechanism is not in doubt and the trigger is routine rather than exotic: any laptop that closes its lid moves Cygwin's `btime`.
+The size and the frequency are what is unmeasured.
+
+### C6. The second task, and what is left
+
+A second order (`slugify-empty-k2`: assert that a punctuation-only title slugifies to the empty string) was given specifically to set the wake proof up: spawn, then leave the primary idle and see whether the crewmate's finish reaches it.
+The crewmate delivered [PR #2](https://github.com/EvanBatten/fm-windows-e2e/pull/2) into the same sandbox from a fresh pool slot, so the spawn path is reproducible rather than a one-off.
+The wake did not arrive by the Stop-hook route, for the reason in C4; what did reach the primary unprompted was the completion notification of the arm job it had launched as a tracked background shell, which is the same mechanism `bin/fm-watch.sh`'s header names ("what wakes the LLM through the background-task completion") but only while the primary itself keeps launching that job.
+
+`/bearings` was the last step, and it is what turned up row 26.
+Typed into the pane it answered `Unknown command: /bearings`, because `.claude/skills` was a 17-byte regular file rather than the symlink git has tracked all along; with the symlink restored, the running session picked the skills up without a restart (`20 skills available`) and the digest came back clean:
+
+```
+Captain's Call     Nothing needs your action right now, captain.
+Recently Landed    PR #1 - slugify no longer leaves a leading or trailing dash; merged and cleaned up.
+                   PR #2 - test that a punctuation-only title slugifies to the empty string; merged and cleaned up.
+Underway           Nothing is underway.
+Charted Next       Nothing is queued.
+```
+
+The live home is left checked out on `windows`, only the `fm-primary` tab created here is left open, and no tab created by anyone else was touched.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -1047,4 +1390,19 @@ f() { local n=$1; shift; HERDR_SESSION="$n" /usr/bin/sleep 30 "$@"; }
 f x >/dev/null 2>&1 & p=$!; ps -f | awk -v p="$p" '$3==p {print "CHILD:", $2, $NF}'
 kill -TERM "$p"; ps -f | awk '{print $2, $3, $NF}' | grep sleep   # orphaned, still alive
 : > /tmp/probe600 && chmod 0600 /tmp/probe600 && stat -c '%a' /tmp/probe600   # 644
+# Phase C row 22 (hook ancestry; both walks dead-end from inside a hook)
+#   put this in a throwaway project's .claude/settings.json as a Stop hook and run `claude -p`
+pwsh -NoProfile -NonInteractive -Command '$id=[int]$env:FM_Q; for ($i=0; $i -lt 16 -and $id -gt 0; $i++) { $w=Get-CimInstance Win32_Process -Filter "ProcessId=$id"; if (-not $w) { "{0}`tGONE" -f $id; break }; "{0}`t{1}`t{2}" -f $w.ProcessId,$w.ParentProcessId,$w.Name; $id=[int]$w.ParentProcessId }'
+# Phase C row 23 (the two path forms that are compared to each other)
+cd <any clone>; git rev-parse --show-toplevel; pwd -P
+# Phase C row 24 (the guarded merge's refusal)
+bin/fm-pr-check.sh <task>   # error: could not prepare PR poll
+# Phase C row 25 (stable without a clock step; a step is what moves it)
+bash -c 'tail -f /dev/null & p=$!; s=$(cut -d")" -f2 /proc/$p/stat | cut -d" " -f21); timeout 75 tail -f /dev/null; cut -d")" -f2 /proc/$p/stat | cut -d" " -f21; echo "$s"; kill $p'
+
+# slice 7 (the split, and the two checks that make it exact)
+git log --oneline upstream/main..0865847 -- bin/fm-proc-lib.sh     # 0865847 and 9286fe7, nothing else
+git diff pr-2-proc-lib:bin/fm-proc-lib.sh 0865847:bin/fm-proc-lib.sh   # empty
+git diff --name-only upstream/main 0865847  # every path must land in a pr-* branch or be integration-only
+git log --oneline upstream/main..pr-4-herdr-windows-pane
 ```
