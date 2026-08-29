@@ -387,6 +387,192 @@ PY
   pass "herdr-workspace-move.py: the socket path guard accepts a Win32 path and still refuses a relative one"
 }
 
+# --- Windows crewmate pane: bash bootstrap and cwd tracking ------------------
+
+# A `herdr` that logs every call unit-separated AND answers the queries a task
+# pane makes: the `status --json` liveness probe every target_ready goes
+# through, `tab create` with a tab/pane id pair, and `pane get` with whatever
+# FM_HERDR_PANE_JSON holds. FM_HERDR_STATUS forces a failure.
+make_task_herdr() {  # <fakebin>
+  cat > "$1/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+{
+  printf 'EXCL=%s' "${MSYS2_ARG_CONV_EXCL:-<unset>}"
+  for a in "$@"; do printf '\x1f%s' "$a"; done
+  printf '\n'
+} >> "${FM_HERDR_LOG:?}"
+[ "${FM_HERDR_STATUS:-0}" = 0 ] || exit "$FM_HERDR_STATUS"
+case "${1:-} ${2:-}" in
+  "status --json") printf '{"server":{"running":true}}\n' ;;
+  "pane get")      printf '%s\n' "${FM_HERDR_PANE_JSON:-}" ;;
+  "tab create")
+    # Spelled out rather than inlined as a ${VAR:-<json>} default: the braces in
+    # the JSON close the parameter expansion early and truncate the response.
+    if [ -n "${FM_HERDR_TAB_JSON:-}" ]; then
+      printf '%s\n' "$FM_HERDR_TAB_JSON"
+    else
+      printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n'
+    fi
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$1/herdr"
+}
+
+test_win32_pane_bash_is_absent_on_a_posix_host() {
+  local fb out
+  fb=$(make_cygpath "$TMP_ROOT/pane-bash-posix")
+  make_logging_herdr "$fb"
+  # A shell-script herdr next to a working cygpath: the exact shape every other
+  # unit test runs in, on Windows included. No bootstrap may be offered there.
+  out=$(adapter "$fb" 'fm_backend_herdr_win32_pane_bash')
+  [ -z "$out" ] || fail "a shell-script herdr must offer no pane bootstrap at all, got '$out'"
+  adapter "$fb" 'fm_backend_herdr_win32_pane_bash' >/dev/null
+  # Exactly 1, the function's own refusal - not merely non-zero, which a crashed
+  # or unsourceable adapter would also produce.
+  expect_code 1 $? "a shell-script herdr must REFUSE the bootstrap, not just print nothing"
+  pass "fm_backend_herdr_win32_pane_bash: a non-PE herdr means the pane already runs a POSIX shell"
+}
+
+test_win32_pane_bash_names_this_shells_own_interpreter() {
+  local fb out
+  fb=$(make_cygpath "$TMP_ROOT/pane-bash-win32")
+  out=$(adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_win32_pane_bash')
+  case "$out" in
+    ?:\\*bash*) ;;
+    *) fail "the bootstrap path must be the Win32 spelling of this shell's own bash, got '$out'" ;;
+  esac
+  pass "fm_backend_herdr_win32_pane_bash: names the running Git Bash by Win32 path, not a guessed install location"
+}
+
+test_task_tab_create_posix_call_is_unchanged() {
+  local fb log out
+  fb=$(make_cygpath "$TMP_ROOT/task-posix"); log="$TMP_ROOT/task-posix/log"; : > "$log"
+  make_task_herdr "$fb"
+  out=$(FM_HERDR_LOG="$log" adapter "$fb" \
+    'fm_backend_herdr_task_tab_create fmtest w1 /tmp/proj fm-x')
+  expect_code 0 $? "every call site branches on this status; a success that reports failure refuses a spawn that worked"
+  assert_contains "$out" '"pane_id":"w1:p2"' "task_tab_create must echo herdr's raw response for its callers to parse"
+  assert_contains "$(cat "$log")" \
+    "${US}tab${US}create${US}--workspace${US}w1${US}--cwd${US}/tmp/proj${US}--label${US}fm-x${US}--no-focus${US}--session${US}fmtest" \
+    "the POSIX task tab create must reach herdr byte for byte as each call site sent it inline before"
+  assert_not_contains "$(cat "$log")" "${US}pane${US}run" \
+    "no POSIX pane may ever be handed a shell bootstrap command"
+  pass "fm_backend_herdr_task_tab_create: the POSIX call is byte-identical and bootstraps nothing"
+}
+
+test_task_tab_create_bootstraps_git_bash_on_msys() {
+  local fb log want emitter
+  fb=$(make_cygpath "$TMP_ROOT/task-win32"); log="$TMP_ROOT/task-win32/log"; : > "$log"
+  make_task_herdr "$fb"
+  want=$(adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_win32_pane_bash')
+  [ -n "$want" ] || fail "the bootstrap path probe returned nothing"
+  # The WHOLE emitter, not just the key: an empty or truncated PROMPT_COMMAND
+  # still contains "PROMPT_COMMAND=", and the pane it produces never moves its
+  # .cwd, which is a 60-second spawn timeout naming the wrong cause.
+  emitter=$(adapter "$fb" 'fm_backend_herdr_win32_pane_prompt_command')
+  [ -n "$emitter" ] || fail "the emitter is empty"
+  FM_HERDR_LOG="$log" adapter "$fb" \
+    'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_task_tab_create fmtest w1 /c/Users/ebatt/proj fm-x' >/dev/null
+  assert_contains "$(cat "$log")" \
+    "${US}--label${US}fm-x${US}--env${US}SHELL=${want}${US}--env${US}PROMPT_COMMAND=${emitter}${US}--no-focus" \
+    "the Windows task tab create must carry SHELL and the COMPLETE OSC 9;9 emitter into the pane's environment"
+  assert_contains "$(cat "$log")" \
+    "${US}pane${US}run${US}w1:p2${US}& '${want}' --login" \
+    "the Windows pane's FIRST command must launch Git Bash by full path through pwsh's call operator"
+  pass "fm_backend_herdr_task_tab_create: an MSYS pane gets SHELL, the OSC 9;9 emitter, and a Git Bash first command"
+}
+
+test_task_tab_create_never_bootstraps_a_pane_it_did_not_create() {
+  local fb log
+  fb=$(make_cygpath "$TMP_ROOT/task-fail"); log="$TMP_ROOT/task-fail/log"; : > "$log"
+  make_task_herdr "$fb"
+  FM_HERDR_LOG="$log" FM_HERDR_STATUS=1 adapter "$fb" \
+    'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_task_tab_create fmtest w1 /c/proj fm-x' >/dev/null &&
+    fail "task_tab_create must propagate a failed tab create to its caller"
+  assert_not_contains "$(cat "$log")" "${US}pane${US}run" \
+    "a failed tab create must never leave a pane run aimed at a pane id that was never returned"
+  pass "fm_backend_herdr_task_tab_create: a failed create propagates and bootstraps nothing"
+}
+
+test_task_tab_create_never_aims_a_bootstrap_at_a_guessed_pane() {
+  local fb log out
+  fb=$(make_cygpath "$TMP_ROOT/task-nopane"); log="$TMP_ROOT/task-nopane/log"; : > "$log"
+  make_task_herdr "$fb"
+  out=$(FM_HERDR_LOG="$log" FM_HERDR_TAB_JSON='{"result":{"tab":{"tab_id":"w1:t2"}}}' \
+    adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_task_tab_create fmtest w1 /c/proj fm-x')
+  assert_contains "$out" '"tab_id":"w1:t2"' "an unparseable pane id must still hand the caller herdr's own response to judge"
+  assert_not_contains "$(cat "$log")" "${US}pane${US}run" \
+    "a response with no pane id must never be turned into a pane run against a guessed or stale pane"
+  pass "fm_backend_herdr_task_tab_create: no pane id in the response means no bootstrap, never a guess"
+}
+
+test_prompt_command_emits_the_osc_sequence_herdr_reads() {
+  local fb out
+  fb=$(make_cygpath "$TMP_ROOT/prompt-cmd")
+  # Evaluate the emitter exactly as an interactive bash would, with PWD set to a
+  # path the fake cygpath folds deterministically, and read the bytes back.
+  out=$(adapter "$fb" 'pc=$(fm_backend_herdr_win32_pane_prompt_command); PWD=/c/x; eval "$pc" | od -An -c | tr -s " "')
+  assert_contains "$out" "033 ] 9 ; 9 ; C : \\ x 033 \\" \
+    "the emitter must produce ESC ]9;9;<windows path> ESC backslash - the sequence herdr's cwd tracking reads"
+  pass "fm_backend_herdr_win32_pane_prompt_command: emits the OSC 9;9 sequence that keeps pane .cwd live"
+}
+
+test_current_path_posix_never_falls_back_to_the_frozen_cwd() {
+  local fb log out
+  fb=$(make_cygpath "$TMP_ROOT/cwd-posix"); log="$TMP_ROOT/cwd-posix/log"; : > "$log"
+  make_task_herdr "$fb"
+  out=$(FM_HERDR_LOG="$log" \
+    FM_HERDR_PANE_JSON='{"result":{"pane":{"cwd":"/tmp/pane-creation-dir","foreground_cwd":null}}}' \
+    adapter "$fb" 'fm_backend_herdr_current_path fmtest:w1:p2')
+  [ -z "$out" ] ||
+    fail "on a POSIX host a null foreground_cwd means UNKNOWN; the frozen creation-time cwd must never be substituted, got '$out'"
+  # Without this, a POSIX branch that crashed before reading anything would look
+  # exactly like a POSIX branch that correctly declined to substitute.
+  assert_contains "$(cat "$log")" "${US}pane${US}get${US}w1:p2" \
+    "current_path must actually have read the pane before reporting it does not know where it is"
+  pass "fm_backend_herdr_current_path: a POSIX host still refuses the frozen creation-time cwd"
+}
+
+test_current_path_msys_falls_back_to_the_live_cwd() {
+  local fb log out
+  fb=$(make_cygpath "$TMP_ROOT/cwd-msys"); log="$TMP_ROOT/cwd-msys/log"; : > "$log"
+  make_task_herdr "$fb"
+  out=$(FM_HERDR_LOG="$log" \
+    FM_HERDR_PANE_JSON='{"result":{"pane":{"cwd":"C:\\Users\\ebatt\\wt\\a1","foreground_cwd":null}}}' \
+    adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_current_path fmtest:w1:p2')
+  [ "$out" = /c/Users/ebatt/wt/a1 ] ||
+    fail "a Windows pane's always-null foreground_cwd must fall back to the OSC-fed .cwd, folded to a POSIX path, got '$out'"
+  pass "fm_backend_herdr_current_path: a Windows pane reports its live .cwd as a POSIX path"
+}
+
+test_current_path_msys_still_prefers_foreground_cwd() {
+  local fb log out
+  fb=$(make_cygpath "$TMP_ROOT/cwd-msys-fg"); log="$TMP_ROOT/cwd-msys-fg/log"; : > "$log"
+  make_task_herdr "$fb"
+  out=$(FM_HERDR_LOG="$log" \
+    FM_HERDR_PANE_JSON='{"result":{"pane":{"cwd":"C:\\Users\\ebatt\\proj","foreground_cwd":"/c/Users/ebatt/wt/a1"}}}' \
+    adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_current_path fmtest:w1:p2')
+  [ "$out" = /c/Users/ebatt/wt/a1 ] ||
+    fail "the fallback must stay a fallback: a herdr build that DOES report foreground_cwd still wins, got '$out'"
+  pass "fm_backend_herdr_current_path: the .cwd fallback never overrides a foreground_cwd that is actually present"
+}
+
+test_current_path_reads_the_pane_once() {
+  local fb log calls
+  fb=$(make_cygpath "$TMP_ROOT/cwd-one-read"); log="$TMP_ROOT/cwd-one-read/log"; : > "$log"
+  make_task_herdr "$fb"
+  FM_HERDR_LOG="$log" \
+    FM_HERDR_PANE_JSON='{"result":{"pane":{"cwd":"C:\\Users\\ebatt\\wt\\a1","foreground_cwd":null}}}' \
+    adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_current_path fmtest:w1:p2' >/dev/null
+  calls=$(grep -c "${US}pane${US}get" "$log")
+  [ "$calls" = 1 ] ||
+    fail "both cwd fields must come from ONE pane get - two reads race a pane that is moving, got $calls calls"
+  pass "fm_backend_herdr_current_path: both cwd fields come from a single pane get, so the fallback cannot race the poll"
+}
+
 test_canonical_socket_path_posix_is_unchanged
 test_canonical_socket_path_refuses_relative_and_empty
 test_canonical_socket_path_folds_a_win32_path
@@ -408,3 +594,14 @@ test_namespace_valid_accepts_755_when_the_filesystem_drops_modes
 test_namespace_valid_still_refuses_a_loose_directory
 test_namespace_valid_still_refuses_another_owner
 test_mover_accepts_a_windows_socket_path_shape
+test_win32_pane_bash_is_absent_on_a_posix_host
+test_win32_pane_bash_names_this_shells_own_interpreter
+test_task_tab_create_posix_call_is_unchanged
+test_task_tab_create_bootstraps_git_bash_on_msys
+test_task_tab_create_never_bootstraps_a_pane_it_did_not_create
+test_task_tab_create_never_aims_a_bootstrap_at_a_guessed_pane
+test_prompt_command_emits_the_osc_sequence_herdr_reads
+test_current_path_posix_never_falls_back_to_the_frozen_cwd
+test_current_path_msys_falls_back_to_the_live_cwd
+test_current_path_msys_still_prefers_foreground_cwd
+test_current_path_reads_the_pane_once
