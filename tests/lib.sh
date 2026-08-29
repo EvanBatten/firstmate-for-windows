@@ -147,7 +147,9 @@ fm_test_reap_orphans
 # --- fakebin / PATH shims ---------------------------------------------------
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
-# shadow real tools with stubs. fm_fake_exit0 drops trivial exit-0 stubs for the
+# shadow real tools with stubs. fm_fakebin_link puts REAL tools in a fakebin, so
+# a case can hand a child a curated PATH that has some tools and not others.
+# fm_fake_exit0 drops trivial exit-0 stubs for the
 # named tools into a fakebin dir. fm_fake_version_tool drops a stub for a tool
 # whose installed version bootstrap gates, so a fixture cannot be reported as an
 # unparseable build simply for answering `--version` with nothing.
@@ -156,6 +158,45 @@ fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
   printf '%s\n' "$fakebin"
+}
+
+# fm_fakebin_link <fakebin> <tool>...
+# Places each named tool in <fakebin> so a child that runs with PATH=<fakebin>
+# can execute exactly the listed tools and nothing else. A tool the caller
+# cannot resolve, or one that resolves to a shell builtin rather than to an
+# absolute file, is skipped - the same tolerance the open-coded
+# `command -v <tool> || continue` loops this replaces already had.
+#
+# On macOS and Linux this is that loop's symlink, unchanged. A Windows userland
+# needs the indirection instead: Windows resolves an MSYS or MinGW executable's
+# DLLs against the directory the image was launched from and then against PATH,
+# so a symlinked bash.exe sitting in a fakebin that holds no msys-2.0.dll dies
+# with "error while loading shared libraries" and exit 127 before the script
+# under test runs a single line. Exec-ing the tool by its absolute path leaves
+# the loader looking in the tool's real directory, where its DLLs are.
+fm_fakebin_link() {
+  local fakebin=$1 tool tool_path quoted
+  shift
+  for tool in "$@"; do
+    tool_path=$(command -v "$tool") || continue
+    case "$tool_path" in
+      /*) ;;
+      *) continue ;;
+    esac
+    case "${OSTYPE:-}" in
+      msys*|mingw*|cygwin*)
+        printf -v quoted '%q' "$tool_path"
+        {
+          printf '#!%s\n' "${BASH:-/bin/bash}"
+          printf 'exec %s "$@"\n' "$quoted"
+        } > "$fakebin/$tool"
+        chmod +x "$fakebin/$tool"
+        ;;
+      *)
+        ln -s "$tool_path" "$fakebin/$tool"
+        ;;
+    esac
+  done
 }
 
 fm_fake_exit0() {

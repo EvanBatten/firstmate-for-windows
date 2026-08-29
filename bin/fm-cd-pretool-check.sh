@@ -107,7 +107,7 @@ if [ "$CMD_SET" -eq 0 ]; then
   if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
     exit 0
   fi
-  CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
+  CMD=$(fm_hook_payload_string "$PAYLOAD" '(.toolInput.command // .tool_input.command // empty)') || exit 0
 fi
 
 [ -n "$CMD" ] || exit 0

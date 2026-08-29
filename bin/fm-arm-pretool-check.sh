@@ -117,11 +117,11 @@ if [ "$CMD_SET" -eq 0 ]; then
   if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
     exit 0
   fi
-  CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
+  CMD=$(fm_hook_payload_string "$PAYLOAD" '(.toolInput.command // .tool_input.command // empty)') || exit 0
   [ -n "$CMD" ] || exit 0
   # Kept for transport parity only.
   # shellcheck disable=SC2034
-  BACKGROUND=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.background // .tool_input.background // false)' 2>/dev/null) || BACKGROUND=false
+  BACKGROUND=$(fm_hook_payload_string "$PAYLOAD" '(.toolInput.background // .tool_input.background // false)') || BACKGROUND=false
 fi
 
 [ -n "$CMD" ] || exit 0
@@ -173,7 +173,29 @@ POLICY="$ROOT/bin/fm-arm-command-policy.mjs"
 command -v node >/dev/null 2>&1 || exit 0
 [ -f "$POLICY" ] || exit 0
 
-POLICY_OUTPUT=$(node "$POLICY" --command "$CMD" --root "$ROOT" --home "$ACTIVE_HOME" 2>/dev/null) || exit 0
+# MSYS argument conversion (Git Bash) rewrites every `/`-leading argument before
+# a native Windows node.exe sees it, so `--root /c/fm` arrives as `C:/fm` while
+# the paths the policy lifts out of $CMD stay POSIX; the two can then never
+# compare equal and the blessed `source <home>/config/x-mode.env` setup node
+# stops being recognized (a false DENY on an allowed arm command). The same
+# conversion mutates a $CMD that is a single bare path, and the classifier must
+# see the exact bytes the shell would run. So suppress the conversion for the
+# whole call and hand node the one argument that genuinely must be a Windows
+# path - the policy file it opens - already converted. Without cygpath there is
+# no safe way to spell that argument, so the call is left exactly as it is.
+# POSIX hosts never enter this branch: $POLICY_ARG stays $POLICY, the
+# environment is untouched, and the invocation below is byte-identical.
+POLICY_ARG=$POLICY
+case "${OSTYPE:-}" in
+  msys*|mingw*|cygwin*)
+    if command -v cygpath >/dev/null 2>&1 && POLICY_WIN=$(cygpath -w "$POLICY" 2>/dev/null) && [ -n "$POLICY_WIN" ]; then
+      POLICY_ARG=$POLICY_WIN
+      export MSYS2_ARG_CONV_EXCL='*'
+    fi
+    ;;
+esac
+
+POLICY_OUTPUT=$(node "$POLICY_ARG" --command "$CMD" --root "$ROOT" --home "$ACTIVE_HOME" 2>/dev/null) || exit 0
 [ -n "$POLICY_OUTPUT" ] || exit 0
 
 TAB=$(printf '\t')

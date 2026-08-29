@@ -13,7 +13,15 @@
 // procedure below stays private to this file. The CLI entry point at the bottom
 // runs only when this module is invoked directly, never on import.
 
-import path from "node:path";
+// POSIX separator semantics on every host. Every path this policy compares is
+// either a word lifted out of a POSIX shell command line or the --root/--home
+// the POSIX-shell transport passes in, so `/` is the only separator in the
+// domain. On macOS and Linux `node:path` already IS this object; naming it
+// keeps Git Bash on Windows - where the default export is path.win32 and
+// path.normalize("bin/fm-watch-arm.sh") returns "bin\fm-watch-arm.sh", so no
+// protected script is ever recognized and the guard fails OPEN - identical to
+// the POSIX hosts instead.
+import { posix as path } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 

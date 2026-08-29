@@ -370,15 +370,11 @@ test_failopen_garbage_stdin() {
 }
 
 test_failopen_missing_jq() {
-  local dir fakebin rc real
+  local dir fakebin rc
   dir=$(fm_test_tmproot fm-arm-pretool-check)
   fakebin="$dir/fakebin"
   mkdir -p "$fakebin"
-  local tool
-  for tool in bash grep sed tr; do
-    real=$(command -v "$tool")
-    ln -sf "$real" "$fakebin/$tool"
-  done
+  fm_fakebin_link "$fakebin" bash grep sed tr
   PATH="$fakebin" bash -c "printf '%s' '{\"tool_input\":{\"command\":\"bin/fm-watch-arm.sh &\"}}' | '$CHECK'" >/dev/null 2>&1
   rc=$?
   [ "$rc" -eq 0 ] || fail "missing jq must fail open (exit 0) rather than crash-deny, got exit $rc"
@@ -386,14 +382,11 @@ test_failopen_missing_jq() {
 }
 
 test_failopen_missing_node() {
-  local dir fakebin rc real tool
+  local dir fakebin rc
   dir=$(fm_test_tmproot fm-arm-pretool-node)
   fakebin="$dir/fakebin"
   mkdir -p "$fakebin"
-  for tool in bash dirname; do
-    real=$(command -v "$tool")
-    ln -sf "$real" "$fakebin/$tool"
-  done
+  fm_fakebin_link "$fakebin" bash dirname
   PATH="$fakebin" "$CHECK" --command 'bin/fm-watch-arm.sh &' >/dev/null 2>&1
   rc=$?
   [ "$rc" -eq 0 ] || fail "missing node must fail open (exit 0), got exit $rc"

@@ -50,7 +50,7 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | --- | --- | --- | --- |
 | fm-send-popup-settle, fm-tmux-submit-busy, fm-send-settle, fm-send-strict, fm-spawn-batch, fm-supervision-instructions | **PASS** | | |
 | fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | **product** - resolved in slice 3: Windows `jq` writes CRLF, so a multi-line read carries `w1\r` (see "New finding" below) |
-| fm-arm-pretool-check | FAIL | "D01 via codex must deny, got exit 0" for `bin/fm-watch-arm.sh &` | product-suspect: the watcher-protection guard fails OPEN on the codex path; top of the Phase B list |
+| fm-arm-pretool-check | FAIL | "D01 via codex must deny, got exit 0" for `bin/fm-watch-arm.sh &` | **product** - resolved in slice 4: the watcher seatbelt was inert on Windows for three separate reasons (`node:path`, MSYS argument conversion, `jq` CRLF); now 145/145 |
 | fm-crew-state | FAIL | "timed-out no-mistakes falls back to pane (missing: 'state: working')" | unknown; timing or `ps`-based liveness (row 2) |
 | fm-herdr-lab | FAIL | "timed-out provision must fail: expected exit 1, got 0" | test/timing under slow spawn |
 | fm-pr-merge | FAIL | "github-zero-exit-queue-required: refusal did not name the concrete observed state" | unknown (fake `gh` fixture) |
@@ -64,7 +64,7 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | fm-composer-ghost, fm-grok-harness, fm-review-diff, fm-brief, fm-transition-lib | **PASS** | (fm-grok-harness passes only with `MSYS=winsymlinks:nativestrict`) | |
 | fm-pi-primary-types | gate-skip | pi not installed | |
 | fm-x-mode | FAIL | "poll auth error must write a dedupe marker" (next assertion wants `state/` at mode 700) | platform: row 21 |
-| fm-cd-pretool-check | FAIL | "transport must fail open when node is unavailable: expected exit 0, got 127" | product-suspect: the cd guard's no-node fallback exits 127 instead of failing open; sibling of the arm-pretool finding |
+| fm-cd-pretool-check | FAIL | "transport must fail open when node is unavailable: expected exit 0, got 127" | **test** - resolved in slice 4: a curated `PATH` of symlinked MSYS binaries cannot load `msys-2.0.dll`, so the child dies before the guard runs; the guard itself fails open correctly |
 | fm-captain-hold-lifecycle | TIMEOUT | exceeded the 300 s per-script bound (failed in 11 s without the env var) | unknown; hang once symlinks are real, investigate with `bash -x` |
 | fm-test-run | FAIL | "isolation failure: worker root mode is 755, expected 0700" | platform: row 21 (the runner's own `--jobs` isolation check) |
 | fm-lint | FAIL | "installer did not fall back to shasum -a 256" | test: exercises `fm-install-shellcheck.sh`, which dies on `uname` (row 19) before the fallback |
@@ -72,7 +72,7 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 ### Count to beat
 
 11 green, 12 red, 1 gate-skip across the 24 portable-parallel scripts, plus 14 of 15 in the real-herdr smoke test.
-Of the 12 red, 3 are row 21 (POSIX modes), 1 is row 19, 2 are guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`), 1 is a timeout, and 5 need a first look.
+Of the 12 red, 3 are row 21 (POSIX modes), 1 is row 19, 2 were the guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`, both green after slice 4), 1 is `fm-backend-herdr` (green after slice 3), 1 is a timeout, and 4 need a first look.
 The 131-script portable-serial lane was not run in Phase A (roughly 3 hours at this box's spawn rate); Phase B runs it once the row 21 decision is applied.
 
 ## Phase B slice 1 (PR-2): process identity and liveness
@@ -451,6 +451,184 @@ The `& '<path>' --login` form is pwsh's, locked as D2, and the installed configu
 The bootstrap is fire-and-forget: `pane run` types the launch line immediately after `tab create` returns, with no wait for a prompt.
 It worked on every run here, and `fm-spawn.sh`'s own 60-second worktree poll is the backstop if it ever does not, but a pane that swallowed its first line would fail with "treehouse get did not enter a worktree" rather than something that names the real cause.
 
+## Phase B slice 4: the two PreToolUse guards
+
+Phase A's red list carried two "guard fail-open suspects" (`fm-arm-pretool-check`, `fm-cd-pretool-check`) with the note "top of the Phase B list".
+Both reproduced on this machine, and the verdict is **three product defects and one test-fixture assumption**, not the one-of-each the labels guessed.
+All three product defects are Windows-only, and all three are in the direction that matters: a guard whose whole job is to refuse a command was refusing nothing, or refusing the wrong thing.
+
+| Symptom | Verdict | Root cause |
+| --- | --- | --- |
+| `fm-arm-pretool-check`: "D01 via codex must deny, got exit 0" | **product** | `bin/fm-arm-command-policy.mjs` imported the platform-default `node:path`, which is `path.win32` on Windows |
+| (found behind it) the A13/A06 class of allow cases denied | **product** | MSYS rewrites `--root /c/fm` to `C:/fm` before native `node.exe` sees it, while the command's own words stay POSIX |
+| (found behind that) D24, and every multi-line command | **product** | a native `jq.exe` writes stdout in text mode, so an interior LF arrives as CRLF |
+| `fm-cd-pretool-check`: "transport must fail open when node is unavailable: expected exit 0, got 127" | **test** | a curated `PATH` of symlinked MSYS binaries cannot load `msys-2.0.dll` |
+
+### The watcher seatbelt was completely inert on Windows
+
+`decision()` returns `allow` as soon as `analysis.protectedFound` is false, and that comes from `protectedIdentity(executable, root)`:
+
+```js
+const normalized = path.normalize(value);
+if (normalized === relative || normalized === path.join(root, relative) || normalized.endsWith(`/${relative}`)) return kind;
+```
+
+On Windows, Node's default `path` export is `path.win32`:
+
+```sh
+$ node -e "const p=require('path'); console.log(JSON.stringify(p.normalize('bin/fm-watch-arm.sh')))"
+"bin\\fm-watch-arm.sh"
+```
+
+So `normalized` never equals `bin/fm-watch-arm.sh`, never equals a `path.join` of a POSIX root, and never ends with `/bin/fm-watch-arm.sh`.
+No protected script was ever recognized, and every deny case in the acceptance matrix - all of them, through all five harness entry forms - allowed:
+
+```sh
+$ node bin/fm-arm-command-policy.mjs --command 'bin/fm-watch-arm.sh &' --root "$PWD" --home "$PWD"
+allow
+$ printf '%s' '{"tool_name":"Bash","tool_input":{"command":"bin/fm-watch-arm.sh &"}}' | bin/fm-arm-pretool-check.sh; echo $?
+0
+```
+
+The fix is one import: `import { posix as path } from "node:path";`.
+Every path this policy compares is either a word lifted out of a POSIX shell command line or the `--root`/`--home` its POSIX-shell transport passes in, so `/` is the only separator in the domain, and on macOS and Linux `node:path` already **is** `path.posix` - naming it costs those hosts nothing.
+The file's own `basename()` helper was already POSIX-only (`value.split("/")`), so this makes the module internally consistent rather than introducing a new convention.
+`bin/fm-cd-command-policy.mjs` imports no path module at all and needed nothing.
+
+### `--root` and `--home` arrived as Windows paths
+
+With the import fixed the deny cases pass and the **allow** cases start failing - the mirror-image defect, one layer up.
+MSYS rewrites every `/`-leading argument before a native Windows executable sees it (finding 12, measured at `herdr.exe`; `node.exe` is no different):
+
+```sh
+$ node -e 'console.log(JSON.stringify(process.argv.slice(2)))' --root /c/fm --home /c/fm --command 'source /c/fm/config/x-mode.env; x'
+["--root","C:/fm","--home","C:/fm","--command","source /c/fm/config/x-mode.env; x"]
+```
+
+The command string survives - it contains spaces, so MSYS does not treat it as a path - but `--home` does not.
+`xModePathAllowed` then compares `/c/fm/config/x-mode.env` from the command against `C:/fm/config/x-mode.env` from `--home`, the blessed `source config/x-mode.env` setup node stops being recognized, and a legitimate arm command is DENIED:
+
+```sh
+$ node bin/fm-arm-command-policy.mjs --command "source '$PWD/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180" --root "$PWD" --home "$PWD"
+deny	watcher-bundled	a protected watcher command must be the sole final command after approved setup nodes
+```
+
+That is fail-closed rather than fail-open, but it is still the guard deciding on bytes the shell never had.
+The same conversion rewrites a `--command` value that happens to be a single bare path, and the classifier's contract is to see exactly what the shell would run.
+
+The fix is in the transport, where it belongs - the policy stays the sole owner of classification and is simply handed correct inputs.
+`bin/fm-arm-pretool-check.sh` gained one MSYS-only branch just above the `node` call: convert the **policy script path** with `cygpath -w`, because that is the one argument that genuinely must be a Windows path (`node.exe` opens it), and export `MSYS2_ARG_CONV_EXCL='*'` so nothing else is touched.
+That is the same shape PR-3 used for `fm_backend_herdr_cli`, for the same reason.
+Without `cygpath` the branch does not fire and the call stays exactly what it was: a blanket `MSYS2_ARG_CONV_EXCL='*'` with an unconverted `/c/...` script path makes `node` look for `C:\c\...`, and the guard would then fail open on every command.
+
+`bin/fm-cd-pretool-check.sh` passes no `--root`/`--home`, and a `cd` command is never a single bare path, so it needs no equivalent branch and did not get one.
+
+### `jq` on Windows corrupts every multi-line command
+
+Behind those two is a third, and it is the sharpest.
+The slice-3 CRLF finding turns out to have a security consequence in the guards, not just a cosmetic one in the herdr adapter.
+
+Both transports lift the command out of the PreToolUse payload with `jq -r`, and a native `jq.exe` opens stdout in text mode.
+MSYS bash strips a trailing CRLF in command substitution, so a single-line command is exact - but a multi-line one is not:
+
+```
+# the value jq was given, then the value the transport got back
+raw:  62 69 6e 2f 66 6d 2d 77 61 74 63 5c 0a 68 ...    bin/fm-watc \ LF h-arm.sh &
+back: 62 69 6e 2f 66 6d 2d 77 61 74 63 5c 0d 0a 68 ... bin/fm-watc \ CR LF h-arm.sh &
+```
+
+`\` + LF is a shell line continuation, and the classifier joins it back into `bin/fm-watch-arm.sh`.
+`\` + CR + LF is not.
+So acceptance case D24 - the exact obfuscation the transport's prefilter comment promises to delegate to the classifier - was ALLOWED on Windows through every stdin entry form.
+More broadly, any multi-line Bash tool call, an everyday shape, was classified from bytes the shell would never run.
+
+The fix is a new `fm_hook_payload_string` in `bin/fm-hook-host-lib.sh`, which both transports already source at exactly the right point: after the `command -v jq` check and before the extraction.
+On a Windows userland it undoes exactly jq's translation, every CRLF back to one LF; on a POSIX host it runs the same `jq -r` pipeline the callers always ran and returns jq's own status, so the documented fail-open is untouched.
+
+The undo is lossless because text mode never touches a CR that is not immediately followed by an LF.
+A command that already contained CRLF is written as CR CR LF and comes back as CR LF; a lone CR is written and returned unchanged.
+Both are pinned by tests.
+
+`jq 1.7` grew `--binary` for this, and it is deliberately not used: the `jq` this machine resolves first is `jq-1.6`, and a guard that silently stops correcting itself on an older jq is worse than a two-line substitution.
+
+### The cd guard was right all along
+
+`test_fail_open_missing_node` builds a directory of symlinks to `bash sh git dirname cat printf sed tr jq`, sets `PATH` to it alone, and expects the transport to exit 0 because `node` is absent.
+On Windows it exits 127 with no output, before the transport runs a single line:
+
+```sh
+$ PATH="$fake" bash -c 'echo hi'
+.../fake/bash: error while loading shared libraries: ?: cannot open shared object file
+```
+
+Windows resolves an MSYS or MinGW executable's DLLs against the directory the image was launched from and then against `PATH`.
+A symlinked `bash.exe` in a fakebin that holds no `msys-2.0.dll`, reached through a `PATH` that is only that fakebin, cannot start.
+Dropping `msys-2.0.dll` in gets `bash` running and then `dirname` dies on `msys-intl-8.dll`; `git.exe` from `/mingw64` needs a different set again.
+
+The product is fine.
+Given a fakebin the child can actually execute, the transport fails open exactly as documented, with no output and exit 0.
+
+So this one is a **test-harness assumption**, and the fix is one helper rather than one edit.
+`tests/lib.sh` gained `fm_fakebin_link <fakebin> <tool>...`: on macOS and Linux it makes the same symlink the open-coded loops made, and on a Windows userland it writes a one-line wrapper that execs the tool by absolute path, so the loader looks in the tool's real directory.
+Eight test files open-code that loop; this slice converts the three in `tests/fm-cd-pretool-check.test.sh` and the one in `tests/fm-arm-pretool-check.test.sh` that its own red case needed, and leaves the rest to slice 6, which now has a one-line answer for them.
+
+### The new branches are environment-gated, deliberately
+
+All three Windows branches are selected by `$OSTYPE` (`msys*|mingw*|cygwin*`), the idiom `bin/fm-watch-arm.sh` already uses, because it is a shell variable and costs no fork on a hook that runs before every Bash tool call.
+`$OSTYPE` is inherited, so whatever starts the hook can set it.
+Forcing it on a POSIX host does two things: the CRLF undo runs, which can only make a CR-bearing command MORE likely to be read as a line continuation and therefore more likely to DENY; and the transport looks for `cygpath`, does not find it, and makes the unchanged call.
+Neither direction opens a bypass.
+The alternative, `uname -s`, costs a process per hook invocation and answers the same question less precisely.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `bin/fm-lint.sh` on all eight changed shell files, by explicit path | clean (ShellCheck 0.11.0, full extended analysis) |
+| `tests/fm-guard-windows-transport.test.sh` (new, 13 cases) | 13 / 13 on Windows |
+| `tests/fm-cd-pretool-check.test.sh` | **13 / 13, exit 0** - was failing at case 11 |
+| `tests/fm-arm-pretool-check.test.sh` | **146 / 146, exit 0** - was failing at case 37, on the first deny case of the acceptance matrix |
+| `bin/fm-test-run.sh --check-coverage` | `ok total=170 parallel=24 serial=134 serial_shards=4 herdr=12` |
+| Mutation: revert the `posix` import | the policy case fails (`expected exit 2, got 0`) |
+| Mutation: drop the CRLF substitution | the first three payload cases fail |
+| Mutation: drop `POLICY_ARG` + `MSYS2_ARG_CONV_EXCL` | the MSYS transport case fails |
+| Mutation: drop the `[ -n "$POLICY_WIN" ]` guard | the blank-cygpath case fails |
+| Mutation: swallow a failing `cygpath` | the failing-cygpath case fails |
+
+`tests/fm-guard-windows-transport.test.sh` fakes the userland rather than requiring one: `$OSTYPE`, a `jq` that emits the exact bytes a text-mode stdout would, a `cygpath` that marks its answer, and a `node` that records its argv and whether `MSYS2_ARG_CONV_EXCL` reached it.
+Both branches therefore run on Linux and macOS CI too, the way `tests/fm-proc-lib.test.sh` and `tests/fm-backend-herdr-windows.test.sh` already do.
+Its four transport cases run with the fakebin as the child's **whole** `PATH`, so the "no cygpath" case really has no cygpath; on a Windows host the real one is otherwise still on `PATH` and the case passes for the wrong reason.
+
+### What the acceptance review changed
+
+An adversarial security review before the slice landed answered the question that mattered most - can any of the three fixes turn a DENY into an ALLOW on any platform - with a proof rather than an assertion, and found no HIGH or MED security finding.
+The argument worth keeping: the top-level lexer already treats CR as whitespace (`bin/fm-arm-command-policy.mjs:199`), so `\r\n` and `\n` produce an identical token stream at top level and the CRLF undo is a no-op there.
+It differs only inside a backslash escape or inside quotes, and there it can only *reconstruct* a protected identity - `bin/fm-watc\` + LF becomes `bin/fm-watch-arm.sh` - which moves allow to deny.
+It cannot remove a `&`, a `|`, or a redirection, because it rewrites nothing but `\r\n`.
+So `policy(undo(CMD)) = allow` implies `policy(CMD) = allow`, and an `$OSTYPE=msys` spoof on a Linux host buys an attacker nothing.
+
+Three coverage gaps became three new cases, each mutation-verified:
+
+- **`cygpath` answering with a blank line** was unpinned. Taking that answer would hand `node` an empty script path with conversion already disabled - no policy, and a guard that allows everything. Deleting the `[ -n "$POLICY_WIN" ]` guard now fails a case.
+- **`cygpath` present but exiting non-zero** was unpinned; only its total absence was covered. Swallowing that failure now fails a case.
+- **`fm_fakebin_link`'s absolute-path skip** was unpinned, so a shell builtin (`command -v printf` answers `printf`, not a path) would have been placed as a broken entry on a child's whole `PATH`.
+
+One finding is recorded rather than fixed, in the test's own comment: the `posix` import is the one fix in this slice that **cannot** be faked onto a POSIX host.
+Node keys its `path` export off `process.platform`, not off anything in the environment, so on Linux and macOS the default export already is `path.posix` and reverting the import cannot fail any test there.
+Only a Windows leg catches that regression, which is one more argument for slice 5's CI lane.
+
+### Not fixed here
+
+If `cygpath` is ever unavailable on a Windows host, the transport keeps the plain call, which is the safe direction for a protected command but silently reintroduces the false DENY of a blessed `source <home>/config/x-mode.env` arm.
+It is not warned about, because both transports' contract is that an ALLOW writes nothing to stdout or stderr and the suites assert exactly that.
+`cygpath` ships with Git Bash, so this is a pathological configuration rather than a likely one.
+
+The arm suite's own `test_direct_policy_contract` invokes `node "$POLICY" --root "$ROOT" --home "$ROOT"` directly rather than through the transport, so those cases still hand the policy a converted `--root` on Windows.
+No case there embeds an absolute path in its command, so none is affected today, but a future one that did would fail on Windows for a reason that is not the product's.
+
+`tests/fm-turnend-guard.test.sh` and `tests/fm-x-mode.test.sh` open-code the same fakebin loop at three more sites.
+They are slice 6's, and `fm_fakebin_link` is what they need.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -483,4 +661,9 @@ bash -c '. bin/backends/herdr.sh; fm_backend_herdr_current_path <lab>:<pane>'
 herdr pane get <pane> --session <lab> | jq -c '.result.pane | {cwd, foreground_cwd}'
 # the CRLF finding
 printf '{"a":["x","y"]}' | jq -r '.a[]' | od -c
+# slice 4 (each of these printed the wrong answer before the fix)
+node bin/fm-arm-command-policy.mjs --command 'bin/fm-watch-arm.sh &' --root "$PWD" --home "$PWD"
+node bin/fm-arm-command-policy.mjs --command "source '$PWD/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180" --root "$PWD" --home "$PWD"
+node -e 'console.log(JSON.stringify(process.argv.slice(2)))' --root /c/fm --home /c/fm
+printf '%s' '{"tool_input":{"command":"bin/fm-watch-arm.sh &"}}' | bin/fm-arm-pretool-check.sh; echo $?
 ```
