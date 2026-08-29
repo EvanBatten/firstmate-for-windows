@@ -29,6 +29,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$SCRIPT_DIR/fm-cursor-lib.sh"
+# shellcheck source=bin/fm-proc-lib.sh
+. "$SCRIPT_DIR/fm-proc-lib.sh"
 
 detect_own() {
   # Layer 1: environment markers for verified harnesses.
@@ -73,9 +75,14 @@ detect_own() {
   # without verifying it reaches children AND that it cannot survive in a
   # multiplexer's stored environment, which is the precedence hazard above.
   # Layer 2: walk the parent chain and match the command name.
+  # bin/fm-proc-lib.sh owns "which process is this": on macOS and Linux each
+  # helper below runs exactly the `ps -o ...` this loop used to run itself, and
+  # the prime is a no-op. On Git Bash it is the only thing that can answer at
+  # all, and the prime is what keeps the walk to one pwsh process.
   local pid=$$ comm args argv0
+  fm_proc_chain_prime "$pid"
   for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
+    comm=$(fm_proc_comm "$pid") || break
     argv0=$(fm_cursor_argv0_for_pid "$pid" "$comm" 2>/dev/null || true)
     if fm_cursor_process_matches "$comm" '' "$argv0"; then
       echo cursor
@@ -97,7 +104,7 @@ detect_own() {
       pi) echo pi; return ;;
       node*|python*)
         # Bare interpreter: match the harness name in its script path.
-        args=$(ps -o args= -p "$pid" 2>/dev/null)
+        args=$(fm_proc_args "$pid")
         case "$args" in
           *claude*) echo claude; return ;;
           *codex*) echo codex; return ;;
@@ -106,7 +113,7 @@ detect_own() {
           *" pi "*|*/pi) echo pi; return ;;
         esac ;;
     esac
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    pid=$(fm_proc_ppid "$pid")
     if [ -z "$pid" ] || [ "$pid" -le 1 ]; then
       break
     fi
