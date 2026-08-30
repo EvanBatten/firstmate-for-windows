@@ -48,8 +48,13 @@ jobs:
           bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
           cygpath -w "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # Same single owner of the lint definition as ci.yml. Do not re-spell the
-      # checks here.
-      - run: bin/fm-lint.sh
+      # checks here. One worker, not the default two: with two, each ShellCheck
+      # holds its own cross-file state and the second real run of this lane
+      # (33332020565) died at 65 minutes with "getMBlocks: VirtualAlloc
+      # MEM_COMMIT failed: The paging file is too small" (exit 251) on the
+      # 7 GB runner. Halving the resident analyses is the fix that needs no
+      # third-party pagefile action.
+      - run: bin/fm-lint.sh --jobs 1
 
   # The two portable parallel shards, run strictly serially. --jobs N with N>1
   # fails every script on this platform: the runner's own per-worker isolation
