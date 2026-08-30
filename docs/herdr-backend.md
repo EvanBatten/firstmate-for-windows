@@ -313,6 +313,15 @@ Its before/after tripwire requires the live default-session snapshot to remain b
 The helper's header and `--help` own exact commands.
 Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never duplicate the destructive policy.
 
+## Windows (Git Bash / MSYS)
+
+Two MSYS-only branches: `fm_backend_herdr_cli` sets `MSYS2_ARG_CONV_EXCL='*'` and converts `--cwd` itself, because MSYS otherwise rewrites `/`-leading arguments before a native `herdr.exe` sees them; and `fm_backend_herdr_canonical_socket_path` accepts `C:\...` socket paths.
+Those two are selected by capability (is this `herdr` a PE image, is there a `cygpath`), never by `uname`, so the fake `herdr` in the test suites keeps taking the POSIX path on every host.
+
+A third reads in the other direction. A native `jq.exe` opens stdout in text mode and ends every record CR LF, and command substitution eats only the last terminator, so a read that iterates an array keeps a CR on every record but its last - a workspace id that no longer matches, or a tab id sent back to `herdr tab close`.
+All thirteen reads that can emit more than one record go through `fm_backend_herdr_jq_rows`, which undoes exactly that terminator on a Windows userland and runs the identical pipeline everywhere else; a read whose filter iterates an array but collects to at most one record is already exact, and stays off it.
+This one is keyed on `$OSTYPE` rather than on the binary, because removing a CR that immediately precedes an LF `jq` itself wrote cannot change what a POSIX `jq`'s output means. It captures through a `&& printf X` sentinel so the last record's terminator is never guessed at: a CR that is the final byte of a VALUE survives, which a trailing-CR strip would have eaten.
+
 ## Active limits
 
 - Herdr remains experimental.
