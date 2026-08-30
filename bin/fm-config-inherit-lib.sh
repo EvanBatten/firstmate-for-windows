@@ -53,6 +53,10 @@
 #
 # shellcheck source=bin/fm-startup-memory-budget-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-startup-memory-budget-lib.sh"
+# bin/fm-path-lib.sh owns "is this path under that directory", asked below about
+# a path git printed and a path this shell resolved.
+# shellcheck source=bin/fm-path-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-path-lib.sh"
 
 # The one shared data file in this inheritance contract. There is deliberately
 # no shared learnings file.
@@ -156,16 +160,18 @@ destination_allows_inherited_item() {
   dest_parent=${dest_config%/*}
   dest_name=${dest_config##*/}
   [ -n "$dest_parent" ] && [ "$dest_parent" != "$dest_config" ] || return 1
-  dest_parent_abs=$(cd "$dest_parent" 2>/dev/null && pwd -P) || return 1
+  dest_parent_abs=$(fm_path_canon_dir "$dest_parent") || return 1
   if ! git -C "$dest_parent_abs" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     return 0
   fi
   top=$(git -C "$dest_parent_abs" rev-parse --show-toplevel 2>/dev/null) || return 1
+  # $dest_parent_abs came from `pwd -P` and $top from git. On Windows those are
+  # two namespaces for one directory (`/c/Users/...` and `C:/Users/...`), so the
+  # prefix test below would never match and EVERY inheritable item would be
+  # refused. Reduce git's answer through the same route the destination took.
+  top=$(fm_path_canon_dir "$top") || return 1
   dest_path="$dest_parent_abs/$dest_name/$item"
-  case "$dest_path" in
-    "$top"/*) rel_path=${dest_path#"$top"/} ;;
-    *) return 1 ;;
-  esac
+  rel_path=$(fm_path_strip_dir_prefix "$top" "$dest_path") || return 1
   git -C "$top" check-ignore -q -- "$rel_path" 2>/dev/null
 }
 

@@ -40,6 +40,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
+# bin/fm-path-lib.sh owns "is this path absolute, and do these two name the same
+# place"; both questions are asked here about paths git printed.
+# shellcheck source=bin/fm-path-lib.sh
+. "$SCRIPT_DIR/fm-path-lib.sh"
 # Inert unless FM_TIMING_LOG names a file; only the deferred network stage sets it.
 # shellcheck source=bin/fm-timing-lib.sh
 . "$SCRIPT_DIR/fm-timing-lib.sh"
@@ -147,13 +151,15 @@ packed_refs_lock_path() {
   local lock abs
   lock=$(git -C "$PROJ" rev-parse --git-path packed-refs.lock 2>/dev/null) || return 1
   [ -n "$lock" ] || return 1
-  case "$lock" in
-    /*) printf '%s\n' "$lock" ;;
-    *)
-      abs=$(cd "$PROJ" && pwd -P) || return 1
-      printf '%s/%s\n' "$abs" "$lock"
-      ;;
-  esac
+  # git answers a path relative to $PROJ in a plain clone and an absolute one
+  # when the git dir lives elsewhere. On Windows that absolute answer is
+  # `C:/...`, which a bare `/*` test misfiles as relative.
+  if fm_path_is_absolute "$lock"; then
+    printf '%s\n' "$lock"
+  else
+    abs=$(cd "$PROJ" && pwd -P) || return 1
+    printf '%s/%s\n' "$abs" "$lock"
+  fi
 }
 
 # Run `git -C "$PROJ" fetch origin --prune --quiet`, tolerating an orphaned
@@ -318,9 +324,14 @@ sync_project() {
     return 0
   fi
   # Both sides are physical paths (git resolves --show-toplevel through symlinks),
-  # so a symlinked clone dir still compares equal to its own root.
-  proj_abs=$(cd "$PROJ" && pwd -P) || proj_abs=""
-  if [ "$proj_top" != "$proj_abs" ]; then
+  # so a symlinked clone dir still compares equal to its own root. They are not
+  # yet in the same NAMESPACE, though: on Windows git prints `C:/Users/...` and
+  # `pwd -P` prints `/c/Users/...` for that one directory, so reduce git's answer
+  # through the same route before comparing (a no-op on macOS and Linux, where
+  # `pwd -P` of an absolute path is that path).
+  proj_abs=$(fm_path_canon_dir "$PROJ") || proj_abs=""
+  proj_top_here=$(fm_path_canon_dir "$proj_top") || proj_top_here=""
+  if [ -z "$proj_top_here" ] || ! fm_path_dirs_equal "$proj_top_here" "$proj_abs"; then
     echo "$label: skipped: not a clone root (git would act on $proj_top)"
     return 0
   fi
