@@ -2125,6 +2125,146 @@ Two reds on `pr-7` were checked against the integration branch in a worktree at 
 The ancestry suite's red is new information: it stops on `dofork: child -1 - CreateProcessW failed`, errno 2, for the version-named fake `claude` its fixture builds under a `claude-install/share/claude/versions/2.1.220` tree.
 It is the same class as the serial lane's spawn-cost verdicts rather than anything about the session identity the suite's nine passing cases cover.
 
+## Integration: the port on top of upstream `1260adc`
+
+Measured 2026-08-30 on the same machine and toolchain as Phase A, after the gnhf run ended at `ec17030` (slice 13).
+
+`windows` was fast-forwarded from `4f38fc5` to `ec17030` and then merged with `upstream/main`, which had moved nine commits past `f66be0f` in the meantime (`f66be0f..1260adc`: 112 files, +15560 / -4610), including the backlog atomicity change (#3322, `bin/fm-spawn.sh`), the trusted process-event bindings (#3247), the retirement of the PR-check migration machinery (#3299), the centralized shell fixtures (#3296, `tests/lib.sh`) and the harness adapter references (#3289).
+The merge is `a59b607`.
+
+### The two conflicts, and how each was resolved
+
+| File | Upstream side | Port side | Resolution |
+| --- | --- | --- | --- |
+| `bin/fm-spawn.sh` | #3322 inserts a guarded `fm_backlog_directory_present` check before the library sources | slice 10 sources `bin/fm-path-lib.sh` at the same anchor | both, upstream's block first; the path library is a leaf, so the order is immaterial |
+| `bin/fm-test-run.sh` | adds `fm-harness-adapter-references.test.sh` to the pure-contract-unit family | slices 1 and 10 add `fm-proc-lib.test.sh` and `fm-path-lib.test.sh` at the same lines | the union, one name per line as the list is written |
+
+Fifteen more files that both sides touched merged cleanly, among them `tests/lib.sh`, `bin/fm-wake-lib.sh`, `bin/fm-teardown.sh` and `tests/fm-watcher-lock.test.sh`.
+`bin/fm-lint.sh bin/fm-spawn.sh bin/fm-test-run.sh` is clean on the result.
+
+### Verification on the merged tree
+
+Every suite below ran from the merged checkout with `MSYS=winsymlinks:nativestrict`.
+The first pass ran four batches concurrently next to a full-repository lint, which this box cannot afford: `fm-arm-pretool-check` died at case D55 with `dofork: child -1 - forked process ... died unexpectedly ... 0xC0000142` and `fork: retry: Resource temporarily unavailable`, and `fm-watcher-lock`'s live-stealer case outlived its own two-second hold (`stealpid=` came back empty because the holder had already released).
+Both are the platform's fork cost under load rather than anything in the merge, and both were rerun alone; the table carries the solo numbers.
+
+| Suite | Result | Against |
+| --- | --- | --- |
+| `tests/fm-backend-herdr-smoke.test.sh` (real herdr 0.8.2) | **16/16** | 14/15 before the port |
+| `tests/fm-backend-herdr.test.sh` | **181/181** | slice 9 |
+| `tests/fm-backend-herdr-windows.test.sh` | **43/43** | slice 12 |
+| `tests/fm-proc-lib.test.sh` | pass | slice 1 |
+| `tests/fm-path-lib.test.sh` | pass | slice 10 |
+| `tests/fm-guard-windows-transport.test.sh` | pass | slice 4 |
+| `tests/fm-arm-pretool-check.test.sh` (alone) | **146/146** (703 s); D55 under load was the fork failure above | slice 4 |
+| `tests/fm-cd-pretool-check.test.sh` | pass (631 s) | slice 4 |
+| `tests/fm-subagent-pretool-check.test.sh` | pass | slice 11 |
+| `tests/fm-cursor-harness.test.sh` | pass | slice 11 |
+| `tests/fm-spawn-batch.test.sh` | pass | the `fm-spawn.sh` conflict |
+| `tests/fm-watcher-lock.test.sh` (alone) | 19 cases, then `restart did not attach to the verified healthy peer` (below) | slice 11: 18 cases, then reused-pid recovery |
+| `tests/fm-documentation-audiences.test.sh` | pass | slice 12 |
+| `tests/fm-harness-adapter-references.test.sh` (new upstream) | pass | - |
+| `tests/fm-lint-workflows.test.sh` | pass | slice 5 |
+| `tests/fm-backlog-atomicity.test.sh` (new upstream) | 22 ok, then `a before-commit interruption was reported as success` | fixture: `ps -o ppid=` (below) |
+| `tests/fm-pr-check-security.test.sh` | case 1 red, then green after finding 35; stops at `could not prepare a GitLab poll` | row 24 (row 21's `fm_pr_poll_prepare`) |
+| `tests/fm-session-start.test.sh` | 2 ok, then `cannot write session lock` | row 21, identical to slice 11 |
+| `tests/fm-x-mode.test.sh`, `tests/fm-procevent.test.sh`, `tests/fm-test-run.test.sh` | the mode-700/600 assertion each | row 21, identical to slice 11 |
+
+Nothing that was green before the merge is red after it, and the only reds are the row 21 family, one fixture on a new upstream test, and one finding that was hiding a green suite, both below.
+
+### Finding 35: a `$'\r'` literal loses its CR inside an array compound assignment
+
+`fm-pr-check-security` was the serial lane's first unclassified red, and slice 11 named it as the one to take first because it asserts a refusal.
+The parser is correct; the fixture cannot say what it means on this bash.
+
+`fm_pr_url_parse` refuses `https://github.com/o/r/pull/1<CR>`, `<TAB>`, `<LF>next`, `<CR><LF>next`, `\001`, `\033` and `\177` when each is handed to it directly - measured with the same `$'...'` forms the test file uses, in a `for` list, where every one is rejected.
+What the suite's `INVALID_URLS` array actually holds for its row 22 is `https://github.com/o/r/pull/1` with no CR at all, which is a valid URL, so "parser accepted a rejected raw-byte URL class" was the parser being right.
+Isolated to the syntax:
+
+```sh
+CR=$'\r'
+arr=(
+  $'a\r'          # stored as: a
+  "b"$'\r'        # stored as: b
+  $'c\r'""        # stored as: c
+  "d${CR}"        # stored as: d\r
+  $'e\r\nnext'    # stored as: e\nnext
+)
+one=( $'h\r' )    # stored as: h
+x=$'a\r'          # stored as: a\r
+```
+
+Git for Windows bash 5.2.37 drops every CR that an ANSI-C literal produces inside an array compound assignment - one line or many, at the end of the element or before an interior LF - and keeps a CR that arrives through parameter expansion.
+A plain assignment and a `for` word list keep it in either form.
+It is the same CR-stripping reflex that finding 29 recorded for `jq` and slice 6 for `grep`, `sed` and `awk`, this time inside the shell's own parser when it re-reads the compound assignment's text.
+
+Fixed in the fixture only (`d305e71`): `CR=$'\r'` once, and the two CR rows become `"https://github.com/o/r/pull/1${CR}"` and `"https://github.com/o/r/pull/1${CR}"$'\nnext'`, which store the same bytes on every platform.
+The suite now passes the whole 87-row adversarial matrix here and stops at the GitLab poll registration, which is row 24.
+Seven other test files spell a `$'...\r'` literal; `fm-backend-herdr-windows` and `fm-guard-windows-transport` are green, and the rest sit inside `case` patterns or `tr -d` arguments rather than array literals.
+The mechanism is worth knowing about for any Windows test that stages a CR: build it through a variable.
+
+### The lock suite's live-stealer case, and row 34 again
+
+`fm-watcher-lock` stopped at case 14 in both the loaded and the solo run, one case earlier than slice 11 reached, at `live steal mutex owner changed: rc=1 held=999999 lockpid=999999 stealpid=`.
+The answer in that line is the right one - the stale lock was refused and its pid did not change - and what changed is the fixture's view of the holder: `stealpid=` is empty because the holder's `sleep 2` had already ended and released the steal mutex before the contender read it.
+Measured on both sides of the merge, with a stale lock and a live steal mutex staged by hand:
+
+| Tree | `fm_lock_try_acquire` wall clock |
+| --- | --- |
+| `ec17030` (before the merge) | 1953 ms |
+| `a59b607` (after) | 1893 ms idle, 3988 ms while the other suites ran |
+
+Upstream's hunks in `bin/fm-wake-lib.sh` (+100/-28) do not touch the lock functions, so the merge changed nothing here; a stale-lock probe on Git Bash simply costs about two seconds (`fm_pid_alive` on a dead native pid is 1110 ms of it, a `ps -W` table scan), which is the whole of the fixture's hold.
+Row 34's shape, one case over: a hold expressed as a number of seconds is a bet on the platform.
+Fixed the same way slice 11 fixed its neighbour (`5d209ad`): the holder keeps the steal mutex until the contender has written its answer, bounded at 60 s, so the case measures the lock and not the clock.
+With that the suite reaches 19 cases here, one past slice 11, and stops at `restart did not attach to the verified healthy peer: watcher: FAILED - no live watcher with a fresh beacon`, which is unclassified and reads as a beacon-freshness budget of the same family.
+
+### The new upstream fixture that cannot stage its interruption here
+
+`test_dispatch_defers_interruption_across_backlog_commit` (#3322) writes a fake `tasks-axi` whose `start` verb finds the spawn's pid with `ps -o ppid= -p "$PPID"` and sends it `TERM` before or after the backlog commit.
+MSYS `ps` answers `ps: unknown option -- o` (row 2), `spawn_pid` is empty, and the fake exits 1 before any signal is sent, so the spawn was never interrupted and its exit 0 is honest.
+Classified as a fixture red of row 2's family, measured; ten test files still spell `ps -o` (`tests/fm-backend.test.sh`, `fm-backlog-handoff`, `fm-home-summary-refresh`, `fm-procevent`, `fm-procevent-when`, `fm-session-lock-ancestry`, among them), which is the shape a `tests/lib.sh` helper over `bin/fm-proc-lib.sh` would take.
+Not fixed here: it is upstream's fixture, one week old, and the merge is not the place to widen the port.
+The same suite prints `warning: in the working copy of 'README.md', LF will be replaced by CRLF` from the repositories it initializes, because the fixture inherits this machine's global `core.autocrlf=true`; it is noise, not a failure.
+
+### The live home after the merge
+
+`C:\Users\ebatt\firstmate` was fast-forwarded to the same head.
+`.claude/skills` stayed a symlink (row 26), `bin/*.sh` stayed LF (row 1), and the detect-only bootstrap prints only the herdr NOTICE and exits 0 (row 14):
+
+```sh
+git -C C:/Users/ebatt/firstmate merge --ff-only origin/windows
+MSYS=winsymlinks:nativestrict FM_BOOTSTRAP_DETECT_ONLY=1 bin/fm-bootstrap.sh
+#   NOTICE: auto-detected herdr runtime (HERDR_ENV=1) - spawning into the EXPERIMENTAL herdr backend. ...
+```
+
+A third captain loop was then run on the merged tree, end to end, from this home (`slugify-accents-c3`: transliterate accented letters, `Café Olé` → `cafe-ole`).
+Every leg matched or improved on Phase C:
+
+- The SessionStart hook's digest came up read-only with `cannot locate harness process in ancestry` - row 22's `exec` severing, in the hook whose registration is written exactly that way - and the first mate diagnosed it unprompted, confirmed the year-old lock's owner was dead, ran `bin/fm-session-start.sh` from its own shell, and recorded the gotcha in its learnings. The lock came out as `161364` with the slice 8 sidecar (`state/.lock.session` carrying the session id) beside it.
+- Session start's network checks passed in 23 s, and fleet-sync refreshed the sandbox clone to origin - row 23's first live proof, since before slice 10 every project clone was silently skipped.
+- One order, one crewmate: spawn onto herdr into its own workspace, treehouse worktree leased, brief delivered, and the crewmate's finish reached the idle primary through the Stop-hook wake (`busy-state ... state=idle source=claude-hook event=stop`) - the leg that was zero-for-Phase-C before slice 8.
+- [PR #3](https://github.com/EvanBatten/fm-windows-e2e/pull/3), NFD decomposition with the combining marks stripped, one new test, CI green on `ubuntu-latest`, merged 2026-08-30T19:48:27Z on the captain's word - through the forge tool after the guarded path refused (row 24, unchanged).
+- `bin/fm-teardown.sh` stopped the worker, returned the worktree, closed the tab and cleared every `state/slugify-accents-c3.*` file; the backlog row is Done with the PR link.
+
+One observation the first mate raised itself, recorded and not acted on: the hook's read-only digest means every session start on this machine runs the digest twice, and the hook's copy is wasted.
+A port follow-up could skip or de-`exec` the tracked SessionStart hook on MSYS; that is row 22's remaining half and it costs one banner and one redundant digest per session today.
+
+### The CI lane's first run
+
+`.github/workflows/windows-port.yml` had never run: every earlier push went to the `gnhf/*` and `pr-*` branches, and the lane triggers on `windows`.
+Run `33328744694` on the merged head, on a clean `windows-latest` runner:
+
+| Job | Outcome |
+| --- | --- |
+| Behavior portable parallel 1 | `total=11 failed=3 skipped_gate=1` - `fm-x-mode`, `fm-test-run`, `fm-captain-hold-lifecycle` |
+| Behavior portable parallel 2 | `total=13 failed=1` - `fm-pr-merge` |
+| Lint (Windows) | killed by its own 60-minute cap while still progressing |
+
+The two shards together are **19 green / 4 red / 1 gate-skip of 24 - the exact standing count and the exact four reds slice 6 documented**, so the lane reproduces this machine's classification on hardware it has never seen.
+The lint job is the one CI-only finding: this box lints in well under an hour, the runner does not, and `fm-lint.sh` already uses its bounded two workers; the cap was raised to 120 minutes as a hang tripwire rather than a budget (`ac34c9b`).
+`fm-captain-hold-lifecycle` also prints `shasum: command not found` on the runner (its line 208); `fm_pr_sha256` falls back to `sha256sum`, so it is noise there, and the suite's red is the documented slice 6 verdict either way.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
