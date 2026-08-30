@@ -14,7 +14,7 @@ set -u
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$(fm_test_base_path)}
 TMP_ROOT=$(fm_test_tmproot fm-bootstrap-network-parallel)
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 export FM_BACKEND_CMUX_BUNDLE_BIN="$TMP_ROOT/no-bundled-cmux"

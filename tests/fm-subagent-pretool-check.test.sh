@@ -260,12 +260,14 @@ test_malformed_transport_fails_open() {
 }
 
 test_missing_jq_stdin_transport_fails_open() {
-  local fakebin="$TMP_ROOT/no-jq-bin" bash_bin cat_bin rc=0
-  bash_bin=$(command -v bash) || fail "test needs bash to simulate the hook shebang"
-  cat_bin=$(command -v cat) || fail "test needs cat to feed stdin without jq"
+  local fakebin="$TMP_ROOT/no-jq-bin" rc=0
+  command -v bash >/dev/null || fail "test needs bash to simulate the hook shebang"
+  command -v cat >/dev/null || fail "test needs cat to feed stdin without jq"
   mkdir -p "$fakebin"
-  ln -sf "$bash_bin" "$fakebin/bash"
-  ln -sf "$cat_bin" "$fakebin/cat"
+  # fm_fakebin_link, not a bare symlink: a symlinked MSYS bash launched from a
+  # directory that holds no msys-2.0.dll dies with "error while loading shared
+  # libraries" and exit 127, which reads exactly like the guard failing closed.
+  fm_fakebin_link "$fakebin" bash cat
   : > "$OUT"; : > "$ERR"
   printf '%s' '{"tool_name":"Agent"}' \
     | env PATH="$fakebin" FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \

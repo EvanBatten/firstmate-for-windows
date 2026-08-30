@@ -6,7 +6,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$(fm_test_base_path)}
 TMP_ROOT=$(fm_test_tmproot fm-startup-memory-budget)
 BUDGET="$ROOT/bin/fm-startup-memory-budget.sh"
 BOOTSTRAP="$ROOT/bin/fm-bootstrap.sh"
