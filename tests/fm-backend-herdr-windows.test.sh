@@ -19,6 +19,13 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Herdr injects a pane identity into every process it manages, so a suite run
+# from inside the developer's own herdr pane inherits a launcher these fakes
+# never model and the adapter goes looking for its socket. Dropped here rather
+# than by sourcing tests/herdr-test-safety.sh, since nothing in this file goes
+# anywhere near a real herdr.
+unset HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_SESSION
+
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-windows-tests)
 
 US=$'\x1f'
@@ -573,6 +580,293 @@ test_current_path_reads_the_pane_once() {
   pass "fm_backend_herdr_current_path: both cwd fields come from a single pane get, so the fallback cannot race the poll"
 }
 
+# --- fm_backend_herdr_jq_rows: multi-row reads under a text-mode jq ----------
+
+# A `jq` that prints exactly the bytes in FM_FAKE_JQ_OUT (through printf %b, so
+# a case scripts \r and \n directly), exits FM_FAKE_JQ_STATUS, and logs its own
+# argument list unit-separated. It parses nothing: these cases are about what
+# the funnel does to jq's OUTPUT and which arguments reach it, and a scripted
+# answer is the only way to model a text-mode stdout from a POSIX host.
+make_scripted_jq() {  # <dir> -> echoes fakebin dir
+  local fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/jq" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ -n "${FM_FAKE_JQ_LOG:-}" ]; then
+  {
+    printf 'jq'
+    for a in "$@"; do printf '\x1f%s' "$a"; done
+    printf '\n'
+  } >> "$FM_FAKE_JQ_LOG"
+fi
+cat > /dev/null
+printf '%b' "${FM_FAKE_JQ_OUT:-}"
+exit "${FM_FAKE_JQ_STATUS:-0}"
+SH
+  chmod +x "$fb/jq"
+  printf '%s\n' "$fb"
+}
+
+# A `jq` that is the REAL jq with a Windows text-mode stdout: it runs the real
+# binary (resolved here, before this fakebin shadows it) and terminates every
+# record CR LF, which is what a native jq.exe does. Used by the cases that need
+# real filter semantics rather than a scripted answer. The `${line%$'\r'}` keeps
+# it honest on Windows, where the real jq already ended the record that way.
+#
+# The three cases that use it are the only ones in this file that need a real
+# tool rather than a fake, so they note and skip where jq is absent - which is
+# what tests/fm-backend-herdr.test.sh does with the whole suite for the same
+# reason - instead of failing a box that simply has not installed it.
+have_real_jq() {  # <what-is-skipped>
+  command -v jq >/dev/null 2>&1 && return 0
+  echo "note: jq not found; skipping $1" >&2
+  return 1
+}
+
+make_text_mode_jq() {  # <dir> -> echoes fakebin dir
+  local fb="$1/fakebin" real
+  real=$(command -v jq) || fail "the text-mode jq fake needs a real jq to wrap"
+  mkdir -p "$fb"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -u\n'
+    printf "real='%s'\n" "$real"
+    cat <<'SH'
+out=$("$real" "$@") || exit $?
+[ -n "$out" ] || exit 0
+while IFS= read -r line; do printf '%s\r\n' "${line%$'\r'}"; done <<EOF
+$out
+EOF
+exit 0
+SH
+  } > "$fb/jq"
+  chmod +x "$fb/jq"
+  printf '%s\n' "$fb"
+}
+
+# A `herdr` that answers each read-only listing from a file named for its
+# subcommand pair ($FM_FAKE_HERDR_DIR/workspace-list.out and friends), so a
+# case can script a whole read path without having to order its calls, and
+# logs every invocation unit-separated to FM_HERDR_LOG when one is set.
+# `pane get` is answered from its own argument rather than a file, because the
+# presence check compares the id it asked for against the id it got back.
+make_listing_herdr() {  # <fakebin>
+  cat > "$1/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+dir=${FM_FAKE_HERDR_DIR:?}
+if [ -n "${FM_HERDR_LOG:-}" ]; then
+  {
+    printf 'herdr'
+    for a in "$@"; do printf '\x1f%s' "$a"; done
+    printf '\n'
+  } >> "$FM_HERDR_LOG"
+fi
+if [ "${1:-}" = status ]; then
+  printf '{"client":{"version":"0.8.2","protocol":20},"server":{"running":true}}\n'
+  exit 0
+fi
+if [ "${1:-}" = pane ] && [ "${2:-}" = get ]; then
+  printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "${3:-}"
+  exit 0
+fi
+file="$dir/${1:-}-${2:-}.out"
+[ -f "$file" ] && cat "$file"
+exit 0
+SH
+  chmod +x "$1/herdr"
+}
+
+# Every assertion below reads the funnel's stdout with CR and LF made visible
+# (`tr '\r\n' 'RN'`), because the bytes ARE the subject here and a terminal
+# renders a stray CR as nothing at all - which is exactly how this defect
+# survived a passing-looking refusal message for as long as it did.
+
+test_jq_rows_posix_branch_passes_every_byte_through() {
+  local fb out
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-posix-bytes")
+  out=$( FM_FAKE_JQ_OUT='w1\r\nw7\r\n' \
+    adapter "$fb" 'OSTYPE=linux-gnu; fm_backend_herdr_jq_rows "{}" ".x[]" | tr "\r\n" "RN"' )
+  [ "$out" = "w1RNw7RN" ] ||
+    fail "the POSIX branch must hand back jq's bytes untouched, got '$out'"
+  pass "fm_backend_herdr_jq_rows: a POSIX host still gets jq's own bytes, CRs included"
+}
+
+test_jq_rows_msys_branch_removes_the_record_terminator_cr() {
+  local fb out
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-msys-strip")
+  out=$( FM_FAKE_JQ_OUT='w1\r\nw7\r\n' \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" ".x[]" | tr "\r\n" "RN"' )
+  [ "$out" = "w1Nw7N" ] ||
+    fail "a text-mode jq's CR must not survive into a multi-row read, got '$out'"
+  pass "fm_backend_herdr_jq_rows: a Windows userland gets LF-terminated rows out of a text-mode jq"
+}
+
+test_jq_rows_msys_branch_keeps_a_cr_that_is_not_a_terminator() {
+  local fb out
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-msys-interior")
+  out=$( FM_FAKE_JQ_OUT='a\rb\r\nc\r\n' \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" ".x[]" | tr "\r\n" "RN"' )
+  [ "$out" = "aRbNcN" ] ||
+    fail "only the CR jq added before its own LF may be removed, got '$out'"
+  pass "fm_backend_herdr_jq_rows: a CR inside a value survives - the undo is exact, not a blanket strip"
+}
+
+test_jq_rows_msys_branch_is_the_exact_inverse_of_text_mode() {
+  local fb msys posix
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-msys-inverse")
+  # A jq answer whose value legitimately ENDS in a CR. Text mode renders it
+  # `1 CR CR LF`; a POSIX jq renders the same value `1 CR LF`. The Windows
+  # branch must turn the first into the second exactly - a funnel that guessed
+  # the trailing CR was half a terminator would answer `1`, and a tab really
+  # labelled "1<CR>" would then pass the seeded-default-tab prune gate on
+  # Windows and nowhere else.
+  msys=$( FM_FAKE_JQ_OUT='1\r\r\n' \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" ".x[]" | tr "\r\n" "RN"' )
+  posix=$( FM_FAKE_JQ_OUT='1\r\n' \
+    adapter "$fb" 'OSTYPE=linux-gnu; fm_backend_herdr_jq_rows "{}" ".x[]" | tr "\r\n" "RN"' )
+  [ "$msys" = "1RN" ] && [ "$posix" = "1RN" ] ||
+    fail "the Windows branch must undo the text-mode terminator and nothing else, got msys='$msys' posix='$posix'"
+  pass "fm_backend_herdr_jq_rows: a CR that is the last byte of a VALUE survives - the undo is exact, not a guess"
+}
+
+test_jq_rows_emits_nothing_and_succeeds_for_an_empty_answer() {
+  local fb posix msys posix_status msys_status
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-empty")
+  posix=$( FM_FAKE_JQ_OUT='' \
+    adapter "$fb" 'OSTYPE=linux-gnu; fm_backend_herdr_jq_rows "{}" ".x[]" | wc -c | tr -d " "' )
+  msys=$( FM_FAKE_JQ_OUT='' \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" ".x[]" | wc -c | tr -d " "' )
+  [ "$posix" = 0 ] && [ "$msys" = 0 ] ||
+    fail "an empty answer must stay empty on both branches (a blank line is one loop iteration to every \`while read\` caller), got posix=$posix msys=$msys"
+  # And it must SUCCEED. No duplicate tab is the ordinary case, and
+  # fm_backend_herdr_create_task refuses the whole spawn on a non-zero status
+  # here ("could not parse herdr tab list output"), so an empty answer that
+  # reports failure would break every task creation on Windows.
+  FM_FAKE_JQ_OUT='' adapter "$fb" 'OSTYPE=linux-gnu; fm_backend_herdr_jq_rows "{}" ".x[]"' >/dev/null 2>&1
+  posix_status=$?
+  FM_FAKE_JQ_OUT='' adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" ".x[]"' >/dev/null 2>&1
+  msys_status=$?
+  [ "$posix_status" = 0 ] && [ "$msys_status" = 0 ] ||
+    fail "an empty answer is a success, not a failure; got posix=$posix_status msys=$msys_status"
+  pass "fm_backend_herdr_jq_rows: an empty answer emits zero bytes and exits 0 on both branches"
+}
+
+test_jq_rows_propagates_the_jq_exit_status_on_both_branches() {
+  local fb posix msys
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-status")
+  FM_FAKE_JQ_OUT='w1\r\n' FM_FAKE_JQ_STATUS=5 \
+    adapter "$fb" 'OSTYPE=linux-gnu; fm_backend_herdr_jq_rows "{}" ".x[]"' >/dev/null 2>&1
+  posix=$?
+  FM_FAKE_JQ_OUT='w1\r\n' FM_FAKE_JQ_STATUS=5 \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" ".x[]"' >/dev/null 2>&1
+  msys=$?
+  [ "$posix" = 5 ] && [ "$msys" = 5 ] ||
+    fail "jq's own exit status is what fm_backend_herdr_create_task refuses on; got posix=$posix msys=$msys"
+  pass "fm_backend_herdr_jq_rows: jq's exit status reaches the caller on both branches"
+}
+
+test_jq_rows_sends_identical_arguments_on_both_branches() {
+  local fb posix_log msys_log
+  fb=$(make_scripted_jq "$TMP_ROOT/jq-args")
+  posix_log="$TMP_ROOT/jq-args/posix.log"; msys_log="$TMP_ROOT/jq-args/msys.log"
+  : > "$posix_log"; : > "$msys_log"
+  FM_FAKE_JQ_OUT='w1\r\n' FM_FAKE_JQ_LOG="$posix_log" \
+    adapter "$fb" 'OSTYPE=linux-gnu; fm_backend_herdr_jq_rows "{}" --arg want firstmate ".a[] | select(.l == \$want)"' >/dev/null
+  FM_FAKE_JQ_OUT='w1\r\n' FM_FAKE_JQ_LOG="$msys_log" \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_jq_rows "{}" --arg want firstmate ".a[] | select(.l == \$want)"' >/dev/null
+  [ "$(cat "$posix_log")" = "jq${US}-r${US}--arg${US}want${US}firstmate${US}.a[] | select(.l == \$want)" ] ||
+    fail "the funnel must invoke jq exactly as the call site always did, got '$(cat "$posix_log")'"
+  [ "$(cat "$posix_log")" = "$(cat "$msys_log")" ] ||
+    fail "the Windows branch may only change what comes BACK from jq, never what goes in"
+  pass "fm_backend_herdr_jq_rows: both branches invoke jq with the same, unchanged argument list"
+}
+
+test_workspace_find_all_is_clean_under_a_text_mode_jq() {
+  local fb dir out
+  have_real_jq "the text-mode workspace_find_all case" || return 0
+  dir="$TMP_ROOT/find-all-crlf"; mkdir -p "$dir/resp"
+  fb=$(make_text_mode_jq "$dir")
+  make_listing_herdr "$fb"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"},{"workspace_id":"w7","label":"firstmate"}]}}\n' \
+    > "$dir/resp/workspace-list.out"
+  out=$( FM_FAKE_HERDR_DIR="$dir/resp" \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_workspace_find_all fmtest | tr "\r\n" "RN"' )
+  [ "$out" = "w1Nw7N" ] ||
+    fail "every workspace id this find hands out goes back to herdr as an id; got '$out'"
+  pass "fm_backend_herdr_workspace_find_all: two matches come back as two clean ids under a text-mode jq"
+}
+
+test_ambiguity_refusal_names_clean_workspace_ids_under_a_text_mode_jq() {
+  local fb dir out status
+  have_real_jq "the text-mode ambiguity refusal case" || return 0
+  dir="$TMP_ROOT/ambiguous-crlf"; mkdir -p "$dir/resp"
+  fb=$(make_text_mode_jq "$dir")
+  make_listing_herdr "$fb"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"},{"workspace_id":"w7","label":"firstmate"}]}}\n' \
+    > "$dir/resp/workspace-list.out"
+  # The exact scenario tests/fm-backend-herdr.test.sh checks with the host's own
+  # jq, driven here from any host: this is the refusal that read `w1<CR> w7`.
+  out=$( FM_FAKE_HERDR_DIR="$dir/resp" \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_workspace_ensure fmtest /tmp' 2>&1 )
+  status=$?
+  expect_code 3 "$status" "two same-labeled workspaces with no launcher identity must still refuse"
+  case "$out" in
+    *$'\r'*) fail "the ambiguity refusal still carries a control character an operator cannot see: '$(printf '%s' "$out" | tr '\r\n' 'RN')'" ;;
+  esac
+  assert_contains "$out" "(w1 w7)" "the ambiguity refusal must name both candidate workspaces"
+  pass "fm_backend_herdr_workspace_ensure: the ambiguity refusal names clean ids under a text-mode jq"
+}
+
+test_create_task_closes_real_tab_ids_under_a_text_mode_jq() {
+  local fb dir log closed
+  have_real_jq "the text-mode create_task case" || return 0
+  dir="$TMP_ROOT/create-task-crlf"; mkdir -p "$dir/resp"
+  fb=$(make_text_mode_jq "$dir")
+  log="$dir/log"; : > "$log"
+  make_listing_herdr "$fb"
+  # TWO husk tabs already carry this spawn's label, so the duplicate read is a
+  # two-row one and its first row is the record a text-mode jq damages. That
+  # record is not a message: it becomes the argument of `tab close`, the one
+  # destructive herdr call on this path.
+  printf '{"result":{"tabs":[{"tab_id":"w1:t8","label":"fm-dup","workspace_id":"w1"},{"tab_id":"w1:t9","label":"fm-dup","workspace_id":"w1"}]}}\n' \
+    > "$dir/resp/tab-list.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p8","tab_id":"w1:t8"},{"pane_id":"w1:p9","tab_id":"w1:t9"}]}}\n' \
+    > "$dir/resp/pane-list.out"
+  printf '{"error":{"code":"agent_not_found"}}\n' > "$dir/resp/agent-get.out"
+  printf '{"result":{"tab":{"tab_id":"w1:t10"},"root_pane":{"pane_id":"w1:p10"}}}\n' > "$dir/resp/tab-create.out"
+  # It ends in the "failed to remove preexisting tab(s)" refusal, because this
+  # fake keeps listing the husks it was asked to close. The closes are what
+  # this case is about, not the verdict.
+  FM_HERDR_LOG="$log" FM_FAKE_HERDR_DIR="$dir/resp" \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_create_task fmtest:w1 fm-dup /tmp ""' >/dev/null 2>&1 || true
+  closed=$(grep -c "${US}tab${US}close${US}w1:t" "$log" || true)
+  [ "$closed" = 2 ] ||
+    fail "both husks must be closed by an id herdr recognises; got $closed such calls in: $(tr '\r' 'R' < "$log")"
+  grep -q "${US}tab${US}close${US}w1:t8${US}" "$log" ||
+    fail "the FIRST duplicate - the row a text-mode jq damages - was not closed by its real id: $(tr '\r' 'R' < "$log")"
+  pass "fm_backend_herdr_create_task: both duplicate tab ids reach \`tab close\` intact under a text-mode jq"
+}
+
+test_list_live_rows_are_clean_under_a_text_mode_jq() {
+  local fb dir out
+  have_real_jq "the text-mode list_live case" || return 0
+  dir="$TMP_ROOT/list-live-crlf"; mkdir -p "$dir/resp"
+  fb=$(make_text_mode_jq "$dir")
+  make_listing_herdr "$fb"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$dir/resp/workspace-list.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-alpha","workspace_id":"w1"},{"tab_id":"w1:t3","label":"fm-beta","workspace_id":"w1"}]}}\n' \
+    > "$dir/resp/tab-list.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"},{"pane_id":"w1:p3","tab_id":"w1:t3"}]}}\n' \
+    > "$dir/resp/pane-list.out"
+  out=$( FM_FAKE_HERDR_DIR="$dir/resp" \
+    adapter "$fb" 'OSTYPE=msys; fm_backend_herdr_list_live fmtest | tr "\r\n\t" "RNT"' )
+  [ "$out" = "fmtest:w1:p2Tfm-alphaNfmtest:w1:p3Tfm-betaN" ] ||
+    fail "every recovery row must be a clean target and label under a text-mode jq, got '$out'"
+  pass "fm_backend_herdr_list_live: the read loop's tab ids and labels survive a text-mode jq intact"
+}
+
 test_canonical_socket_path_posix_is_unchanged
 test_canonical_socket_path_refuses_relative_and_empty
 test_canonical_socket_path_folds_a_win32_path
@@ -605,3 +899,14 @@ test_current_path_posix_never_falls_back_to_the_frozen_cwd
 test_current_path_msys_falls_back_to_the_live_cwd
 test_current_path_msys_still_prefers_foreground_cwd
 test_current_path_reads_the_pane_once
+test_jq_rows_posix_branch_passes_every_byte_through
+test_jq_rows_msys_branch_removes_the_record_terminator_cr
+test_jq_rows_msys_branch_keeps_a_cr_that_is_not_a_terminator
+test_jq_rows_msys_branch_is_the_exact_inverse_of_text_mode
+test_jq_rows_emits_nothing_and_succeeds_for_an_empty_answer
+test_jq_rows_propagates_the_jq_exit_status_on_both_branches
+test_jq_rows_sends_identical_arguments_on_both_branches
+test_workspace_find_all_is_clean_under_a_text_mode_jq
+test_ambiguity_refusal_names_clean_workspace_ids_under_a_text_mode_jq
+test_create_task_closes_real_tab_ids_under_a_text_mode_jq
+test_list_live_rows_are_clean_under_a_text_mode_jq
