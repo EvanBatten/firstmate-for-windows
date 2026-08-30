@@ -245,6 +245,11 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SUB_HOME_MARKER=".fm-secondmate-home"
+# bin/fm-path-lib.sh owns "do these two paths name the same place"; the
+# worktree-isolation guard asks it about a path git printed and one this shell
+# resolved.
+# shellcheck source=bin/fm-path-lib.sh
+. "$SCRIPT_DIR/fm-path-lib.sh"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -1715,7 +1720,7 @@ BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 # isolation guard refuses a spawn that never actually tangled). Canonicalize
 # once here so every downstream comparison uses the same physical form
 # (docs/herdr-backend.md "Known gaps").
-PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_ABS"
+PROJ_ABS_REAL=$(fm_path_canon_dir "$PROJ_ABS") || PROJ_ABS_REAL="$PROJ_ABS"
 
 real_path_or_raw() {  # <path>
   local path=$1 real
@@ -1737,16 +1742,27 @@ real_path_or_raw() {  # <path>
 validate_spawn_worktree() {  # <source> <inspect-target>
   local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
   wt_real=
-  if ! wt_real=$(cd "$WT" 2>/dev/null && pwd -P); then
+  if ! wt_real=$(fm_path_canon_dir "$WT"); then
     wt_real=
   fi
   proj_real=$PROJ_ABS_REAL
   wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
+  # git prints its own namespace and this shell resolves into another one on
+  # Windows, so both sides are reduced by the same helper before they are
+  # compared; bin/fm-path-lib.sh owns that. The comparison also folds case
+  # there, which pulls the two clauses in OPPOSITE directions: the worktree-
+  # root test below gets more willing to LAUNCH (two spellings of one
+  # directory stop reading as two), and the primary-checkout test gets more
+  # willing to REFUSE. The first is the whole point and cannot admit a wrong
+  # launch, because a case-sibling of a directory is never that directory's
+  # git toplevel - discovery walks UP, and an ancestor is a shorter path.
   wt_top_real=
-  if ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
+  if ! wt_top_real=$(fm_path_canon_dir "$wt_top"); then
     wt_top_real=
   fi
-  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
+  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] \
+    || ! fm_path_dirs_equal "$wt_real" "$wt_top_real" \
+    || fm_path_dirs_equal "$wt_real" "$proj_real"; then
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi

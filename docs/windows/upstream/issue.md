@@ -67,22 +67,30 @@ Both PRs landed green.
 
 Four things came out of that which the subsystem-by-subsystem measurement had not:
 
-1. **A hook cannot tell which session it belongs to on Windows.**
-   Claude Code starts a hook through an intermediate process that has already exited when the hook body runs, so `Get-Process().Parent` is null and `Win32_Process.ParentProcessId` names a dead pid; the ancestry walk returns one row.
-   `fm_session_lock_owned_by_self` is therefore never true inside a hook, and `bin/fm-claude-stop-autoarm.sh` exits 0 at its identity gate on every firing.
-   Tokenless watcher continuity does not work on Windows, and the first mate has to arm the watcher by hand at each turn end.
-   The same script run from an ordinary Bash tool call in the same session claims its generation normally, which is what isolates the cause.
-   The fix has to be an identity that survives the parent - the Stop payload's own `session_id`, recorded beside the pid in `state/.lock`, would be stronger than an ancestry walk everywhere, not just here.
-   That is a change to a security-relevant predicate, so it is written down rather than patched.
-2. **`git rev-parse --show-toplevel` and `pwd -P` disagree on Windows** (`C:/...` versus `/c/...`), and six sites compare them to each other.
-   The visible effect is that `bin/fm-fleet-sync.sh` skips every project clone, so a merged PR never reaches the local copy.
+1. **A hook cannot tell which session it belongs to on Windows** - since fixed, and the first diagnosis was wrong in a way worth repeating.
+   The ancestry walk from inside a Stop hook returns one row, so `fm_session_lock_owned_by_self` is never true and `bin/fm-claude-stop-autoarm.sh` exits 0 at its identity gate on every firing; tokenless watcher continuity simply does not work.
+   The cause is not the harness: SessionStart, synchronous Stop and async Stop hooks all resolve a full chain to `claude.exe`.
+   It is that MSYS cannot implement POSIX `exec` - it starts a NEW Win32 process, hands it the old Cygwin pid, and exits the original - and bash exec-optimizes the final command of a `-c` script, which is the form every tracked hook registration is written in.
+   Fixed by recording the harness session id beside the pid (`state/.lock.session`) and accepting the Stop payload's `session_id` when, and only when, the ancestry walk names no harness at all.
+   POSIX hosts resolve their ancestry, never reach the fallback, and decide exactly what they decided before.
+   The read side must be the payload and never the environment, because a watcher or background job inherits the owner's `CLAUDE_CODE_SESSION_ID`.
+2. **`git rev-parse --show-toplevel` and `pwd -P` disagree on Windows** (`C:/...` versus `/c/...`, and about case as well) - since fixed.
+   Six sites compare the two forms; measured one at a time, two of them were live defects: `bin/fm-fleet-sync.sh` skipped every project clone, so a merged PR never reached the local copy, and `bin/fm-config-inherit-lib.sh` refused every inheritable config item without ever reaching `git check-ignore`.
+   The same survey found a seventh site of the family that failed OPEN: `git rev-parse --git-path` answers absolutely in a linked worktree on every platform, so `bin/fm-teardown.sh` joined a drive-rooted path onto a directory and missed a real `index.lock` while git was holding the index.
+   Fixed by `bin/fm-path-lib.sh`, a leaf owning the four questions, where the POSIX branch of each helper is the expression it replaced.
 3. **The guarded merge cannot run**, because it insists on a PR poll that the mode-600 question above stops from being registered.
 4. **`/bearings` said `Unknown command`** because the one tracked symlink in the repository had been checked out as a text file, which is the `core.symlinks` finding in PR-1's body.
 
-There is a fifth, provisional: `fm_wake_identity` uses `/proc/<pid>/stat` field 22 with a comment saying that field is immune to wall-clock steps.
-It is on Linux; on Cygwin it is derived from `btime` and a suspend/resume moves it for every pid at once, which made a live lock-holding watcher look dead here.
+There is a fifth, still open and now measured rather than guessed at: `fm_pid_identity` uses `/proc/<pid>/stat` field 22 with a comment saying that field is immune to wall-clock steps.
+It is on Linux; here `/proc/stat`'s `btime` is `now - uptime` recomputed at every read and field 22 is anchored to it, so a clock correction moves the identity of every pid at once and a live lock-holding watcher reads as dead.
+`CLK_TCK` on this userland is 1000, not 100, so the sensitivity is a millisecond and an ordinary NTP resync is enough - a closed lid is not required.
+The remedy is to record `btime + field22/CLK_TCK`, the absolute creation time, which is invariant because a step of D raises one term by D and lowers the other by exactly D.
+It is left as a finding rather than a patch, because that invariance has not yet been observed across a real step.
 
 ## What the four PRs do not fix
+
+**Two areas fixed after the branches were cut, which the re-split folds in.**
+The path-form work above is none of the four branches' territory - not a herdr adapter, not a process-identity caller - so it becomes a fifth branch rather than a rider on any of them.
 
 **One defect inside PR-3's area, fixed after the branch was cut.**
 A native `jq.exe` opens stdout in text mode, so a `jq -r` read that returns multiple rows carries an interior CR.

@@ -124,6 +124,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
   exit 1
 }
 
+# bin/fm-path-lib.sh owns "do these two paths name the same place"; the
+# relaunch checkpoint asks it about a path git printed and one this shell did.
+# shellcheck source=bin/fm-path-lib.sh
+. "$SCRIPT_DIR/fm-path-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-busy-lib.sh
@@ -689,11 +693,14 @@ safe_checkpoint() {
   CHECKPOINT_LINES=()
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
-  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || die "task $ID's recorded worktree $WT cannot be resolved"
+  wt_real=$(fm_path_canon_dir "$WT") || die "task $ID's recorded worktree $WT cannot be resolved"
   wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null) \
     || die "task $ID's recorded worktree $WT is not a git worktree; refusing to relaunch without a checkout whose unlanded work can be accounted for"
-  wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P) || wt_top_real=$wt_top
-  [ "$wt_real" = "$wt_top_real" ] \
+  # git's answer and this shell's answer are two namespaces for one directory on
+  # Windows, so both sides go through fm_path_canon_dir and the comparison also
+  # folds case there; see bin/fm-path-lib.sh.
+  wt_top_real=$(fm_path_canon_dir "$wt_top") || wt_top_real=$wt_top
+  fm_path_dirs_equal "$wt_real" "$wt_top_real" \
     || die "task $ID's recorded worktree $WT is not a worktree root (root is $wt_top); refusing to relaunch against an ambiguous checkout"
   if head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null); then
     :

@@ -1428,19 +1428,20 @@ One case in between, `test_hook_runs_fast`, sits exactly on its own 3 s bound be
 | # | Subsystem | Result | Measured detail | Fix owner |
 | --- | --- | --- | --- | --- |
 | 22 | Hook process ancestry | **FIXED** | MSYS cannot implement POSIX `exec` on Windows: it starts a new Win32 process, gives it the old Cygwin pid, and exits the original, so anything reached through `exec` - which is how every tracked hook entry is written, and what bash does anyway to a `-c` script's final command - has a dead Win32 parent and MSYS ppid 1. Both halves of the walk dead-end, `fm_session_lock_owned_by_self` can never be true in a hook, and `bin/fm-claude-stop-autoarm.sh` exited 0 at its identity gate on every firing. Not a harness behavior: a hook command that is NOT the shell's final command keeps its parent, and the same probe resolves seven hops to `herdr.exe` from a Bash-tool shell. Fixed by recording the harness session id beside the pid (`state/.lock.session`) and accepting the Stop payload's `session_id` when, and only when, the walk finds no harness at all (C4b). | slice 8; proven by `tests/fm-claude-stop-autoarm-live-e2e.test.sh` |
-| 23 | git path form vs shell path form | **FAIL** | `git rev-parse --show-toplevel` answers `C:/Users/ebatt/firstmate/projects/fm-windows-e2e` while `pwd -P` answers `/c/Users/ebatt/firstmate/projects/fm-windows-e2e`. Six sites compare the two forms directly (`bin/fm-fleet-sync.sh:315`, `bin/fm-spawn.sh:1744`, `bin/fm-teardown.sh:1207`, `bin/fm-control.sh:693`, `bin/fm-config-inherit-lib.sh:163`, and the isolation instruction `bin/fm-brief.sh` gives every crewmate). Measured effect: `bin/fm-fleet-sync.sh` skips every project clone, so a merged PR never reaches the local clone. | a Phase B follow-up slice; one comparison helper, not six branches |
+| 23 | git path form vs shell path form | **FIXED** | `git rev-parse --show-toplevel` answers `C:/Users/ebatt/firstmate/projects/fm-windows-e2e` while `pwd -P` answers `/c/Users/ebatt/firstmate/projects/fm-windows-e2e`, and the two also disagree about CASE (git reports what the filesystem records, `pwd -P` echoes what the caller typed). Of the six sites this row named, two were live defects - `bin/fm-fleet-sync.sh` skipped every project clone, so a merged PR never reached the local clone, and `bin/fm-config-inherit-lib.sh` refused every inheritable config item without ever reaching `git check-ignore`. Two (`bin/fm-control.sh`, `bin/fm-spawn.sh`) already reduced both sides through `cd && pwd -P` and were correct; `bin/fm-teardown.sh:1207` never compares; `bin/fm-brief.sh` is prose. Fixed by `bin/fm-path-lib.sh`, a leaf owning all four questions, wired into five scripts, with the POSIX branch of each helper being the expression it replaced. | slice 10; `tests/fm-path-lib.test.sh` 14/14, eight mutations killed |
 | 24 | Guarded PR merge | **FAIL** | `bin/fm-pr-merge.sh` refuses because it insists on the PR-poll registration that `fm_pr_poll_prepare` cannot do here (`error: could not prepare PR poll`, row 21 / D6). The captain's merge had to go through the forge tool directly. | row 21 / decision D6 |
-| 25 | Watcher identity across a clock step | **FAIL, provisional** | `fm_wake_identity`'s `proc-starttime` is `/proc/<pid>/stat` field 22, and its comment says that field is "immune to the wall-clock steps". That is true on Linux and false on Cygwin, which derives it from `btime` (`now - uptime`), so a wall-clock step shifts it for every pid at once. Observed once here: the recorded watcher identity `936149599` against a live `936148558`, a 1041-tick drift, after the machine slept and resumed mid-run - which made `fm_watcher_healthy` report a live, lock-holding watcher as dead. Field 22 and `/proc/stat`'s `btime` were both stable over 75 s with no step, so a step is what it takes. | a Phase B follow-up; the identity needs a step-immune component on MSYS |
+| 25 | Watcher identity across a clock step | **FAIL, measured** | `fm_pid_identity`'s `proc-starttime` is `/proc/<pid>/stat` field 22, and its comment says that field is "immune to the wall-clock steps". True on Linux, false here: `/proc/stat`'s `btime` is `now - uptime` RECOMPUTED at every read (measured: `1788065531 - 976306 = 1787089225` against a reported `1787089224`), and field 22 is anchored to that derived origin (`btime + field22/CLK_TCK = 1788065561` against Win32's true creation time `1788065562`). `CLK_TCK` here is **1000**, not 100, so Phase C's 1041-tick drift is 1.04 s of clock adjustment, not 10.4 - an ordinary NTP resync evicts a live watcher and a closed lid is not required. Both values stable to the tick over 25 s with no step. Recommendation (not built here): record `btime + field22/CLK_TCK`, the absolute creation time, which is invariant because a step of D raises `btime` by D and lowers field 22 by exactly D. | a follow-up slice; slice 10 measured it and deliberately changed no code |
 | 26 | Tracked symlink at checkout | **FAIL** | Git for Windows ships `core.symlinks=false` in its SYSTEM config, so a plain clone materializes a tracked symlink as a regular text file holding its target path. This repository has exactly one tracked symlink and it is `.claude/skills -> ../.agents/skills`, which is how Claude Code is shown firstmate's twenty skills. In the live home it was a 17-byte file, so `/bearings` answered `Unknown command: /bearings` and the first mate had run this entire session with zero skills loaded. `git config core.symlinks true` plus `git checkout -- .claude/skills` restored the link (Developer Mode is on, so no admin step), and Claude Code picked the skills up live in the already-running session: `20 skills available`. | PR-1's territory: a setup step, not a repo file - `.gitattributes` cannot express it |
 | 27 | Stop-hook cooperation window | **FAIL** | The synchronous guard waits `SYNC_WAIT_MS / 100` iterations of `sleep 0.1` plus one poll for the auto-arm to claim, which assumes a free poll. Measured here: `wait=0` 3394 ms, `wait=800` 8896 ms, `wait=8000` 52845 ms - about 620 ms per iteration, because `fm_pid_alive` on a native pid falls back to a whole-table `ps -W` (1.2 s). Meanwhile the auto-arm's identity proof alone is 2130 ms + 3009 ms in the severed-hook shape, so the first Stop of a session costs one forced continuation (`TURN WOULD END BLIND`) before the hook can claim. Every later Stop allows in 2.4 s. | a follow-up slice: a deadline instead of an iteration count, sized from a measured time-to-claim (C4b) |
 | 28 | `fm-claude-stop-autoarm` suite | **FAIL, 1 of 37** | `install_autoarm_scripts` never copied `bin/fm-proc-lib.sh`, which slice 1 made `fm-wake-lib.sh` source, so the whole suite died on `FM_PROC_UNAME: unbound variable` at case 1 on every platform - the sixth site of slice 6's omission. `tests/fm-turnend-guard.test.sh` had two more, plus two open-coded fakebin symlink loops. With those fixed and two 2.5 s fixture waits raised, the suite runs 36 green and stops at `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2`, reproduced with the product code stashed. | the portable-serial lane's triage |
+| 31 | `git rev-parse --git-path` in a linked worktree | **FIXED** | git answers `.git/index.lock` in a plain clone and `C:/Users/.../.git/worktrees/<w>/index.lock` in a LINKED one - which is every worktree teardown handles. `bin/fm-teardown.sh`'s `case "$lock" in /*)` misfiles the drive-rooted answer as relative and joins it onto the worktree dir, producing `/tmp/.../wt/C:/Users/.../index.lock`, which cannot exist - so `worktree_safety_blocked_by_lock` reports "no lock" while git is holding the index and teardown proceeds. A fail-OPEN in a gate built to refuse on an unreadable answer. `bin/fm-fleet-sync.sh`'s `packed_refs_lock_path` is the same shape, latent because `$PROJ` is a clone root. Both fixed by `fm_path_is_absolute`. | slice 10; found by row 23's own survey criterion |
 
 Row 24 is the D6 trigger the plan predicted in slice 6, arriving exactly where slice 6 said it would.
 
-Row 25 is labelled provisional on purpose.
-Its trigger was a suspend/resume of the machine partway through this run - which is also why the first mate's own elapsed-time readings in the transcript read as five and a half hours - and a deliberate re-measurement (sleep the machine, re-read one long-lived pid's field 22) was not done.
-The mechanism is not in doubt and the trigger is routine rather than exotic: any laptop that closes its lid moves Cygwin's `btime`.
-The size and the frequency are what is unmeasured.
+Row 25 was labelled provisional here and was re-measured in slice 10, which changed the finding's shape.
+The mechanism is now established by arithmetic rather than inferred - `btime` is `now - uptime` recomputed at every read, and field 22 is anchored to it - and the sensitivity turned out to be a thousand times finer than a Linux reader would assume, because `CLK_TCK` on this userland is 1000.
+So the trigger is not "a laptop closed its lid" but "the clock was corrected at all", which is routine on any machine running a time service.
+What is still unmeasured is the drift observed across an actual step; the recommendation in slice 10 says to measure that first.
 
 ### C6. The second task, and what is left
 
@@ -1566,6 +1567,246 @@ Three test-fixture facts came out of building them.
 A `jq` fake that wraps the real binary has to resolve it BEFORE the fakebin shadows PATH and re-terminate with `${line%$'\r'}` guarding, or it doubles the CR on Windows and models nothing.
 And this file inherits a live herdr pane identity from the terminal the suite is launched in - `HERDR_PANE_ID` and friends - which sent `workspace_ensure` looking for a launcher socket none of these fakes model; `tests/fm-backend-herdr.test.sh` drops those six variables for the same reason, and this file now does too rather than sourcing the real-herdr safety helper it has no other use for.
 And those three cases are the only ones in a file that fakes everything else which need a real tool, so they note and skip where `jq` is absent instead of turning a missing package into a red.
+
+## Phase B slice 10: the two path namespaces, and one owner for comparing them
+
+Row 23 said six sites compare `git rev-parse --show-toplevel` against `pwd -P`.
+Measured one at a time, that count was right about the sites and wrong about the damage: two of the six are broken, two already reconcile the namespaces by accident of how they were written, one never compares at all, and one is prose.
+The survey the criterion implies also found a SEVENTH site of the same family that row 23 did not name, in a safety gate, failing open.
+
+### The two forms, measured here
+
+```sh
+$ cd /c/Users/ebatt/firstmate-gnhf
+$ git rev-parse --show-toplevel
+C:/Users/ebatt/firstmate-gnhf
+$ pwd -P
+/c/Users/ebatt/firstmate-gnhf
+```
+
+`cd` accepts either form and `pwd -P` answers in the shell's own namespace, so `cd "$git_top" && pwd -P` is a complete reduction - including across a mount, which was the one thing worth checking:
+
+```sh
+$ cd /tmp/row23repro/repo && git rev-parse --show-toplevel
+C:/Users/ebatt/AppData/Local/Temp/row23repro/repo
+$ cd "$(git rev-parse --show-toplevel)" && pwd -P
+/tmp/row23repro/repo
+```
+
+MSYS's mount table (`C:/Users/ebatt/AppData/Local/Temp on /tmp`) is applied in that direction too, so the reduction lands on `/tmp/...` and not on the `/c/Users/...` spelling of the same directory.
+`cygpath -u` agrees.
+Either is correct; `cd`-then-`pwd -P` is the one already in the tree.
+
+Case is the part `cd`-then-`pwd -P` does NOT reduce, and the two producers disagree about it:
+
+```sh
+$ cd /c/users/ebatt/firstmate-gnhf
+$ pwd -P                          # echoes the case the caller typed
+/c/users/ebatt/firstmate-gnhf
+$ git rev-parse --show-toplevel   # answers the case the filesystem records
+C:/Users/ebatt/firstmate-gnhf
+```
+
+So the comparison has to fold case as well, exactly as `fm_backend_herdr_socket_paths_equal` already does for socket paths, and for the same reason: refusing over a case difference on a case-insensitive filesystem is a false refusal about one directory.
+
+### The seven sites, one at a time
+
+| site | what it compares | on Windows | verdict |
+| --- | --- | --- | --- |
+| `bin/fm-fleet-sync.sh` clone-root gate | git top `=` `pwd -P` | never equal, so **every project clone is skipped** | broken; fixed |
+| `bin/fm-config-inherit-lib.sh` `destination_allows_inherited_item` | `case "$dest_path" in "$top"/*)` | never matches, so **every inheritable config item is refused** | broken; fixed |
+| `bin/fm-control.sh` `safe_checkpoint` | both sides through `cd && pwd -P`, then `=` | namespace already reconciled; case is not | correct today; moved onto the helper |
+| `bin/fm-spawn.sh` `validate_spawn_worktree` | same shape | same | correct today; moved onto the helper |
+| `bin/fm-teardown.sh` `inspectable_git_worktree` | nothing - `[ -d "$top" ]` only | `[ -d C:/... ]` is true here | not a defect; left alone |
+| `bin/fm-brief.sh` isolation instruction | prose: run both, they must agree | the two strings differ for one directory | prose amended |
+| `bin/fm-teardown.sh` `worktree_git_lock_path` | `case "$lock" in /*)` on `git rev-parse --git-path` | **a real index.lock is missed**; see below | broken; fixed (finding 31) |
+
+The two broken ones, reproduced against `HEAD` and then against the fix:
+
+```
+# fleet-sync's clone-root gate, on a clone under /tmp
+BEFORE: SKIPPED (not a clone root) <- the Phase C defect
+AFTER:  accepted (clone root recognised)
+# and the safety property it exists for, a directory merely nested in a repo:
+AFTER:  SKIPPED (correct: git would act on C:/Users/.../row23repro/repo)
+
+# config-inherit, destination_allows_inherited_item on a gitignored destination
+BEFORE (HEAD), gitignored dest: REFUSED (1)
+AFTER,         gitignored dest: ALLOWED (0)
+AFTER,     not-gitignored dest: REFUSED (1)   # the refusal it exists for, intact
+```
+
+The config-inherit failure is silent and total: the function answers "does the destination gitignore this item", the caller treats a non-answer as "skip", and on Windows it never reached `git check-ignore` at all - so a secondmate home inside a work tree inherits nothing and reports every item skipped.
+
+### Finding 31: `--git-path` in a linked worktree, and a lock check that fails open
+
+`git rev-parse --git-path index.lock` answers relatively in a plain clone and absolutely in a linked worktree - and every worktree `bin/fm-teardown.sh` tears down is a linked one.
+
+```sh
+$ cd /tmp/row23repro/repo && git rev-parse --git-path index.lock
+.git/index.lock
+$ cd /tmp/row23repro/wt   && git rev-parse --git-path index.lock
+C:/Users/ebatt/AppData/Local/Temp/row23repro/repo/.git/worktrees/wt/index.lock
+```
+
+`case "$lock" in /*)` misfiles the second as relative and joins it onto the worktree dir:
+
+```
+BEFORE: /tmp/row23repro/wt/C:/Users/.../repo/.git/worktrees/wt/index.lock
+  -> lock MISSED (fail-open)
+AFTER : C:/Users/.../repo/.git/worktrees/wt/index.lock
+  -> lock SEEN
+--- plain clone (relative answer, unchanged) ---
+BEFORE: /tmp/row23repro/repo/.git/index.lock
+AFTER : /tmp/row23repro/repo/.git/index.lock
+```
+
+The joined path can never exist, so `worktree_safety_blocked_by_lock` reports "no lock" for a worktree whose index git is holding, and teardown proceeds to inspect and return it.
+This is a fail-OPEN in a gate whose whole job is to refuse while the answer is unreadable, which is why it is fixed here rather than deferred with row 23's other sites.
+`bin/fm-fleet-sync.sh`'s `packed_refs_lock_path` has the identical shape; `$PROJ` there is a clone root, so git answers relatively and the site is latent rather than live.
+It gets the same one-line fix.
+
+### The helper
+
+`bin/fm-path-lib.sh` is a leaf: it sources nothing, has no side effects on source, and is sourced by the five scripts above.
+Four functions, and the POSIX branch of each IS the expression it replaces:
+
+| function | macOS/Linux | added on a Windows userland |
+| --- | --- | --- |
+| `fm_path_is_absolute` | `case "$p" in /*)` | also a drive root, `C:/x` or `C:\x` |
+| `fm_path_canon_dir` | `(cd "$p" 2>/dev/null && pwd -P)`, returned straight from that subshell | a `cygpath -m` round trip that pins the MOUNT spelling; see below |
+| `fm_path_dirs_equal` | `[ "$a" = "$b" ]` | a case-folded retry, only after `=` has failed |
+| `fm_path_strip_dir_prefix` | `case "$p" in "$d"/*)` and the matching `${p#"$d"/}` | a case-folded prefix TEST, with the answer's own case kept |
+
+One deliberate exception to "the POSIX branch is the expression it replaced", on every platform: an EMPTY argument to `fm_path_canon_dir` is refused.
+That is the `cd ""` hole below, and it only ever refuses more.
+
+The single gate is whether `cygpath` is on PATH - the same marker `bin/backends/herdr.sh` uses for the same question about socket paths, and a property of the USERLAND rather than of `uname`, which is what actually decides whether `C:/x` is an absolute path or a relative one containing a colon.
+It is probed per call (`command -v` is a builtin, no fork), which is also what makes both branches reachable from either host with nothing faked but PATH.
+
+`fm_path_canon_dir` deliberately does not fold case: its answer is a real path a caller hands to another tool, and `fm_path_strip_dir_prefix`'s answer goes straight to `git check-ignore`.
+Folding belongs to the comparison, never to the value.
+`fm_path_dirs_equal` deliberately does not canonicalize either: a caller that has not reduced both sides is asking the wrong question, and giving it a plausible answer would hide that.
+
+One cross-platform hole closed along the way, unrelated to Windows: `bash`'s `cd ""` SUCCEEDS and leaves the shell where it was, so `wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P)` in `bin/fm-spawn.sh` answered the CALLER'S current directory whenever `git rev-parse --show-toplevel` had failed.
+`fm_path_canon_dir` rejects an empty argument, so that path now yields empty and the isolation guard refuses, which is what it was always trying to do.
+
+### The acceptance review's correction: `pwd -P` alone is not one spelling
+
+The first version of `fm_path_canon_dir` was `(cd "$p" 2>/dev/null && pwd -P)` on every platform, on the reasoning that `cd` accepts a drive root and `pwd -P` answers in the shell namespace, so no Windows branch was needed.
+The review disproved that with a measurement, and it is the most useful thing it found.
+
+`pwd -P` picks the MOST SPECIFIC mount, and this machine's mount table overlaps:
+
+```
+C:/Users/ebatt/AppData/Local/Temp on /tmp type ntfs (binary,noacl,posix=0,usertemp)
+C: on /c type ntfs (binary,noacl,posix=0,user,noumount,auto)
+```
+
+So one directory has two `pwd -P` answers, decided by which spelling `cd` was handed:
+
+```
+cd /tmp/mountshadow                               && pwd -P  ->  /tmp/mountshadow
+cd C:/Users/ebatt/AppData/Local/Temp/mountshadow  && pwd -P  ->  /tmp/mountshadow
+cd /c/Users/ebatt/AppData/Local/Temp/mountshadow  && pwd -P  ->  /c/Users/ebatt/AppData/Local/Temp/mountshadow
+```
+
+A helper whose stated job is "reduce to one spelling" was producing two, and `fm_path_dirs_equal` correctly called them different - which reproduces every symptom this slice fixes, in the refuse direction, for any home, clone or worktree under a shadowed mount.
+That is not hypothetical territory: `/tmp` IS the Windows temp dir here, which is where every test fixture in this repository lives.
+
+`cygpath -u "$(cygpath -m "$p")"` collapses them, because Win32 has exactly one name for the directory and `cygpath -u` re-enters the shell namespace through the same most-specific-mount rule:
+
+```
+canon(/tmp/mountshadow/repo)                               = /tmp/mountshadow/repo
+canon(/c/Users/ebatt/AppData/Local/Temp/mountshadow/repo)  = /tmp/mountshadow/repo
+canon(C:/Users/ebatt/AppData/Local/Temp/mountshadow/repo)  = /tmp/mountshadow/repo
+```
+
+Two consequences beyond the helper itself.
+The POSIX branch is now a separate early return - literally the old subshell, returned from directly - rather than a captured value, so "the expression it replaced" is exact again rather than nearly exact.
+And three sites that produce the OTHER side of a comparison had to move onto the helper too, because reducing one side is worthless: `bin/fm-fleet-sync.sh`'s `proj_abs`, `bin/fm-config-inherit-lib.sh`'s `dest_parent_abs`, and `bin/fm-spawn.sh`'s `PROJ_ABS_REAL`.
+Two of those three already carried `2>/dev/null`, so they are byte-identical; `proj_abs` did not, so a `cd` failure there is now silent - unreachable in practice, since `sync_project` has already refused a `$PROJ` that is not a directory.
+
+The review also corrected a comment rather than code, and the correction matters for anyone reading the guard.
+Case folding pulls `validate_spawn_worktree`'s two clauses in OPPOSITE directions: the worktree-root test is negated, so folding makes the guard more willing to LAUNCH, and only the primary-checkout test is made more willing to refuse.
+The launch-widening cannot admit a wrong launch, because a case-sibling of a directory is never that directory's git toplevel - discovery walks UP and an ancestor is a shorter path - but the comment claimed the opposite, and now says what is true.
+
+### Mutations, and what the suite does not see
+
+Eight mutations of `bin/fm-path-lib.sh`, run against a scratch copy of the tree so the working tree was never mutated while a suite was reading it:
+
+| mutation | result |
+| --- | --- |
+| drop the `cygpath` mount round trip | killed - `one directory must canonicalize to one spelling` |
+| drop `2>/dev/null` inside `fm_path_canon_dir` | killed - `a missing directory must produce no stderr` |
+| `pwd -P` -> `pwd` | killed - `must resolve symlinks` |
+| accept an empty argument | killed - `must fail rather than answer the current directory` |
+| fold case on POSIX too, in `fm_path_dirs_equal` | killed - `case must still separate two paths` |
+| fold case on POSIX too, in `fm_path_strip_dir_prefix` | killed - `case must still separate the prefix` |
+| return the FOLDED relative path instead of the original case | killed - `the stripped answer must keep its own case` |
+| drop the drive-root arm of `fm_path_is_absolute` | killed by the two drive-root cases |
+
+The last three came from the review: the first version of the suite had no stderr assertion (so a lost `2>/dev/null` was invisible), and its symlink assertion sat inside an `if ln -s ...` with no `else`, so on a Windows box without Developer Mode the `pwd -P` -> `pwd` mutation would have had zero signal while the suite still read 12/12.
+Both are closed - the symlink branch now prints an explicit "was NOT checked" notice - and the mount case does the same where there is no `cygpath`, because it is the one assertion a fakebin cannot model: it needs a real MSYS `cd`, a real `cygpath` and a real overlapping mount.
+
+Named residuals rather than silence, all in the same family and none of them fixed here:
+`bin/fm-spawn.sh`'s relaunch dedup compares a `real_path_or_raw` pair with a bare `!=` and can false-mismatch on Windows through the same `pwd -P` case echo;
+`bin/fm-teardown.sh`'s `canonical_existing_dir` is still its own `cd`-and-`pwd -P`, which is correct because nothing compares its answer, but it is one more copy of the expression;
+and `fm_path_is_absolute` would still misfile a UNC answer (`\\server\share\...`) as relative, which is latent because Git for Windows emits forward-slash drive paths.
+
+### Row 25, re-measured: what the identity is actually made of
+
+The steer asked for a measurement and a recommendation on row 25, not a fix.
+Two facts were established here, and one number in the original finding needs correcting.
+
+`/proc/stat`'s `btime` on this userland is DERIVED at read time, not stored at boot:
+
+```
+uptime=976306.49  btime=1787089224  now=1788065531
+now - uptime = 1787089225      # btime is 1787089224, one second of rounding
+```
+
+On Linux `btime` is a constant written once at boot; here it is `now - uptime` recomputed on every read, so a wall-clock step moves it.
+And `/proc/<pid>/stat` field 22 is anchored to that same derived origin - for this shell:
+
+```
+CLK_TCK=1000  btime=1787089224  field22=976337905
+btime + field22/CLK_TCK          = 1788065561
+Win32 Get-Process(winpid).StartTime = 1788065562   # the true creation wall time
+```
+
+The correction: `CLK_TCK` is **1000** on this userland, not the 100 a Linux reader would assume.
+The 1041-tick drift Phase C observed is therefore **1.04 seconds of wall-clock adjustment, not 10.4**, which makes the finding worse rather than better - the identity is a millisecond-resolution number compared for exact string equality, so any clock correction at all evicts a live watcher, and an ordinary NTP resync is enough.
+A closed lid is not required.
+Both values were stable to the tick over 25 s with no step, re-confirming that a step is what it takes.
+
+The recommendation, for whoever picks this up: `btime + field22/CLK_TCK` is the process's absolute creation wall time, and it is INVARIANT under the step, because a clock step of D raises `btime` by D and lowers `field22` by exactly D.
+Recording that sum instead of the raw field costs one extra read of `/proc/stat` and no new dependency, and it degrades to one-second granularity, which the `cmdline-hex` component already covers.
+That invariance is arithmetically implied by the identity measured above; it has NOT been observed across an actual step, and observing it is the first thing the fixing slice should do.
+This slice deliberately changes nothing in `bin/fm-wake-lib.sh`.
+
+### Verification
+
+| check | result |
+| --- | --- |
+| `tests/fm-path-lib.test.sh` | 14/14; twelve cases run both branches from any host, two say out loud what they could not check |
+| `bin/fm-test-run.sh --check-coverage` | `FM_TEST_COVERAGE ok total=171 parallel=24 serial=135 serial_shards=4 herdr=12` |
+| `bin/fm-lint.sh` on the nine files this slice touches | exit 0, clean (~19 min; the no-argument form on this branch has a merge-base of `upstream/main`, so it re-lints the whole port and does not finish inside 15 min here) |
+| eight mutations of the library | all killed; table above |
+| fleet-sync clone-root gate, before/after, plus the nested-dir refusal | above |
+| config-inherit, before/after, plus the not-gitignored refusal | above |
+| teardown lock path, linked worktree and plain clone, before/after | above |
+| the mount-spelling collapse, three spellings of one directory | above |
+| `tests/fm-fleet-sync.test.sh` | green |
+| `tests/fm-brief.test.sh` | 21 green |
+| `tests/fm-teardown.test.sh` | 25 green, then stops at row 24's `error: could not prepare PR poll`, raised by `bin/fm-pr-check.sh`, which this slice does not touch |
+| four neighbour suites with a red, each re-run at `HEAD` in a second worktree | identical red at `HEAD`; all four pre-existing and platform |
+
+The four pre-existing reds are worth naming, since the portable-serial lane will meet them again: `tests/fm-shared-captain-inheritance.test.sh` "unwritable destination directory should make quarantine fail" (`chmod 500` yields 755 on a `noacl` mount - probed directly, a write into a mode-500 directory succeeds, so it is row 21's family), `tests/fm-test-run.test.sh` "worker root mode is 755, expected 0700" (the same), `tests/fm-control-relaunch.test.sh` "relaunch did not reach trace delivery" (a 2 s marker wait), and `tests/fm-spawn-worktree-settle.test.sh` "already-settled pane took 28s" (29 s at `HEAD`).
+Two are the `mkdir -m 700` question, two are wall-clock budgets on a slow platform - the same shape as finding 27.
+
+The test suite fakes the userland with PATH alone: a fakebin holding `tr` and no `cygpath` is a POSIX host, and the same fakebin plus a `cygpath` stub is a Windows one, so those twelve cases are the same twelve everywhere rather than two sets that each only run on one machine.
+The `cygpath` stub exits 97 with a message if it is ever executed, which is how the suite proves the library only ever `command -v`s it - the mount case is the one that needs a real `cygpath`, so it links the real tool into its fakebin instead.
 
 ## What the spike did not know
 

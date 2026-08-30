@@ -87,6 +87,16 @@ The suite is 181/181 on Windows and `tests/fm-backend-herdr-windows.test.sh` gai
 It belongs on `pr-3-herdr-windows-cli` as a follow-up commit, which the re-split slice adds.
 Adding a commit to a pushed branch is fine; none of these branches may be force-pushed.
 
+## Slice 10's territory, and the `pr-5` it implies
+
+`bin/fm-path-lib.sh` and its five callers (`bin/fm-fleet-sync.sh`, `bin/fm-config-inherit-lib.sh`, `bin/fm-control.sh`, `bin/fm-spawn.sh`, `bin/fm-teardown.sh`, plus one sentence of `bin/fm-brief.sh`) belong to none of the four branches.
+None of those files is a herdr adapter and none is a process-identity caller, so folding the commit into `pr-3` or `pr-2` would only make both harder to review.
+
+It is the same SHAPE as `pr-2`, though - a leaf library that owns one platform-dependent question, with the POSIX branch of every helper being the expression it replaced - so it reviews the same way and reads as a natural sequel.
+The re-split slice cuts it as `pr-5-path-lib` from `upstream/main` and pushes it to `origin` only.
+
+Two of the things it fixes are not Windows-specific and are worth naming for the reviewer: `git rev-parse --git-path` answers absolutely in a linked worktree on every platform, so teardown's index-lock gate has always been one `.git`-file layout away from failing open; and `bash`'s `cd ""` succeeds, so `bin/fm-spawn.sh`'s isolation guard resolved an empty worktree root to the caller's own current directory.
+
 ## One safety note about these branches
 
 `git checkout -b <name> upstream/main` sets the new branch's upstream to `upstream/main`, so a bare `git push` from any of them would have targeted `kunchenguid/firstmate`.

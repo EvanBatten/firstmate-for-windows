@@ -148,6 +148,10 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SECONDMATE_REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
 SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
+# bin/fm-path-lib.sh owns "is this path already rooted", asked below about a
+# path git printed.
+# shellcheck source=bin/fm-path-lib.sh
+. "$SCRIPT_DIR/fm-path-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backend.sh
@@ -1251,13 +1255,17 @@ worktree_git_lock_path() {
   [ -n "$dir" ] && [ -d "$dir" ] || return 1
   lock=$(git -C "$dir" rev-parse --git-path index.lock 2>/dev/null) || return 1
   [ -n "$lock" ] || return 1
-  case "$lock" in
-    /*) printf '%s\n' "$lock" ;;
-    *)
-      abs_dir=$(canonical_existing_dir "$dir") || return 1
-      printf '%s/%s\n' "$abs_dir" "$lock"
-      ;;
-  esac
+  # A LINKED worktree - which is every worktree this script tears down - gets an
+  # absolute answer here, and on Windows that answer is `C:/Users/...`, which a
+  # bare `/*` test misfiles as relative and then joins onto $dir. The joined
+  # path can never exist, so the lock check silently reports "no lock" and
+  # teardown proceeds while git holds the index.
+  if fm_path_is_absolute "$lock"; then
+    printf '%s\n' "$lock"
+  else
+    abs_dir=$(canonical_existing_dir "$dir") || return 1
+    printf '%s/%s\n' "$abs_dir" "$lock"
+  fi
 }
 
 # The lock-staleness proof (lsof holder check, mtime age, fail-safe defaults)
