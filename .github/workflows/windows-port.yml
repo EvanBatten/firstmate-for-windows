@@ -27,9 +27,12 @@ jobs:
     # running healthily after 25 minutes: fm-lint.sh hands ShellCheck the file
     # set in a few large batches under --external-sources, and that cross-file
     # analysis is far slower on this platform. CI also refuses --fast, so the
-    # full analysis is mandatory. A hang tripwire with margin, not the expected
-    # healthy end of the job.
-    timeout-minutes: 60
+    # full analysis is mandatory, and the default two workers are already in
+    # use. The lane's first real run (33328744694, 2026-08-30) was killed by a
+    # 60-minute cap while still making progress, so the tripwire sits at two
+    # hours: a hang tripwire with margin, not the expected healthy end of the
+    # job.
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
