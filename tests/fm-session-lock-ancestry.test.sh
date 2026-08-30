@@ -220,6 +220,166 @@ SH
   pass "session-lock: a live version-named session holding the lock is not mistaken for a stale owner"
 }
 
+# --- session-identity layer: the proof that survives a severed ancestry ------
+#
+# A Claude Code hook on Git Bash is reached through exec(), which MSYS
+# implements by starting a NEW Win32 process and exiting the old one, so the
+# hook body has a dead Win32 parent and an MSYS ppid of 1 and the ancestry walk
+# finds no harness at all (docs/windows/measurement.md, finding 22). A `ps` that
+# reports nothing for this process and its parents models exactly that shape,
+# from any host, while still reporting the lock owner as the live harness it is.
+severed_fakebin() {  # <dir> <owner-pid>
+  local dir=$1 owner=$2 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -o) field=\$2; shift 2 ;;
+    -p) pid=\$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "\$pid:\$field" in
+  $owner:comm=) printf '%s\n' claude ;;
+  $owner:args=) printf '%s\n' claude ;;
+  $owner:ppid=) printf '%s\n' 1 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '%s\n' "$fakebin"
+}
+
+test_recorded_session_identity_owns_a_severed_hooks_lock() {
+  local dir fakebin
+  dir="$TMP_ROOT/severed-owned"
+  fakebin=$(severed_fakebin "$dir" 700)
+  printf '700\n' > "$dir/state/.lock"
+  printf '700 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' > "$dir/state/.lock.session"
+
+  lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+    && fail "the ancestry walk must not resolve at all in the severed-hook shape"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47" \
+    || fail "the session that recorded the lock could not prove ownership without its ancestry"
+  pass "session-identity: a hook whose ancestry is severed proves ownership from the lock's recorded session"
+}
+
+test_recorded_session_identity_refuses_every_mismatch() {
+  local dir fakebin
+  dir="$TMP_ROOT/severed-refuse"
+  fakebin=$(severed_fakebin "$dir" 700)
+  printf '700\n' > "$dir/state/.lock"
+
+  printf '700 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' > "$dir/state/.lock.session"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 0e1f2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7" \
+    && fail "a different session's identity was accepted against this lock"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' ''" \
+    && fail "an empty session identity was accepted"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 'short'" \
+    && fail "a malformed session identity was accepted"
+
+  # A pair left behind by an earlier session cannot speak for the current lock.
+  printf '650 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' > "$dir/state/.lock.session"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47" \
+    && fail "a stale pair naming another pid was accepted for the current lock"
+
+  printf '7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' > "$dir/state/.lock.session"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47" \
+    && fail "a pair with no pid field was accepted"
+
+  rm -f "$dir/state/.lock.session"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47" \
+    && fail "ownership was granted with no recorded pair at all"
+  pass "session-identity: a foreign, malformed, stale, or missing pair never owns the lock"
+}
+
+test_recorded_session_identity_never_owns_a_dead_owners_lock() {
+  local dir fakebin
+  dir="$TMP_ROOT/severed-dead-owner"
+  fakebin=$(severed_fakebin "$dir" 700)
+  printf '700\n' > "$dir/state/.lock"
+  printf '700 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' > "$dir/state/.lock.session"
+  # kill fails and the fake ps knows no such process: the recorded owner is gone.
+  PATH="$fakebin:$PATH" bash -c '
+    . "$0"
+    kill() { return 1; }
+    fm_session_lock_owned_by_session "$1" 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47
+  ' "$LIB" "$dir/state" \
+    && fail "a lock whose recorded owner is dead was claimed instead of being recovered through fm-lock.sh"
+  pass "session-identity: a dead recorded owner falls through to guarded recovery rather than being adopted"
+}
+
+test_resolved_ancestry_still_has_the_last_word() {
+  local dir fakebin
+  dir="$TMP_ROOT/resolved-wins"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  # This process descends from a live harness 650; a different live session 600
+  # holds the lock. The walk resolves, so it decides - even though the recorded
+  # pair would otherwise match the identity presented here.
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field" in
+  600:comm=|650:comm=) printf '%s\n' claude ;;
+  600:args=|650:args=) printf '%s\n' claude ;;
+  600:ppid=|650:ppid=) printf '%s\n' 1 ;;
+  *:comm=) printf '%s\n' bash ;;
+  *:args=) printf '%s\n' bash ;;
+  *:ppid=) printf '%s\n' 650 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '600\n' > "$dir/state/.lock"
+  printf '600 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' > "$dir/state/.lock.session"
+  lib_eval "$fakebin" "fm_session_lock_owned_by_session '$dir/state' 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47" \
+    && fail "the session fallback overrode an ancestry walk that resolved a different live session"
+  pass "session-identity: an ancestry that resolves keeps the last word, so a competing session is still refused"
+}
+
+test_recording_the_pair_follows_the_lock() {
+  local dir fakebin got
+  dir="$TMP_ROOT/record-pair"
+  fakebin=$(severed_fakebin "$dir" 700)
+
+  lib_eval "$fakebin" "(export CLAUDE_CODE_SESSION_ID=7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47; fm_session_lock_record_session '$dir/state' 700)" \
+    || fail "recording the session pair returned non-zero"
+  got=$(cat "$dir/state/.lock.session" 2>/dev/null || true)
+  [ "$got" = '700 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47' ] \
+    || fail "the recorded pair is wrong: $got"
+
+  # The explicit override wins over the harness variable.
+  lib_eval "$fakebin" "(export CLAUDE_CODE_SESSION_ID=7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47 FM_HARNESS_SESSION_ID=0e1f2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7; fm_session_lock_record_session '$dir/state' 701)" \
+    || fail "recording with an explicit override returned non-zero"
+  got=$(cat "$dir/state/.lock.session" 2>/dev/null || true)
+  [ "$got" = '701 0e1f2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7' ] \
+    || fail "the explicit session override was not recorded: $got"
+
+  # A harness with no session identity of its own must not leave the previous
+  # session's pair behind for a reused pid to match.
+  lib_eval "$fakebin" "(unset CLAUDE_CODE_SESSION_ID FM_HARNESS_SESSION_ID; fm_session_lock_record_session '$dir/state' 702)" \
+    || fail "recording without an identity returned non-zero"
+  [ ! -e "$dir/state/.lock.session" ] \
+    || fail "a lock acquired without a session identity left a stale pair"
+
+  # A malformed identity is no identity at all.
+  lib_eval "$fakebin" "(export CLAUDE_CODE_SESSION_ID='no spaces allowed'; fm_session_lock_record_session '$dir/state' 703)" \
+    || fail "recording a malformed identity returned non-zero"
+  [ ! -e "$dir/state/.lock.session" ] || fail "a malformed session identity was recorded"
+  pass "session-identity: the recorded pair is refreshed with the lock and removed when the harness has no identity"
+}
+
 # --- end-to-end layer: the real Stop auto-arm in real process trees ----------
 
 install_autoarm_scripts() {
@@ -360,6 +520,11 @@ test_version_named_session_is_identified_on_both_platforms
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
 test_competing_version_named_session_is_seen_as_live
+test_recorded_session_identity_owns_a_severed_hooks_lock
+test_recorded_session_identity_refuses_every_mismatch
+test_recorded_session_identity_never_owns_a_dead_owners_lock
+test_resolved_ancestry_still_has_the_last_word
+test_recording_the_pair_follows_the_lock
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock

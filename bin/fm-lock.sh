@@ -58,6 +58,10 @@ trap 'exit 1' HUP INT TERM
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
   if [ "$old" = "$me" ]; then
+    # Re-publishing our own pair. This return is deliberately outside the claim
+    # hold below, so a concurrent acquirer could interleave; the pair it would
+    # leave names a pid that is no longer the lock's, which every reader rejects.
+    fm_session_lock_record_session "$STATE" "$me"
     echo "lock acquired: harness pid $me"
     exit 0
   fi
@@ -103,5 +107,10 @@ if [ ! -f "$LOCK" ] || [ -L "$LOCK" ] || [ "$written" != "$me" ]; then
   echo "error: session lock ownership verification failed; operate read-only until resolved" >&2
   exit 1
 fi
+# The second, ancestry-free proof of the same ownership, refreshed here inside
+# the claim hold - the one acquisition path that can be ordered against a
+# competing acquirer at all. It is best effort: a home that cannot record it
+# keeps exactly the ancestry-only identity it has always had.
+fm_session_lock_record_session "$STATE" "$me"
 release_claim_lock
 echo "lock acquired: harness pid $me"

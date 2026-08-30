@@ -10,7 +10,9 @@
 #   - Scope: only a genuine primary checkout (plain checkout or validly marked
 #     secondmate home) with AGENTS.md, bin/, and the effective state dir - the
 #     exact fm-turnend-guard.sh scope. Child crew/scout worktrees stay inert.
-#   - Identity: only when THIS session's harness ancestor holds state/.lock.
+#   - Identity: only when THIS session holds state/.lock - proven by the harness
+#     ancestry, or, where that walk finds no harness at all, by the Stop
+#     payload's session_id matching the identity the lock owner recorded.
 #     When an existing numeric owner fails the shared harness-liveness predicate,
 #     the hook delegates guarded recovery to bin/fm-lock.sh and then re-verifies
 #     ownership. A live owner, missing lock, malformed lock, or unresolved
@@ -118,12 +120,25 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # uncertainty rather than stale-owner evidence and remain inert.
 RECOVER_SESSION_LOCK=0
 if ! fm_session_lock_owned_by_self "$STATE"; then
-  LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
-  case "$LOCK_PID" in
-    ''|*[!0-9]*) exit 0 ;;
-  esac
-  fm_harness_pid_alive "$LOCK_PID" && exit 0
-  RECOVER_SESSION_LOCK=1
+  # Second proof, for the one shape where the first cannot answer: a hook whose
+  # ancestry walk finds no harness at all. On Git Bash that is every firing -
+  # MSYS exec() starts a new Win32 process and exits the old one, so a hook body
+  # reached through the tracked `exec` registration has a dead Win32 parent and
+  # an MSYS ppid of 1. The Stop payload names the session this hook belongs to,
+  # and the lock records the session that acquired it, so equality of the two
+  # against a still-live harness owner is the same claim the ancestry makes.
+  # Read from the PAYLOAD, never from the environment: a watcher or background
+  # job inherits the owner's CLAUDE_CODE_SESSION_ID, while only the harness
+  # itself can deliver a Stop payload for the session.
+  if ! fm_session_lock_owned_by_session "$STATE" \
+      "$(fm_hook_payload_string "$PAYLOAD" '.session_id // empty' 2>/dev/null || true)"; then
+    LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
+    case "$LOCK_PID" in
+      ''|*[!0-9]*) exit 0 ;;
+    esac
+    fm_harness_pid_alive "$LOCK_PID" && exit 0
+    RECOVER_SESSION_LOCK=1
+  fi
 fi
 
 # --- AFK: the away daemon owns the watcher and triage; never rewake ----------
