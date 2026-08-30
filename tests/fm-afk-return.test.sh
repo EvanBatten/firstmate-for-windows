@@ -17,7 +17,10 @@ install_runner() {  # <case-dir>
   local dir=$1
   mkdir -p "$dir/bin" "$dir/home/state" "$dir/home/data" "$dir/home/config"
   cp "$ROOT/bin/fm-afk-return.sh" "$dir/bin/"
-  cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/"
+  # fm-proc-lib.sh: the process-identity leaf fm-wake-lib.sh sources at load
+  # time, so a fixture that copies the wake library alone dies on an unbound
+  # FM_PROC_UNAME before any assertion runs.
+  cp "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$dir/bin/"
   cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/"
   # fm-timeout-lib.sh: the shared hard bound fm-classify-lib.sh sources for the
   # wedge detector's bounded worktree write probe.
