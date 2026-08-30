@@ -211,6 +211,11 @@ run_merge_entry() {
     "$PR_MERGE" "$@"
 }
 
+# A carriage return reaches the array through expansion rather than a $'\r'
+# literal: Git for Windows bash 5.2 drops a CR that a $'...' literal produces
+# inside an array compound assignment, so the literal form stores a valid URL
+# there and the "rejected raw byte" case tests nothing.
+CR=$'\r'
 # shellcheck disable=SC2016 # Literal rejected URL bytes are parser test data.
 INVALID_URLS=(
   'https://gitlab.com/single/-/merge_requests/1'
@@ -235,9 +240,9 @@ INVALID_URLS=(
   'https://github.com/o/r/pull/1 '
   'https://github.com/o /r/pull/1'
   $'https://github.com/o/r/pull/1\t'
-  $'https://github.com/o/r/pull/1\r'
+  "https://github.com/o/r/pull/1${CR}"
   $'https://github.com/o/r/pull/1\nnext'
-  $'https://github.com/o/r/pull/1\r\nnext'
+  "https://github.com/o/r/pull/1${CR}"$'\nnext'
   $'https://github.com/o/r/pull/1\001'
   $'https://github.com/o/r/pull/1\033'
   $'https://github.com/o/r/pull/1\177'
