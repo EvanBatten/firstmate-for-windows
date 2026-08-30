@@ -199,6 +199,46 @@ fm_fakebin_link() {
   done
 }
 
+# fm_test_base_path
+# The system half of a fixture's curated PATH: the directories a test wants a
+# fixture child to resolve real tools from, before the fakebin that fakes the
+# rest. Every caller spells it `${FM_TEST_BASE_PATH:-$(fm_test_base_path)}`, so
+# an operator can still name the list outright.
+#
+# On macOS and Linux this is the literal four-directory list those callers used
+# to hold, byte for byte. Git Bash keeps bash and coreutils in /usr/bin but
+# ships git and jq elsewhere, so the same list describes a machine with no git
+# at all and every fixture that asserts a quiet bootstrap fails on a MISSING:
+# git line before it tests anything. Appending those two tools' real
+# directories there restores the list's Linux meaning.
+#
+# git and jq, and nothing else, because the suite itself says which tools the
+# four directories hold: a case that needs git or jq ABSENT has to mask them
+# with a BASH_ENV shim (tests/fm-bootstrap.test.sh:501, :670), while a case that
+# needs node absent simply deletes it from the fakebin (:897) - which only works
+# because node is not in those four directories on a passing host. Appending a
+# tool of the second kind would silently defeat the fixture that removed it.
+fm_test_base_path() {
+  local base=/usr/bin:/bin:/usr/sbin:/sbin tool tool_dir
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *) printf '%s\n' "$base"; return 0 ;;
+  esac
+  for tool in git jq; do
+    tool_dir=$(command -v "$tool" 2>/dev/null) || continue
+    case "$tool_dir" in
+      /*) ;;
+      *) continue ;;
+    esac
+    tool_dir=${tool_dir%/*}
+    case ":$base:" in
+      *":$tool_dir:"*) ;;
+      *) base="$base:$tool_dir" ;;
+    esac
+  done
+  printf '%s\n' "$base"
+}
+
 fm_fake_exit0() {
   local fakebin=$1 tool
   shift

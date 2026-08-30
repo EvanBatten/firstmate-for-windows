@@ -75,7 +75,7 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 11 green, 12 red, 1 gate-skip across the 24 portable-parallel scripts, plus 14 of 15 in the real-herdr smoke test.
 Of the 12 red, 3 are row 21 (POSIX modes), 2 were the guard fail-open suspects (`fm-arm-pretool-check`, `fm-cd-pretool-check`, both green after slice 4), 1 is `fm-lint` (green after slice 5), 1 is a timeout, and 5 needed a first look.
 Slice 6 settled every one of them; the standing count is **19 green, 4 red, 1 gate-skip**, and all four remaining reds are named in "Phase B slice 6" below.
-The 134-script portable-serial lane was not run in Phase A (roughly 3 hours at this box's spawn rate); it is still the next unit of work.
+The 135-script portable-serial lane was not run in Phase A; slice 11 ran it (4 h 35 m, **65 red of 135** with 26 gate-skips) and classifies every red under "Phase B slice 11" below.
 
 ## Phase B slice 1 (PR-2): process identity and liveness
 
@@ -1807,6 +1807,213 @@ Two are the `mkdir -m 700` question, two are wall-clock budgets on a slow platfo
 
 The test suite fakes the userland with PATH alone: a fakebin holding `tr` and no `cygpath` is a POSIX host, and the same fakebin plus a `cygpath` stub is a Windows one, so those twelve cases are the same twelve everywhere rather than two sets that each only run on one machine.
 The `cygpath` stub exits 97 with a message if it is ever executed, which is how the suite proves the library only ever `command -v`s it - the mount case is the one that needs a real `cygpath`, so it links the real tool into its fakebin instead.
+
+## Phase B slice 11: the portable-serial lane
+
+Measured 2026-08-30 on the same machine and toolchain as Phase A.
+This is the first time the serial lane has ever run on Windows; the count above ("Count to beat") had it as the outstanding unit of work.
+
+```
+MSYS=winsymlinks:nativestrict bin/fm-test-run.sh --lane portable-serial \
+  --per-script-timeout-secs 1500 --json /c/Users/ebatt/tmp/serial/serial-lane.json
+```
+
+```
+FM_TEST_SUMMARY total=135 failed=65 skipped_gate=26 duration_ms=16498645
+```
+
+Started 06:32:05Z, finished 11:07:04Z: 4 h 35 m of wall clock for 135 scripts.
+44 scripts ran and passed, 26 exited 0 having gate-skipped (no tmux, no cmux, no pi, opt-in credentials), and 65 failed.
+The slowest script, `fm-task-inbox`, spent 1501 s and was terminated by the 1500 s bound; `fm-daemon` at 417 s was only the fifteenth slowest, so the bound is doing real work here rather than catching hangs.
+
+| Family | Scripts | Failed |
+| --- | --- | --- |
+| afk | 2 | 1 |
+| backend-dispatch | 13 | 4 |
+| cmux | 2 | 1 |
+| live-harness-optin | 19 | 0 |
+| orca | 1 | 0 |
+| pr-forge | 2 | 2 |
+| pure-contract-unit | 17 | 5 |
+| secondmate | 20 | 17 |
+| session-bootstrap | 10 | 6 |
+| snapshot-bearings | 4 | 3 |
+| unclassified | 25 | 11 |
+| watcher-wake-lock | 18 | 15 |
+| zellij | 2 | 0 |
+
+### How the verdicts below were reached
+
+Every red gets a class, but they are not all worth the same.
+A verdict marked **measured** was reproduced or disproved directly this slice - a repro, a re-run, or a byte comparison is named in the reason.
+A verdict marked **read** is the class the first failing assertion implies, with nothing behind it but that line; slice 6 recorded that inherited classifications are leads rather than results, and slice 10 recorded the same about a ledger row, so a **read** verdict is a lead and is written here to be checked, not to be believed.
+Forty-five of the 65 are **read** and twenty are **measured**; that is the honest shape of one iteration against a lane this size.
+
+### The verdict table
+
+| Script | First failing assertion | Class | Basis and reason |
+| --- | --- | --- | --- |
+| fm-afk-return | `return begin should gate on a live blocker` with `fm-proc-lib.sh: No such file` | test - **fixed** | measured. `install_runner` copies `fm-wake-lib.sh` alone, and slice 1 gave that library a leaf dependency, so the fixture home dies at source time on every platform. Now green. |
+| fm-remote-backlog-handoff | same missing file, then `confined put reported success after its destination directory changed` | test - **fixed**, then unclassified | measured. Same missing copy in the remote-root fixture; fixed, and the script now reaches a confined-put assertion that is not classified. |
+| fm-cursor-harness | `no-jq parser must keep an open turn busy after a malformed close, got ''` | test - **fixed** | measured. The fallback fixture is a bare symlink to MSYS `awk` in a directory that becomes the child's whole `PATH`, so `awk` never loads its DLL and answers nothing. Now green through `fm_fakebin_link`. |
+| fm-subagent-pretool-check | `missing jq transport must fail open, got exit 127: ... error while loading shared libraries` | test - **fixed** | measured. The same shape one step earlier: a symlinked `bash` exits 127 before the guard runs, so a fail-open case reads as fail-closed. Now green. |
+| fm-secondmate-sync | `no BOOTSTRAP_INFO nudge line emitted (got: MISSING: git ...)` | test - **fixed** | measured. The fixture's curated `BASE_PATH` is the Linux four-directory list, which on Git Bash holds no `git`. Now green. |
+| fm-startup-memory-budget | `default materialization should stay quiet, got: MISSING: git` | test - **fixed** | measured. Same `BASE_PATH`. Now green. |
+| fm-stow-cascade | `a remote home with a live agent was not routed to that agent` | test - **fixed** | measured. Same `BASE_PATH`. Now green. |
+| fm-watcher-lock | `expected exactly one lock winner under concurrency, got 2` | test - **fixed**, then unclassified | measured, and a disproof: the lock is not admitting two winners. Forty contenders with the fixture's one-second hold give 2; the same forty with a twenty-second hold give exactly 1. Barrier landed; the script now reaches `restart did not surface recovery after replacing a reused-pid lock`. |
+| fm-bootstrap | `treehouse --lease support is accepted silently ... got: MISSING: git` | test - **fixed**, then unclassified | measured. `BASE_PATH` fixed; the script now runs 26 cases in 1224 s where it used to die in 15 s, and fails at `active dispatch verbose info block mismatch`. An earlier draft called this a bound problem alone; it is not. |
+| fm-bootstrap-network-parallel | `an unreachable mate must fail closed with its own liveness line` | test - **fixed**, then platform | measured. `BASE_PATH` fixed; the next failure is `clone refresh did not overlap the secondmate sweeps`, an overlap assertion against wall-clock windows. |
+| fm-session-start | `jq: error: Could not open file .../home-summary.json` | test - **fixed**, then platform: row 21 | measured. `BASE_PATH` fixed; the next failure wants `cannot write session lock` out of a directory a fixture made unwritable, which `chmod` cannot do to its owner on a `noacl` mount. |
+| fm-secondmate-harness | `crew-unaffected: expected an ordinary ship task` | test - **fixed**, then platform | measured. `BASE_PATH` fixed; the script now exceeds a 900 s bound instead of failing at that case. |
+| fm-backend-cmux | `capture should trim to the last N lines locally` | **product** | measured. Finding 32: `fm_backend_cmux_capture` reads the surface through `jq -r '.text // empty'`, a native `jq` writes CRLF, and every captured line keeps a CR - the defect slice 9 funnelled out of the herdr adapter, alive in a second backend. |
+| fm-daemon | `wedge marker unexpectedly persisted in an unwritable state directory` | platform: row 21 | read. `chmod` cannot take write away from the owner on a `noacl` mount, so the unwritable-directory premise cannot be staged. |
+| fm-shared-captain-inheritance | `unwritable destination directory should make quarantine fail` | platform: row 21 | read. Same premise. |
+| fm-procevent | `the captured result is private (missing: '600')` | platform: row 21 | read. Every file this mount creates is 644. |
+| fm-procevent-when | `error: published spec failed validation` | platform: row 21 | read. `fm_pr_file_mode` reads 644 where the spec gate requires 600. |
+| fm-public-followup | `could not retain the private request context` | platform: row 21 | read. The private context is a mode-700 directory the mount reports as 755. |
+| fm-teardown | `error: could not prepare PR poll` | platform: row 21 | measured. The same mode-600 gate the Phase C merge hit; ledger row 24. |
+| fm-test-isolation-proof | `failed to create mode-0700 worker root ... (mode=755)` | platform: row 21 | measured. The runner's own isolation proof, already named in the parallel lane. |
+| fm-cursor-primary | `a C compiler is required to build the fake Cursor process` | platform: toolchain | measured. There is no `cc` in this Git Bash. The script asserts the requirement instead of gate-skipping on it. |
+| fm-remote-secondmate-parent-binding | `required tool git does not resolve on the remote operator PATH` | platform: toolchain | read. The fixture's remote-operator PATH is the same Linux four-directory list. |
+| fm-remote-secondmate-trace-context | same | platform: toolchain | read. Same remote-operator PATH. |
+| fm-remote-doctor | `--fix left a repairable host unready: expected exit 0, got 1` | platform: toolchain | read. The doctor fixture builds its `~/.local/bin` tool set from the same assumptions. |
+| fm-voice-relay | `fm-voice-client.py: error: say where the relay is` | platform: toolchain | read. The voice path has no Windows story yet. |
+| fm-task-inbox | `a concurrent inbox write failed` | platform: spawn cost | measured. The slowest script in the lane at 1501 s; it hit the per-script bound. |
+| fm-watch-checkpoint | `signal checkpoint exit: expected exit 0, got 124` | platform: spawn cost | read. The checkpoint's own timeout fired - finding 27's family, an iteration-counted budget that assumes a free poll. |
+| fm-wake-queue | `no actionable wake within 3s` | platform: spawn cost | read. A three-second deadline where one liveness probe costs seconds. |
+| fm-watch-recovery-loop | `did not surface the crew event within a poll interval or two (waited 16s)` | platform: spawn cost | read. |
+| fm-watch-arm | `re-arm stayed live instead of surfacing durable wakes` | platform: spawn cost | read. |
+| fm-watch-triage | `watcher did not surface a turn-end whose crew is not provably working` | platform: spawn cost | read. |
+| fm-wake-daemon-lifecycle-e2e | `watcher did not exit for the routine signal` | platform: spawn cost | read. |
+| fm-home-summary-refresh | `the real watcher did not begin polling` | platform: spawn cost | read. |
+| fm-pending-reply | `recovery should send after completed turn + grace` | platform: spawn cost | read. A grace window in wall-clock seconds. |
+| fm-spawn-worktree-settle | `already-settled pane took 31s to confirm` | platform: spawn cost | read. The assertion is a wall-clock bound sized for a fast spawn. |
+| fm-startup-network | `start blocked for 10s behind a 10s worker` | platform: spawn cost | read. A parallelism assertion in wall-clock seconds. |
+| fm-session-lock-ancestry | `the fixture hook never finished` | platform: spawn cost | read. Slice 9 measured the severed-shape identity proof at 5.5 s; this fixture waits less than a loaded machine needs. |
+| fm-backlog-handoff | `reconciliation-race handoff never reached backend delivery` | platform: spawn cost | read. A race the fixture stages with sleeps. |
+| fm-control-relaunch | `relaunch did not reach trace delivery` | platform: spawn cost | read. |
+| fm-control | `the result should report muse's cancelled terminal acknowledgement` | platform: spawn cost | read. |
+| fm-inactive-reconcile | `main did not queue terminal presentation` | platform: spawn cost | read. |
+| fm-remote-transport-lanes | `the worker did not publish its readiness heartbeat` | platform: spawn cost | read. |
+| fm-remote-job-orphan-reap | `could not start the fixture remote job worker` | platform: spawn cost | read. |
+| fm-remote-job | `the default queue bound is too short` | platform: spawn cost | read. The bound is a wall-clock constant. |
+| fm-remote-reply | `the remote reply delta was not durably captured` | platform: spawn cost | read. |
+| fm-remote-secondmate-lifecycle-e2e | `serialized successful seed failed` | platform: spawn cost | read. |
+| fm-backend-herdr-focus-flash-e2e | `the idle-shell proof never ran` | platform: spawn cost | read. The fixture waits for a pane shell to go idle. |
+| fm-muse-harness | `muse binding did not exclude the pre-existing session` | platform: spawn cost | read. |
+| fm-fleet-snapshot-view | `view should render bold in-flight row from snapshot` | platform: spawn cost | read. The row is missing from a snapshot the fixture expects to have been refreshed by then. |
+| fm-bearings-snapshot | `bearings did not disclose bounded parent activity evidence` | platform: spawn cost | read. Ledger row 30's CRLF defect lives in this script but is not this assertion. |
+| fm-busy-adapter-wiring | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | platform: spawn cost | read. A settle window the fixture times. |
+| fm-pi-watch-extension | `must surface an external healthy watcher as an owned-wake failure` | platform: spawn cost | read. |
+| fm-secondmate-reconcile | `the window was shorter than four hours` | platform: spawn cost | read. A cooldown computed from wall-clock stamps. |
+| fm-teardown-endpoint-safety | `recorded target pid no longer belongs to the expected child` | platform: spawn cost | read. A pid-identity assertion against a child the fixture outlived. |
+| fm-claude-stop-autoarm | `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2` | unclassified, but **not** load and **not** a regression | measured three ways: in the lane after 603 s, alone at HEAD after 574 s, and alone in a worktree at slice 9's own commit `d80757f` - 36 cases pass and then the same line, every time. |
+| fm-turnend-guard | `OpenCode plugin must run the guard from worktree even when directory is elsewhere` | unclassified, but **not** load and **not** a regression | measured the same three ways: 43 cases pass and then the same line, in the lane, alone at HEAD, and alone at `d80757f`. |
+| fm-kimi-harness | `Kimi hook removal failed` | unclassified | measured. Converting its three fakebins to `fm_fakebin_link` did not move the first case, so the cause is elsewhere; the speculative change was reverted rather than left in. |
+| fm-on | `remote exit status was not preserved (got 64)` | unclassified | read. 64 is a usage refusal from the fixture's ssh stub, so the stub and the product are not separated. |
+| fm-operational-input | `OpenCode cross-language adapter could not invoke the canonical owner` | unclassified | read. A node/bash boundary that needs its own look. |
+| fm-sessionstart-nudge | `OpenCode exact nudge delivery: expected exit 0, got 1` | unclassified | read. The `BASE_PATH` fix did not move it. |
+| fm-pi-branch-extension | `file:///C:/Users/ebatt/firstmate-gnhf/[eval1]:10` | unclassified | read. A Windows ESM specifier form inside a node `--eval`; worth its own measurement. |
+| fm-pr-check-security | `parser accepted a rejected raw-byte URL class` | unclassified | read. A security-parser assertion, which is exactly the kind that must not be waved through as timing. |
+| fm-secondmate-safety | `fm-pr-check failed under FM_HOME` | unclassified | read. Plausibly row 21's mode gate again, but not measured. |
+| fm-gotmp | `teardown exited non-zero with a valid tasktmp` | unclassified | read. Teardown is where ledger row 31 lived, so this deserves its own measurement. |
+| fm-tool-update-check | `commits behind the origin branch were not reported`, with `origin has no branch main` | unclassified | read. The product answered that about a fixture remote it had just created; a `file://` remote with a drive-letter path is the first suspect. |
+
+Counted by class: 12 fixed this slice (6 of them fully green), 7 row 21, 5 toolchain, 29 spawn cost, 1 product, 11 unclassified - 65.
+
+### The four fixture defects this slice fixed
+
+Three of the four are one root cause each, found because the lane ran them for the first time.
+None of them is Windows-only in principle; two of them fail on Linux too.
+
+**A fixture that copies a library without its leaf.**
+Slice 1 made `bin/fm-wake-lib.sh` source `bin/fm-proc-lib.sh` at load time and read `FM_PROC_UNAME` there.
+Iteration 9 found three fixture installers that copy the first without the second; the serial lane found the last two, in `fm-afk-return` and `fm-remote-backlog-handoff`.
+Both die at the first assertion on every platform, so this is a cross-platform regression from a Windows slice, not a Windows finding.
+
+**A fixture PATH that describes a Linux box.**
+Sixteen test scripts curate the system half of a fixture child's `PATH` as `/usr/bin:/bin:/usr/sbin:/sbin`.
+Git Bash keeps `bash` and coreutils there but ships `git` in `/mingw64/bin`, so that list describes a machine with no `git` at all, and every fixture that asserts a quiet bootstrap fails on a `MISSING: git` line before it tests anything.
+`tests/lib.sh` now owns the list as `fm_test_base_path`, which returns that exact literal on POSIX and appends the real directories of `git` and `jq` on MSYS.
+All nineteen call sites read `${FM_TEST_BASE_PATH:-$(fm_test_base_path)}`, so the operator override every one of them already had still wins.
+
+`git` and `jq`, and nothing else, because the suite says which tools those four directories hold and the first version of this helper got it wrong.
+That version also appended `node`, `gh` and `python3`, on the reasoning that it was restoring the list's Linux meaning; the acceptance review disproved it with the fixture's own shape.
+A case that needs `git` or `jq` **absent** has to mask them with a `BASH_ENV` shim (tests/fm-bootstrap.test.sh:501 and :670) because deleting them from the fakebin is not enough on a passing host - they are in those four directories.
+A case that needs `node` absent just deletes it from the fakebin (tests/fm-bootstrap.test.sh:897, tests/fm-session-start.test.sh:956 and :1360) - which only works because `node` is **not** in those four directories on a passing host.
+Appending a tool of the second kind silently defeats the fixture that removed it: measured, the same `MISSING: node` assertion that passes on a Linux runner stopped firing here, so three cases would have been broken by the fix meant to unblock them.
+`gh` was dropped for the same reason with less evidence but a worse failure mode - tests/fm-sessionstart-nudge.test.sh:178 says in as many words that its digest child must report a missing tool rather than reach the host's real `gh`, and that child runs on the base list with no fakebin in front of it.
+Seven literal copies of the four-directory list remain outside this helper, in `tests/fm-on.test.sh`, `tests/fm-remote-doctor.test.sh:32`, `tests/fm-remote-job.test.sh:189` and `tests/fm-spawn-dispatch-profile.test.sh:710`; they are named here rather than converted, because converting a fixture PATH with no measurement behind it is what this finding is about.
+
+**A fakebin built with a bare symlink.**
+Slice 4 established that Windows resolves an MSYS executable's DLLs against the directory the image was launched from and then against `PATH`, so a symlinked `bash` or `awk` in a fakebin holding no `msys-2.0.dll` dies with exit 127 before running a line - and gave the repo `fm_fakebin_link` for it.
+The serial lane found two more sites where the fakebin becomes the child's *whole* `PATH`, which is the only shape where this bites: `fm-subagent-pretool-check`'s no-jq case and `fm-cursor-harness`'s no-jq fallback case.
+Both were asserting a fail-open, and on Windows both read as a fail-closed for a reason that has nothing to do with the guard.
+A sweep of the remaining bare-symlink fakebins is deliberately not part of this slice: most of them prepend to a `PATH` that still holds `/usr/bin`, where the loader finds the DLL and the symlink is harmless, and converting them blind would be a change with no measurement behind it.
+
+**A lock fixture that bets on a fast spawn.**
+`fm-watcher-lock`'s concurrency case starts 40 contenders, has the winner `sleep 1`, and asserts one winner.
+Its own comment names the hazard: the winner must outlive every rival's decision or a late contender legitimately reclaims a dead-pid lock.
+One second is a bet that 40 process spawns and 39 liveness probes fit inside it, and on this box that bet loses.
+
+```
+$ ./run.sh bin/fm-wake-lib.sh 1    # the fixture's hold
+hold=1 wins=2
+$ ./run.sh bin/fm-wake-lib.sh 20   # the same 40 contenders, longer hold
+hold=20 wins=1
+```
+
+So `fm_lock_try_acquire` is correct here and the suite was reading a correct lock as broken.
+The fix is a barrier rather than a bigger number: the winner holds until all 39 rivals have recorded that their attempt finished, bounded at 60 s.
+That costs a Linux run nothing measurable and removes the assumption instead of re-tuning it.
+
+### Verification
+
+| Script | In the lane | After the fixes |
+| --- | --- | --- |
+| fm-afk-return | FAIL at case 1 (4.4 s) | **PASS** (94 s) |
+| fm-secondmate-sync | FAIL at case 1 (52 s) | **PASS** (515 s) |
+| fm-startup-memory-budget | FAIL at case 1 (15 s) | **PASS** (167 s) |
+| fm-stow-cascade | FAIL (56 s) | **PASS** (59 s) |
+| fm-subagent-pretool-check | FAIL at the no-jq case | **PASS** (all cases) |
+| fm-cursor-harness | FAIL at the no-jq fallback case | **PASS** (13 cases) |
+| fm-watcher-lock | FAIL at case 12 (86 s) | 18 cases pass, FAIL later at reused-pid recovery |
+| fm-remote-backlog-handoff | FAIL at case 1 (153 s) | 12 cases pass, FAIL later at confined put |
+| fm-bootstrap | FAIL at case 1 (16 s) | 26 cases pass in 1224 s, FAIL later at a verbose info block |
+| fm-bootstrap-network-parallel | FAIL at case 1 (35 s) | FAIL later at the overlap assertion |
+| fm-session-start | FAIL at the digest case (43 s) | FAIL later at row 21's unwritable directory |
+| fm-secondmate-harness | FAIL at `crew-unaffected` | exceeds a 900 s bound |
+| fm-secondmate-liveness | PASS (not in the lane's red list) | **PASS** (621 s) - no regression |
+| fm-vendor-auth-probe | PASS | **PASS** (100 s) - no regression |
+
+Every row above was re-run after the acceptance review narrowed the helper to `git` and `jq`; the numbers are from that second run, not the first.
+`bin/fm-lint.sh` is clean on every file this slice touched.
+No file under `bin/` changed, so the POSIX-identity question is entirely about `tests/`: `fm_test_base_path` returns the same literal string those callers held before on any non-MSYS host, and `fm_fakebin_link`'s POSIX branch is the `ln -s` the two converted sites were already doing.
+
+### The two suites slice 9 left "36 green" and "43 green"
+
+Both are red in the lane, and the first question was whether a loaded machine or slices 10 and 11 had broken them.
+Neither.
+Run alone at HEAD they fail at exactly the same assertion, and run alone from a worktree at slice 9's own commit `d80757f` they fail at exactly the same assertion again - `fm-claude-stop-autoarm` after 36 passing cases, `fm-turnend-guard` after 43.
+Ledger row 28 already says this ("what is left is one deterministic red in each"), so the count in the notes was the number of cases that pass before the suite stops, not a green suite.
+The lane is what makes the difference legible: a suite that stops at case 37 is one red in a summary line and 36 assertions that were never reached.
+Both reds stay unclassified here; they are two specific behaviours to root-cause, not a platform story.
+
+### Finding 32: the CRLF funnel's twin in the cmux adapter
+
+`fm_backend_cmux_capture` (bin/backends/cmux.sh:528) reads the surface text with `jq -r '.text // empty'` and tails it locally.
+A native `jq` opens stdout in text mode, so every newline it writes becomes CRLF - the measurement slice 9 recorded for the herdr adapter, unchanged.
+The captured surface therefore carries a CR at the end of every line, which is what `capture should trim to the last N lines locally` catches.
+This is not fixed here.
+The herdr adapter's answer was `fm_backend_herdr_jq_rows`, a private leaf reader with the two branches proved byte-identical; the cmux adapter needs the same shape, and giving two adapters one shared reader is a design question rather than a one-line edit, so it is recorded rather than guessed at.
+It is the second confirmation that the right unit for this defect is "every `jq -r` whose answer can contain a newline", not "the herdr adapter".
+
+### What the lane does not settle
+
+Ten reds are unclassified and two of those, `fm-pr-check-security` and `fm-secondmate-safety`, are assertions about refusals rather than about timing, so they are the ones to take first.
+The twenty-nine "spawn cost" verdicts are the largest block and the least examined: each is a wall-clock or poll-count budget that a Linux box satisfies and this one does not, but that description came from one line of output apiece.
+Finding 27 already says the general thing - an iteration-counted budget is a lie on a slow platform, and it needs a deadline - and this lane is twenty-nine more instances of the same shape in the test suite rather than in the product.
+The honest summary is that the serial lane's first Windows run bought a count, four fixture root causes, one new product finding and a disproof; it did not buy a triaged suite.
 
 ## What the spike did not know
 

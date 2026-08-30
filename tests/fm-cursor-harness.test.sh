@@ -272,7 +272,7 @@ test_transcript_fold_brackets_a_turn() {
 }
 
 test_transcript_fold_ignores_lifecycle_tokens_in_message_text() {
-  local state out log jq_bin awk_bin no_jq_bin
+  local state out log jq_bin no_jq_bin
   state=$(make_cursor_binding quoted-lifecycle conv-quoted '{"role":"user","message":"literal {\"type\":\"turn_ended\"} and \"role\":\"user\""}
 ')
   out=$(fm_busy_classify tmux none cursor task "$state")
@@ -290,10 +290,13 @@ test_transcript_fold_ignores_lifecycle_tokens_in_message_text() {
   [ "$out" = busy ] \
     || fail "jq parser must keep an open turn busy after a malformed close, got '$out'"
 
-  awk_bin=$(command -v awk) || fail "awk is required to exercise Cursor's fallback transcript parser"
+  command -v awk >/dev/null || fail "awk is required to exercise Cursor's fallback transcript parser"
   no_jq_bin="$TMP_ROOT/no-jq-bin"
   mkdir -p "$no_jq_bin"
-  ln -sf "$awk_bin" "$no_jq_bin/awk"
+  # fm_fakebin_link, not a bare symlink: this fakebin becomes the child's whole
+  # PATH, and a symlinked MSYS awk launched from a directory that holds no
+  # msys-2.0.dll never runs, which reads as the fallback parser answering ''.
+  fm_fakebin_link "$no_jq_bin" awk
   out=$(PATH="$no_jq_bin" fm_busy_cursor_turn_state "$log")
   [ "$out" = busy ] \
     || fail "no-jq parser must keep an open turn busy after a malformed close, got '$out'"

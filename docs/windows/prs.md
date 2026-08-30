@@ -97,6 +97,13 @@ The re-split slice cuts it as `pr-5-path-lib` from `upstream/main` and pushes it
 
 Two of the things it fixes are not Windows-specific and are worth naming for the reviewer: `git rev-parse --git-path` answers absolutely in a linked worktree on every platform, so teardown's index-lock gate has always been one `.git`-file layout away from failing open; and `bash`'s `cd ""` succeeds, so `bin/fm-spawn.sh`'s isolation guard resolved an empty worktree root to the caller's own current directory.
 
+## Slice 11's territory: `tests/` only
+
+Slice 11 changed no file under `bin/`, so it belongs to no existing PR branch on merit and to every one of them by accident.
+Its four fixture fixes are `tests/lib.sh` (the new `fm_test_base_path`), nineteen call sites across sixteen test scripts, two fixture installers that copy `bin/fm-wake-lib.sh` without `bin/fm-proc-lib.sh`, two whole-`PATH` fakebins converted to `fm_fakebin_link`, and one lock fixture's hold window.
+Two of them are cross-platform bugs rather than Windows ones: the missing `fm-proc-lib.sh` copies kill those suites on Linux too, and they are a regression from `pr-2`, so those two hunks belong on `pr-2-proc-lib`.
+The rest is a `pr-6-test-fixtures` of its own - it depends on nothing in `pr-2` through `pr-5` and nothing depends on it - and the re-split slice should cut it that way rather than sprinkle test-only hunks across four branches.
+
 ## One safety note about these branches
 
 `git checkout -b <name> upstream/main` sets the new branch's upstream to `upstream/main`, so a bare `git push` from any of them would have targeted `kunchenguid/firstmate`.

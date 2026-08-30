@@ -198,12 +198,14 @@ test_guard_warnings() {
 }
 
 test_lock_single_winner_under_concurrency() {
-  local dir state lockdir marker i pids pid wins
+  local dir state lockdir marker settled i pids pid wins
   dir=$(make_case lock-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
+  settled="$dir/settled"
   : > "$marker"
+  : > "$settled"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
@@ -211,11 +213,21 @@ test_lock_single_winner_under_concurrency() {
       . "$1"
       if fm_lock_try_acquire "$2"; then
         printf "%s\n" "$$" >> "$3"
-        # Stay alive so the held lock names a live pid for the whole window;
-        # otherwise a late contender could legitimately reclaim a dead-pid lock.
-        sleep 1
+        # Hold until every rival has finished its attempt, so the held lock
+        # names a live pid for as long as anyone is still deciding; otherwise a
+        # late contender legitimately reclaims a dead-pid lock and there are two
+        # winners. A fixed sleep here bets that 40 process spawns and 39
+        # liveness probes fit inside it, which is false wherever a spawn is
+        # slow: on MSYS the one-second bet this replaces loses, and the suite
+        # reads a correct lock as broken.
+        waited=0
+        while [ "$(wc -l < "$4")" -lt "$5" ] && [ "$waited" -lt 600 ]; do
+          sleep 0.1
+          waited=$((waited + 1))
+        done
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+      printf "x\n" >> "$4"
+    ' _ "$LIB" "$lockdir" "$marker" "$settled" 39 &
     pids="$pids $!"
     i=$((i + 1))
   done

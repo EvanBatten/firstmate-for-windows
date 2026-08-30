@@ -14,7 +14,7 @@ TMP_ROOT=$(fm_test_tmproot fm-stow-cascade)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
-BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BASE_PATH=${FM_TEST_BASE_PATH:-$(fm_test_base_path)}
 
 # A fake ssh standing in for the whole remote transport. It decodes fm-on.sh's
 # NUL argv stream so each remote leg can answer as its own command, and its mode
