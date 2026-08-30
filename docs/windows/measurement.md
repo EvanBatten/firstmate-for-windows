@@ -2262,11 +2262,11 @@ Run `33328744694` on the merged head, on a clean `windows-latest` runner:
 | Lint (Windows) | killed by its own 60-minute cap while still progressing |
 
 The two shards together are **19 green / 4 red / 1 gate-skip of 24 - the exact standing count and the exact four reds slice 6 documented**, so the lane reproduces this machine's classification on hardware it has never seen.
-The lint job is the one CI-only finding, and it took two runs to name it.
-The first run's job was killed by its own 60-minute cap while progressing, so the cap went to 120 minutes as a hang tripwire (`ac34c9b`); the second run (`33332020565`, on a head whose only deltas were two test fixtures, that cap and these docs) then failed on its own at 65 minutes with `shellcheck.exe: getMBlocks: VirtualAlloc MEM_COMMIT failed: The paging file is too small` (exit 251).
-The constraint is memory, not time: two workers mean two resident cross-file ShellCheck analyses on a 7 GB runner.
-The CI job now runs `--jobs 1` - the supported worker-count override, not a re-spelling of the checks - which halves the peak without a third-party pagefile action; this box keeps the default two.
-That second run's shards reproduced 19 green / 4 red / 1 gate-skip with the same four scripts again, so the behavior count is stable across two clean runners.
+The lint job is the one CI-only finding, and it took three runs to bound it.
+With the default two workers it was killed by its own 60-minute cap while progressing (run 1), and with the cap raised to 120 minutes it died on its own at 65 minutes with `shellcheck.exe: getMBlocks: VirtualAlloc MEM_COMMIT failed: The paging file is too small` (exit 251) - two resident cross-file analyses do not fit the 7 GB runner (run 2, `33332020565`).
+With `--jobs 1` (the supported worker-count override, not a re-spelling of the checks) memory holds but the single analysis outlived the 120-minute tripwire (run 3, `33335250205`, killed at 2 h 0 m).
+So the full extended lint on `windows-latest` is somewhere past two hours, and the job is now `workflow_dispatch`-only at a 180-minute cap: ShellCheck's analysis is platform-independent and already gates every change on Linux CI and on this box (which lints in well under an hour), and the one Windows-specific fact the job could add - the pinned toolchain installing and running under Git Bash - is proven by `fm-lint.test.sh` running green inside the shards on every push.
+Runs 2 and 3 reproduced shard counts of 19 green / 4 red / 1 gate-skip with the same four scripts, so the behavior count is stable across three clean runners.
 `fm-captain-hold-lifecycle` also prints `shasum: command not found` on the runner (its line 208); `fm_pr_sha256` falls back to `sha256sum`, so it is noise there, and the suite's red is the documented slice 6 verdict either way.
 
 ## What the spike did not know

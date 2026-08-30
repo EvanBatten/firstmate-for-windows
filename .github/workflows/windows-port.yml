@@ -23,16 +23,20 @@ jobs:
   lint:
     name: Lint (Windows)
     runs-on: windows-latest
-    # ci.yml's Linux lint job needs no cap at all. Here the same lint was still
-    # running healthily after 25 minutes: fm-lint.sh hands ShellCheck the file
-    # set in a few large batches under --external-sources, and that cross-file
-    # analysis is far slower on this platform. CI also refuses --fast, so the
-    # full analysis is mandatory, and the default two workers are already in
-    # use. The lane's first real run (33328744694, 2026-08-30) was killed by a
-    # 60-minute cap while still making progress, so the tripwire sits at two
-    # hours: a hang tripwire with margin, not the expected healthy end of the
-    # job.
-    timeout-minutes: 120
+    # Dispatch-only, deliberately. The full extended analysis does not fit a
+    # push cadence on windows-latest, measured three times on 2026-08-30: with
+    # the default two workers it was killed by a 60-minute cap while healthy
+    # (33328744694) and then died at 65 minutes with "getMBlocks: VirtualAlloc
+    # MEM_COMMIT failed: The paging file is too small" on the 7 GB runner
+    # (33332020565); with one worker it outlived a 120-minute cap (33335250205).
+    # ShellCheck's analysis is platform-independent - ci.yml's Linux lint and a
+    # local bin/fm-lint.sh already gate every change - and the Windows-specific
+    # fact this job could prove, that the pinned toolchain installs and runs
+    # under Git Bash, is already proven by fm-lint.test.sh running green inside
+    # the shards below. So the push lanes carry the port's count and this job
+    # answers a manual dispatch when the full analysis on Windows is wanted.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash
