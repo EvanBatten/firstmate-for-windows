@@ -281,21 +281,30 @@ test_lock_stale_steal_single_winner_under_concurrency() {
 }
 
 test_lock_live_steal_mutex_is_not_reclaimed() {
-  local dir state lockdir dead holder_file holder out i lockpid stealpid
+  local dir state lockdir dead holder_file done_file holder out i lockpid stealpid
   dir=$(make_case lock-live-stealer)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   holder_file="$dir/holder"
+  done_file="$dir/contender-done"
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
+  # The holder keeps the steal mutex until the contender has recorded its
+  # answer (bounded at 60 s) rather than for a fixed two seconds: one stale-lock
+  # probe costs about two seconds on Git Bash, so a timed hold turns into a bet
+  # on the platform and reads a correct refusal as a changed owner.
   FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
     fm_lock_try_acquire "$2.steal" || exit 7
     printf "%s\n" "${BASHPID:-$$}" > "$3"
-    sleep 2
+    i=0
+    while [ "$i" -lt 600 ] && [ ! -e "$4" ]; do
+      sleep 0.1
+      i=$((i + 1))
+    done
     fm_lock_release "$2.steal"
-  ' _ "$LIB" "$lockdir" "$holder_file" &
+  ' _ "$LIB" "$lockdir" "$holder_file" "$done_file" &
   holder=$!
   i=0
   while [ "$i" -lt 50 ] && [ ! -s "$holder_file" ]; do
@@ -307,7 +316,8 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
     . "$1"
     if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
     printf "rc=%s held=%s lockpid=%s stealpid=%s\n" "$rc" "${FM_LOCK_HELD_PID:-}" "$(cat "$2/pid" 2>/dev/null || true)" "$(cat "$2.steal/pid" 2>/dev/null || true)"
-  ' _ "$LIB" "$lockdir")
+    : > "$3"
+  ' _ "$LIB" "$lockdir" "$done_file")
   wait "$holder" || fail "live steal mutex holder failed"
   case "$out" in
     *"rc=1"*) ;;
