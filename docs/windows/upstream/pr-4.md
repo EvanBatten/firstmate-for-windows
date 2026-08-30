@@ -1,10 +1,11 @@
 # PR-4: give the crewmate a working shell and a live cwd on Windows
 
 Branch: `EvanBatten:pr-4-herdr-windows-pane` -> `kunchenguid/firstmate:main`.
-One commit on top of PR-3, 6 files, +899 -12 against `main` (of which PR-3 contributes +556).
+Two commits on top of PR-3, 6 files, +1294 -34 against `main` (of which PR-3 contributes +956).
+The pane work is the first; the second is a merge that brings PR-3's follow-up jq commit forward, so this branch stays a superset of PR-3 without a force-push.
 
 **Stacked on PR-3.** Both change `bin/backends/herdr.sh` and `tests/fm-backend-herdr-windows.test.sh`, and this work reads as a diff against PR-3's, not against `main`.
-Please merge PR-3 first; the diff to review here is the second commit.
+Please merge PR-3 first; the diff to review here is `git diff pr-3-herdr-windows-cli..pr-4-herdr-windows-pane`, which is the pane commit plus the merge that carries PR-3's follow-up forward.
 
 ## What is wrong today
 
@@ -101,7 +102,7 @@ The last two lines are the proof that the emitter survived into treehouse's own 
 | Check | Result |
 | --- | --- |
 | `bin/fm-lint.sh` on both touched files | clean, ShellCheck 0.11.0, full extended analysis |
-| `tests/fm-backend-herdr-windows.test.sh` (PR-3's 21 cases + 11 new) | 32 / 32 |
+| `tests/fm-backend-herdr-windows.test.sh` (PR-3's 32 cases + 11 new) | 43 / 43 |
 | `tests/fm-backend-herdr.test.sh`, POSIX identity of the refactored sites | all 16 `create_task` / `--no-focus` / husk-replacement cases and `current_path` pass |
 | `tests/fm-backend-herdr-smoke.test.sh`, real herdr, isolated lab session | **16 / 16, exit 0** - was 14/15 before the port and 13 + one failure after PR-3 |
 | `bin/fm-test-run.sh --check-coverage` | `ok total=168 parallel=24 serial=132 serial_shards=4 herdr=12` |

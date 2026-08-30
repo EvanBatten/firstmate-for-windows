@@ -1,7 +1,7 @@
 # PR-2: put process identity and liveness behind one library
 
 Branch: `EvanBatten:pr-2-proc-lib` -> `kunchenguid/firstmate:main`.
-Two commits, 14 files, +991 -28, of which +924 is the new library and its test.
+Three commits, 17 files, +1002 -30, of which +924 is the new library and its test.
 Depends on nothing; PR-1 makes it *runnable* on Windows but this branch is correct without it.
 
 ## What is wrong today
@@ -100,6 +100,21 @@ Its only `ps` use is inside `fm_backend_detect_cmux_app_is_ancestor`, reachable 
 
 `tests/fm-proc-lib.test.sh` fakes `uname`, `ps` and `pwsh`, mirroring how `tests/fm-backend-herdr.test.sh` fakes `herdr`, so **the MSYS branch is covered on Linux and macOS CI too**.
 That is what keeps this patch from being code no CI ever executes.
+
+## The third commit: three fixtures that install the wake library
+
+`bin/fm-wake-lib.sh` sources `bin/fm-proc-lib.sh` at load time, so any test fixture that copies the wake library into a sandbox `bin/` without it dies on an unbound `FM_PROC_UNAME` before its first assertion runs.
+That is every platform, not just Windows, and it is a regression this branch introduces if it lands without the copies.
+
+Three installers were missing it: `tests/fm-afk-return.test.sh`, `tests/fm-remote-backlog-handoff.test.sh`, and both fixture installers in `tests/fm-turnend-guard.test.sh`.
+
+| Script | without the copy | with it |
+| --- | --- | --- |
+| `tests/fm-afk-return.test.sh` | red at case 1, `fm-proc-lib.sh: No such file or directory` | **all cases pass** |
+| `tests/fm-turnend-guard.test.sh` | 7 cases reached | **30 cases reached** |
+| `tests/fm-remote-backlog-handoff.test.sh` | red at case 1 | runs on to the confined-put case, where it stops on a Windows `mv` permission error |
+
+The two later reds are unrelated to this branch: `fm-turnend-guard` then needs a `tests/lib.sh` fakebin helper that is not in this set (see PR-5 and PR-6), and `fm-remote-backlog-handoff` stops at a Windows `mv` permission error.
 
 ## Notes for the reviewer
 

@@ -1,4 +1,4 @@
-# Windows (Git Bash) support: what a full measurement found, and four PRs that fix most of it
+# Windows (Git Bash) support: what a full measurement found, and seven PRs that fix most of it
 
 Addressed to the maintainer of `kunchenguid/firstmate`.
 Written on `EvanBatten/firstmate-for-windows`; nothing here has been sent, and no branch has been pushed to this repository.
@@ -19,15 +19,15 @@ Of the original twenty-one: eight pass unchanged, five are degraded in ways that
 | --- | --- |
 | **PASS**, no change needed | Claude Code hook execution, treehouse leases, herdr protocol floors, coreutils and friends, no-mistakes with a native `claude.exe`, the universal toolchain probe, symlink locks (with `MSYS=winsymlinks:nativestrict`), and the bootstrap digest itself |
 | **DEGRADED**, existing fallback is correct | native event push (Windows Python has no `socket.AF_UNIX`, so the watcher polls - the same fallback the spike saw), presentation workspace ordering, stale git-lock proof (no `lsof`, so `fm-lock-lib.sh` fails safe), install helpers, wedge-alarm notifier |
-| **FAIL**, fixed by the four PRs | line endings at checkout, harness ancestry (`ps -o`), `kill -0` on native pids, the herdr socket path shape, MSYS argument path conversion, the crewmate pane shell, pane cwd tracking |
+| **FAIL**, fixed by these PRs | line endings at checkout, harness ancestry (`ps -o`), `kill -0` on native pids, the herdr socket path shape, MSYS argument path conversion, the crewmate pane shell, pane cwd tracking |
 | **FAIL**, cross-cutting, no patch proposed | POSIX mode privacy checks on `noacl` mounts (33 of 151 `bin/*.sh`) |
 
 The full ledger, with the exact command and output behind every row, is in [`docs/windows/measurement.md`](../measurement.md) on the fork.
 
-## The four PRs
+## The seven PRs
 
 Each is cut from `main` at `f66be0f`, each keeps macOS and Linux byte-identical, and each carries its own test that exercises the Windows branch from a POSIX host by faking the userland.
-The bodies are written out at [`pr-1.md`](pr-1.md), [`pr-2.md`](pr-2.md), [`pr-3.md`](pr-3.md), [`pr-4.md`](pr-4.md); the branch-to-commit map is in [`prs.md`](../prs.md).
+The bodies are written out at [`pr-1.md`](pr-1.md) through [`pr-7.md`](pr-7.md); the branch-to-commit map, including which paths each branch carries and why the two stacked ones are stacked, is in [`prs.md`](../prs.md).
 
 **PR-1, `.gitattributes`.**
 One file, five lines, four of them a comment: `* text=auto eol=lf`.
@@ -49,6 +49,9 @@ Three defects, one file plus its python helper.
 MSYS rewrites `/`-leading arguments before `herdr.exe` sees them, so `send-text /clear` arrives as `C:/Program Files/Git/clear` and `--match=/x` as `--match=X:/`.
 And the presentation lock's mode-700 namespace check can never hold on a `noacl` mount, so teardown printed "refusing an unlocked pane close" and could not close a pane.
 The third fix is deliberately scoped to that one call site rather than swept across the other 32 mode-700 checks; see the open question below.
+A second commit on the same branch adds a fourth: a native `jq.exe` opens stdout in text mode, so a `jq -r` read that returns multiple rows carries an interior CR and the adapter's workspace-ambiguity refusal rendered `w1<CR> w7`, which looks correct on a terminal and matches nothing.
+Thirteen of the adapter's 61 `jq -r` reads can emit more than one record; all of them now go through one `fm_backend_herdr_jq_rows` funnel that undoes jq's record terminator on a Windows userland and runs the identical pipeline everywhere else.
+That takes `tests/fm-backend-herdr.test.sh` from red at case 19 to 181 / 181 here.
 
 **PR-4, the crewmate pane.**
 herdr's `default_shell` on Windows is `pwsh`, `tab create` has no shell flag, and inside a pwsh pane `exec` is not a command and bare `bash` is WSL's.
@@ -56,12 +59,25 @@ Separately, `pane get .foreground_cwd` is always `null` on the Windows build - t
 This PR routes every tab creation through one funnel that launches Git Bash by full path and carries an OSC 9;9 emitter in through `--env PROMPT_COMMAND`, and falls back to `.cwd` when `.foreground_cwd` is null.
 The acceptance test was a live one: `treehouse get` inside that Git Bash pane, with the pane's own `.cwd` landing in the worktree.
 
+**PR-5, `bin/fm-path-lib.sh`.**
+Six sites compare a `git rev-parse --show-toplevel` answer against a `pwd -P` answer, and those two never agree on Windows: `C:/...` against `/c/...`, and they disagree about case as well.
+Two of the six were live defects that fail silently, and a seventh site of the same family fails OPEN on every platform - `git rev-parse --git-path` answers absolutely in a linked worktree, so teardown's index-lock gate joined a drive-rooted path onto a directory and missed a real `index.lock`.
+Another cross-platform hole closed along the way: `bash`'s `cd ""` succeeds, so an empty worktree root resolved to the caller's own current directory inside a spawn isolation guard.
+
+**PR-6, the test fixtures.**
+Nothing under `bin/`. Four fixture assumptions that made the suite unrunnable here, two of which fail on Linux too: a `/usr/bin:/bin:/usr/sbin:/sbin` `PATH` literal in sixteen scripts that contains neither `git` nor `jq` on this platform, two whole-`PATH` fakebins built from symlinks (a symlinked MSYS binary cannot load `msys-2.0.dll`, so two suites read a correct fail-open as a fail-closed), and one lock fixture that bets forty process spawns fit inside a one-second hold.
+That last one is worth a sentence: it reported two winners under concurrency, which is the most alarming shape a finding can have, and forty contenders with a twenty-second hold disproved it in ninety seconds. `fm_lock_try_acquire` is correct; the fixture now holds behind a settle barrier instead of a sleep.
+
+**PR-7, the session-lock identity.**
+The Stop hook's ancestry walk returns one row on Windows, so tokenless watcher continuity does not work at all. See item 1 below for the cause, which is not what the first diagnosis said it was.
+Stacked on PR-2, because its whole subject is what to do when PR-2's walk can name no harness.
+
 The real-herdr smoke test went from 14/15 to 16/16 across PR-3 and PR-4.
 The two portable-parallel lanes went from 11 green / 12 red / 1 gate-skip of 24 to 19 green / 4 red / 1 gate-skip, over the whole port.
 
 ## What happened when the whole thing was run
 
-With the four patches applied, a real captain session drove the full loop on this machine, in a herdr tab, steered only through `pane send-text`: register a project, clone it, brief and spawn a crewmate into a treehouse worktree on the herdr backend, answer its trust dialog, let it work, take its PR, merge on the captain's word, tear down and return the worktree.
+With the first four patches applied, a real captain session drove the full loop on this machine, in a herdr tab, steered only through `pane send-text`: register a project, clone it, brief and spawn a crewmate into a treehouse worktree on the herdr backend, answer its trust dialog, let it work, take its PR, merge on the captain's word, tear down and return the worktree.
 Twice, against a private sandbox repository with one deliberately failing test.
 Both PRs landed green.
 
@@ -87,15 +103,7 @@ It is on Linux; here `/proc/stat`'s `btime` is `now - uptime` recomputed at ever
 The remedy is to record `btime + field22/CLK_TCK`, the absolute creation time, which is invariant because a step of D raises one term by D and lowers the other by exactly D.
 It is left as a finding rather than a patch, because that invariance has not yet been observed across a real step.
 
-## What the four PRs do not fix
-
-**Two areas fixed after the branches were cut, which the re-split folds in.**
-The path-form work above is none of the four branches' territory - not a herdr adapter, not a process-identity caller - so it becomes a fifth branch rather than a rider on any of them.
-
-**One defect inside PR-3's area, fixed after the branch was cut.**
-A native `jq.exe` opens stdout in text mode, so a `jq -r` read that returns multiple rows carries an interior CR.
-The adapter's workspace-ambiguity refusal rendered `w1\r w7`, which looks correct on a terminal and matches nothing.
-Thirteen of the adapter's 61 `jq -r` reads can emit more than one record; all of them now go through one `fm_backend_herdr_jq_rows` funnel that undoes jq's record terminator on a Windows userland and changes nothing on a POSIX one. It rides as a follow-up commit on PR-3 rather than a fifth branch.
+## What these PRs do not fix
 
 **The cross-cutting one, which is a decision rather than a patch.**
 Every Git Bash mount is `noacl`, so POSIX modes are not representable: `mkdir -m 700` creates a 755 directory *and exits 1*, and `chmod 600` reads back 644.
@@ -106,13 +114,13 @@ The second is upstream's to design, and this is the question I would most like a
 
 ## Also on the fork, held back deliberately
 
-These are measured and tested, but they are not part of the four patches and bundling them would make each harder to review.
+These are measured and tested, but they are not part of the seven branches and bundling them would make each harder to review.
 Each is a candidate for its own small PR if it is wanted.
 
 - **The two PreToolUse guards.**
   Three independent Windows-only fail-opens left the watcher seatbelt completely inert: `bin/fm-arm-command-policy.mjs` imports `node:path`'s platform default, which on Windows normalizes `bin/fm-watch-arm.sh` to a backslash form that matches no protected identity, so every protected watcher command was allowed through all five harness entry forms.
   The other two are the `jq` CRLF above reaching the classifier's input, and an MSYS argument-conversion false-deny.
-  This is a security defect rather than a portability one and is the strongest candidate for a fifth PR.
+  This is a security defect rather than a portability one, and it is the piece I would send first if you want anything beyond PR-1 through PR-4: two of its helpers (`fm_hook_payload_string` and a fakebin `PATH` helper) turned out to be prerequisites for PR-5, PR-6 and PR-7, which carry byte-identical copies of those hunks so that each branch stays independently green.
 - **Four platform-neutral bug fixes that Windows only made visible.**
   `sha256sum "$f" | awk '{print $1}'` returns `\<digest>` when the path contains a backslash, because coreutils escapes the line and marks it with a leading backslash - so every install helper's checksum verification fails under any `RUNNER_TEMP` on a Windows runner, and would fail on a POSIX path with a backslash in it too.
   `fm_herdr_lab_cancel_provision` killed a wrapper shell rather than the server, because bash does not exec-optimize a backgrounded *function* call - a leaked `herdr server` on every platform since that function was written.
@@ -123,8 +131,9 @@ Each is a candidate for its own small PR if it is wanted.
 
 ## What I am asking for
 
-A read of PR-1 first, since nothing downstream is reviewable without it, and then PR-2, PR-3 and PR-4 in any order (PR-4 is stacked on PR-3; the other three are independent).
+A read of PR-1 first, since nothing downstream is reviewable without it.
+Then PR-2, PR-3, PR-5 and PR-6 in any order; PR-4 is stacked on PR-3 and PR-7 on PR-2, so those two want their base merged first.
 An opinion on the mode-700 question above.
-And a yes or no on whether the guard fixes and the four platform-neutral fixes are wanted as further PRs, or whether you would rather they stayed on the fork.
+And a yes or no on whether the guard fixes and the four platform-neutral fixes are wanted as further PRs, or whether you would rather they stayed on the fork. PR-5, PR-6 and PR-7 are the ones most likely to be out of scope for you; they are separated so they can be dropped without touching the first four.
 
 Happy to rebase, split further, or drop any of it.

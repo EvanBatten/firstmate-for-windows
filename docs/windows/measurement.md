@@ -2015,6 +2015,116 @@ The twenty-nine "spawn cost" verdicts are the largest block and the least examin
 Finding 27 already says the general thing - an iteration-counted budget is a lie on a slow platform, and it needs a deadline - and this lane is twenty-nine more instances of the same shape in the test suite rather than in the product.
 The honest summary is that the serial lane's first Windows run bought a count, four fixture root causes, one new product finding and a disproof; it did not buy a triaged suite.
 
+## Phase B slice 12: the re-split, from four branches to seven
+
+Slice 7 cut four branches from `upstream/main` and pushed them to the fork.
+Slices 8 through 11 then landed four more commits on the integration branch, and this slice puts each of them where a reviewer would want it.
+The map, the per-branch verification and the rebuild recipe are in [prs.md](prs.md); this section records the three things the split turned out not to be mechanical about, and the two claims that had to be measured rather than assumed.
+
+### Where each new commit went, and why
+
+| Integration commit | Destination | Reason |
+| --- | --- | --- |
+| `d80757f` (slice 8, session identity) | new `pr-7-session-identity`, **stacked on `pr-2`** | It is the answer to "what if `pr-2`'s ancestry walk returns one row", and it changes a file `pr-2` already owns. It is not folded INTO `pr-2` because `pr-2` is a port of two questions behind one library, while this adds a new ownership proof with security consequences, and a reviewer should be able to take one without the other. |
+| `4fa7688` (slice 9, jq CRLF funnel) | follow-up commit on `pr-3` | `prs.md` already committed to this, and it is right: the defect is in the adapter's Windows I/O, which is `pr-3`'s whole subject. |
+| `1412bf3` (slice 10, path library) | new `pr-5-path-lib` | None of its seven files is a herdr adapter or a process-identity caller. It is the same SHAPE as `pr-2` - a leaf owning one platform-dependent question, POSIX branch identical to the expression it replaced - so it reviews the same way. |
+| `cd45ebf` (slice 11, test fixtures) | split: three fixture-installer hunks onto `pr-2`, the rest into new `pr-6-test-fixtures` | The missing `bin/fm-proc-lib.sh` copies are a regression `pr-2` itself introduces, so they belong on `pr-2` or `pr-2` is a branch that breaks three suites on Linux. Everything else is fixture-shape work that depends on nothing. |
+
+### The jq follow-up conflicts, and taking `theirs` is wrong
+
+`git cherry-pick 4fa7688` onto `pr-3` reports content conflicts in all three of its files.
+They are add/add rather than disagreements - `ours` is empty in every conflict region - which makes `-X theirs` look like the obvious resolution.
+It is not.
+
+The cherry-pick's merge base is `d80757f`, and `ours` differs from that base by having no pane work at all.
+The funnel is inserted at exactly the anchor the pane work occupies, so `theirs` presents both blocks together and taking it wholesale silently re-imports `pr-4` into `pr-3`.
+Caught by grepping the resolved file for `fm_backend_herdr_task_tab_create`:
+
+```
+$ grep -n "fm_backend_herdr_task_tab_create" bin/backends/herdr.sh
+558:# fm_backend_herdr_task_tab_create: the ONE `tab create` every firstmate TASK
+568:fm_backend_herdr_task_tab_create() {  # <session> <workspace> <cwd> <label>
+```
+
+The resolution keeps only the funnel's own lines: 52 in `bin/backends/herdr.sh`, one documentation section, eleven cases plus eleven runner lines in the test.
+The same fact is why `pr-4` takes the follow-up through a merge whose resolution is `git checkout 4fa7688 -- <the three files>`: on `pr-4` the union of both sides IS the integration content, so the merge lands on byte identity and no branch is force-pushed.
+
+### Two branches need a helper that belongs to a slice held back
+
+This is the claim the split most wanted to be false, and it was measured rather than assumed.
+
+`prs.md` predicted that `pr-6-test-fixtures` "depends on nothing in `pr-2` through `pr-5` and nothing depends on it".
+The first half is true; the second is not, and neither is the equivalent for `pr-5`:
+
+```
+$ bash tests/fm-path-lib.test.sh          # pr-5, without tests/lib.sh's fm_fakebin_link
+not ok - one directory must canonicalize to one spelling:
+        '/tmp/fm-path-lib.6A3d5g/canon-mount/target' vs
+        '/c/Users/ebatt/AppData/Local/Temp/fm-path-lib.6A3d5g/canon-mount/target'
+$ bash tests/fm-path-lib.test.sh          # with it
+14 ok, 0 not ok
+```
+
+That case builds a fakebin holding `tr` and `cygpath` and hands it to a child as the child's whole `PATH`, which is exactly the shape `fm_fakebin_link` exists for.
+`pr-7` has the same relationship to `fm_hook_payload_string`: `bin/fm-claude-stop-autoarm.sh` reads `.session_id` out of the Stop payload with it.
+Both helpers were added by slice 4, the guard work, which the plan holds back from the upstream set.
+
+Three options, and why the third was taken:
+
+1. Stack `pr-5`, `pr-6` and `pr-7` on a new guard branch. Correct dependency-wise, and it makes a four-deep stack where none of the three is reviewable alone.
+2. Rewrite the two tests not to need the helpers. That ships a third arrangement of files nobody has run, and it breaks the byte-identity property the whole split is verified by.
+3. Carry the helper hunk, byte-identical, on each branch that needs it, and say so.
+
+Identical additions merge without conflict in any order, so option 3 costs a reviewer one paragraph and nothing else, and it keeps each branch independently green.
+It also changes the recommendation to the captain: the guard work is no longer "the strongest candidate for a fifth PR", it is the piece to send FIRST if anything beyond PR-1 through PR-4 is sent at all.
+
+### The merge matrix, and the sentence it disproved
+
+The paragraph justifying option 3 first read "identical additions merge without conflict in any order".
+`git merge-tree --write-tree` over all 21 pairs says that is true of the identical hunks and false of the branches:
+
+```
+pr-2-proc-lib  + pr-5-path-lib         CONFLICT (content): bin/fm-test-run.sh
+pr-5-path-lib  + pr-6-test-fixtures    CONFLICT (content): tests/lib.sh
+pr-5-path-lib  + pr-7-session-identity CONFLICT (content): bin/fm-test-run.sh
+(the other 18 pairs are clean)
+```
+
+The `tests/lib.sh` one is the interesting one, and it is the same shape as the `pr-3` cherry-pick above: `fm_test_base_path` is inserted immediately AFTER `fm_fakebin_link`, so `pr-6`'s second, non-identical addition shares an anchor with the identical one.
+The conflict region has an empty `ours` side, and `pr-6`'s file is a strict superset of `pr-5`'s, so the resolution is one `git checkout`.
+
+The two `bin/fm-test-run.sh` ones are `pr-2` and `pr-5` editing the same physical line of one alternation list: `pr-2` appends `fm-proc-lib.test.sh` to it, `pr-5` splits it to insert `fm-path-lib.test.sh` in alphabetical position.
+`pr-7` inherits `pr-2`'s hunk, which is why it appears too.
+Both resolve by keeping both names.
+
+None of these is worth churning a pushed branch over - a force-push is out, and a commit that moves a one-line registration to dodge a trivial conflict is worse than the conflict - so the matrix is published instead, in [prs.md](prs.md) and in each affected PR body.
+
+### The `pr-2` regression, before and after
+
+The three fixture-installer hunks are on `pr-2` because without them `pr-2` is a branch that breaks working suites on every platform, not just this one:
+
+| Suite, on `pr-2` | without the third commit | with it |
+| --- | --- | --- |
+| `tests/fm-afk-return.test.sh` | red at case 1: `fm-proc-lib.sh: No such file or directory`, then `FM_PROC_UNAME: unbound variable` | all cases pass |
+| `tests/fm-turnend-guard.test.sh` | 7 cases reached | 30 cases reached, then the fakebin case that needs `pr-6`'s helper |
+| `tests/fm-remote-backlog-handoff.test.sh` | red at case 1 | runs on to the confined-put case, where it stops on a Windows `mv` permission error |
+
+### Nothing drifted
+
+Every path every branch carries was diffed against `cd45ebf` path by path.
+Eight paths differ, every one of them because the integration branch carries a slice the branch deliberately does not; the table is in [prs.md](prs.md).
+`bin/fm-test-run.sh --check-coverage` passes on all seven branches.
+
+Two reds on `pr-7` were checked against the integration branch in a worktree at `cd45ebf` rather than assumed, because a red on a freshly cut branch is exactly where a split defect would show:
+
+| Suite | on `pr-7` | on `cd45ebf` |
+| --- | --- | --- |
+| `tests/fm-session-lock-ancestry.test.sh` | 9 ok, then `the fixture hook never finished` | identical |
+| `tests/fm-claude-stop-autoarm.test.sh` | 36 ok, then the supersession case | identical |
+
+The ancestry suite's red is new information: it stops on `dofork: child -1 - CreateProcessW failed`, errno 2, for the version-named fake `claude` its fixture builds under a `claude-install/share/claude/versions/2.1.220` tree.
+It is the same class as the serial lane's spawn-cost verdicts rather than anything about the session identity the suite's nine passing cases cover.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.

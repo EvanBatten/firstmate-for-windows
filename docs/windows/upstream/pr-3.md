@@ -1,7 +1,7 @@
 # PR-3: make the herdr adapter speak Windows paths and MSYS argument rules
 
 Branch: `EvanBatten:pr-3-herdr-windows-cli` -> `kunchenguid/firstmate:main`.
-One commit, 4 files, +556 -4, of which +410 is a new cross-platform test.
+Two commits, 5 files, +956 -26, of which +715 is a new cross-platform test.
 Independent of PR-1 and PR-2; PR-4 is stacked on this one.
 
 ## What is wrong today
@@ -85,15 +85,42 @@ On a POSIX host the new `fm_backend_herdr_cli` gate is two `command -v` builtins
 
 | Check | Result |
 | --- | --- |
-| `bin/fm-lint.sh` on all three touched shell files | clean, ShellCheck 0.11.0, full extended analysis |
+| `bin/fm-lint.sh` on every touched shell file | clean, ShellCheck 0.11.0, full extended analysis |
 | `python3 -m py_compile bin/backends/herdr-workspace-move.py` | clean |
-| `tests/fm-backend-herdr-windows.test.sh` (new, 21 cases) | 21 / 21 on Windows, and on a POSIX host |
+| `tests/fm-backend-herdr-windows.test.sh` (new, 32 cases) | 32 / 32 on Windows, and on a POSIX host |
 | `bin/fm-test-run.sh --check-coverage` | `ok total=168 parallel=24 serial=132 serial_shards=4 herdr=12` |
+| `tests/fm-backend-herdr.test.sh` (the adapter's own unit suite) | **181 / 181, exit 0** on Windows, from red at case 19 before the second commit |
 | `tests/fm-backend-herdr-smoke.test.sh`, real herdr 0.8.2, isolated lab session | zero presentation-lock warnings, where Phase A printed three |
 | socket canonicalization, live | `/c/Users/ebatt/AppData/Roaming/herdr/herdr.sock` (was: refused) |
 | presentation lock path, live | `/tmp/firstmate-herdr-presentation/order-<hash>.lock` (was: refused) |
 
-The new test fakes `uname`, `cygpath`, a PE-magic `herdr` and a mode-less `stat`, so **all 21 cases run on Linux and macOS CI**.
+The new test fakes `uname`, `cygpath`, a PE-magic `herdr`, a mode-less `stat` and a text-mode `jq`, so **all 32 cases run on Linux and macOS CI**.
+
+## The second commit: a native `jq.exe` writes CRLF
+
+A native `jq.exe` opens stdout in text mode and ends every record CR LF.
+Measured on both builds present on the port machine (mingw-w64 jq-1.6 and WinGet jq-1.8.2), so it is the platform and not one bad package; no mount option or shell flag suppresses it.
+
+Command substitution eats only the LAST terminator, so every single-value read in the adapter is already exact on Windows and pays nothing.
+A read that iterates an array keeps a CR on every record but its last, and those records are workspace, tab, pane and session ids that go straight back to herdr.
+`herdr tab close "w1:t2<CR>"` is not a tab id.
+The workspace-ambiguity refusal rendered `w1<CR> w7`, which looks correct on a terminal and matches nothing, and `tests/fm-backend-herdr.test.sh` had been red at that case on Windows since the first Phase A run.
+
+All thirteen reads that can emit more than one record now go through `fm_backend_herdr_jq_rows`.
+Thirteen rather than the nine first predicted: four more were masked by a `| head -1`, which reduces the answer to the single record command substitution already cleans up, so the mask hid the defect instead of fixing it.
+Four reads whose filter iterates an array but collects to at most one record are deliberately left off the funnel, because command substitution already makes them exact.
+
+Off a Windows userland the funnel runs the identical `printf '%s' "$json" | jq -r "$@" 2>/dev/null` pipeline and returns jq's own status, so no POSIX host changes a byte.
+
+**This one is keyed on `$OSTYPE`, not on herdr being a PE image**, unlike the argument-conversion branch above.
+The distinction is deliberate: removing a CR that immediately precedes an LF `jq` itself wrote cannot change what a POSIX `jq`'s output means, so the branch is safe to take on any Windows userland, while argument conversion depends on which binary is being invoked.
+
+The capture goes through a `&& printf X` sentinel rather than a trailing-CR strip.
+Command substitution would otherwise eat the last record's terminator and leave it indistinguishable from a CR that is part of a **value**: a jq answer of `1<CR>` arrives as the same bytes as a terminator the shell half-ate, and guessing wrong there silently rewrites data.
+With the sentinel the capture is jq's byte stream exactly, terminator included, and turning every CR LF back into one LF is all that is needed.
+
+`tests/fm-backend-herdr.test.sh` is **181 / 181, exit 0** on Windows with this commit, from red at case 19 without it.
+`tests/fm-backend-herdr-windows.test.sh` gains eleven cases, four of which drive a real call path (including that refusal) from any host through a text-mode `jq` fake.
 
 ## Notes for the reviewer
 
@@ -102,7 +129,3 @@ On such a mount the 700 requirement is unsatisfiable rather than protective, so 
 
 **Two accepted limitations.** A `pane send-text` payload that is literally `--cwd=<path>` would be converted, because the scan is positional-blind; that is contrived and strictly better than the pre-change MSYS behavior.
 A `herdr` installed as a `.bat`/`.cmd` shim would be native to MSYS without being a PE image, so it would take the plain branch and get its arguments mangled; the official installer ships an `.exe`.
-
-**One defect in this area that this branch does not carry yet.** A native `jq.exe` opens stdout in text mode, so a multi-row `jq -r` read carries an interior CR: the workspace-ambiguity refusal rendered `w1\r w7`, which looks correct on a terminal and matches nothing, and `tests/fm-backend-herdr.test.sh` was red at that case on Windows.
-The fix is one `fm_backend_herdr_jq_rows` funnel with every array-iterating read moved onto it - thirteen of the adapter's 61 `jq -r` reads, four of them previously masked by a `| head -1` rather than fixed by it - and on a POSIX host it runs the identical pipeline for identical bytes and status.
-It is written and verified (that suite is 181/181 on Windows, plus eleven cross-platform cases, four of which drive a real call path - including that refusal - through a text-mode jq fake) and it arrives as a follow-up commit on this branch.
