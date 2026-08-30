@@ -30,6 +30,10 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  # fm-wake-lib.sh and fm-session-lock-lib.sh both source the leaf process
+  # library, and both read FM_PROC_UNAME at source time: without it in the
+  # fixture the hook dies on an unbound variable before it decides anything.
+  cp "$ROOT/bin/fm-proc-lib.sh" "$dir/bin/fm-proc-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
@@ -266,6 +270,76 @@ test_reclaims_stale_session_lock_before_arming() {
   [ -e "$dir/state/arm-ran" ] || fail "hook did not arm after reclaiming the stale session lock"
   [ "$(epoch_outcome "$dir")" = rewake ] || fail "stale-lock recovery must record outcome=rewake"
   pass "auto-arm: a demonstrably dead recorded session owner is reclaimed through fm-lock.sh before arming"
+}
+
+# The severed-hook shape: on Git Bash every tracked hook is reached through
+# exec(), which MSYS implements by starting a NEW Win32 process and exiting the
+# old one, so the hook body has a dead Win32 parent and an MSYS ppid of 1 and
+# the ancestry walk finds no harness at all (docs/windows/measurement.md,
+# finding 22). Orphaning a plain shell reproduces exactly that here, on any
+# host: the intermediate exits immediately, the walk terminates at the fixture,
+# and it can never escape into the session running this suite.
+run_orphaned_autoarm() {  # <dir> <session-id>
+  local dir=$1 session=$2 i
+  rm -f "$dir/state/hook.rc" "$dir/state/hook.out"
+  FM_HOME="$dir" FM_HOOK_SESSION_ID="$session" bash -c '
+    {
+      printf "{\"session_id\":\"%s\"}\n" "$FM_HOOK_SESSION_ID" \
+        | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" > "$FM_HOME/state/hook.out" 2>&1
+      printf "%s\n" "$?" > "$FM_HOME/state/hook.rc"
+    } &
+  '
+  i=0
+  while [ "$i" -lt 400 ] && [ ! -s "$dir/state/hook.rc" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$dir/state/hook.rc" ] || fail "the orphaned hook never finished"
+  tr -d '[:space:]' < "$dir/state/hook.rc"
+}
+
+test_severed_ancestry_arms_on_the_recorded_session_identity() {
+  local dir owner status owner_after
+  dir=$(make_primary_dir "$TMP_ROOT/severed-identity")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  # The lock names a live harness this hook cannot see from its own ancestry;
+  # the recorded pair is what says the two belong to the same session.
+  "$FAKE_CLAUDE" -c 'sleep 60; :' &
+  owner=$!
+  printf '%s\n' "$owner" > "$dir/state/.lock"
+  printf '%s 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' "$owner" > "$dir/state/.lock.session"
+  status=$(run_orphaned_autoarm "$dir" 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47)
+  owner_after=$(cat "$dir/state/.lock")
+  kill "$owner" 2>/dev/null || true
+  wait "$owner" 2>/dev/null || true
+  expect_code 2 "$status" "a hook with no resolvable ancestry must arm on the lock's recorded session identity"
+  [ -e "$dir/state/arm-ran" ] || fail "the identified session never armed"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "the identified session recorded no rewake: $(epoch_outcome "$dir")"
+  [ "$owner_after" = "$owner" ] || fail "the lock was rewritten instead of being recognized: expected $owner, got $owner_after"
+  grep -q 'firstmate watcher wake' "$dir/state/hook.out" \
+    || fail "no rewake banner reached the harness: $(cat "$dir/state/hook.out")"
+  pass "auto-arm: a severed-ancestry hook arms and rewakes on the session identity recorded with the lock"
+}
+
+test_severed_ancestry_refuses_a_foreign_session_identity() {
+  local dir owner status owner_after
+  dir=$(make_primary_dir "$TMP_ROOT/severed-foreign")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  "$FAKE_CLAUDE" -c 'sleep 60; :' &
+  owner=$!
+  printf '%s\n' "$owner" > "$dir/state/.lock"
+  printf '%s 7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47\n' "$owner" > "$dir/state/.lock.session"
+  status=$(run_orphaned_autoarm "$dir" 0e1f2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7)
+  owner_after=$(cat "$dir/state/.lock")
+  kill "$owner" 2>/dev/null || true
+  wait "$owner" 2>/dev/null || true
+  expect_code 0 "$status" "a Stop payload from another session must not arm this home"
+  [ ! -e "$dir/state/arm-ran" ] || fail "a foreign session armed a home it does not own"
+  [ ! -e "$dir/state/.claude-autoarm-epoch" ] || fail "a foreign session claimed a generation"
+  [ "$owner_after" = "$owner" ] || fail "a foreign session replaced the live lock owner"
+  pass "auto-arm: a severed-ancestry hook carrying another session's identity stays inert"
 }
 
 test_inert_when_lock_held_by_other_harness() {
@@ -590,7 +664,7 @@ test_owner_mutex_contention_preserves_failure_episode_reset() {
   hook_pid=$RUN_AUTOARM_BG_PID
   i=0
   while [ ! -e "$dir/state/arm-waiting" ]; do
-    [ "$i" -lt 50 ] || fail "healthy owner never reached the reset boundary"
+    [ "$i" -lt 400 ] || fail "healthy owner never reached the reset boundary"
     sleep 0.05
     i=$((i + 1))
   done
@@ -1079,7 +1153,7 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   a_pid=$RUN_AUTOARM_BG_PID
   i=0
   while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-ran" ]; do
-    [ "$i" -lt 50 ] || fail "owner A never published its arming claim"
+    [ "$i" -lt 400 ] || fail "owner A never published its arming claim"
     sleep 0.1
     i=$((i + 1))
   done
@@ -1152,6 +1226,8 @@ test_fm_lock_status_still_works_with_shared_lib() {
 test_inert_in_child_worktree
 test_inert_without_session_lock
 test_reclaims_stale_session_lock_before_arming
+test_severed_ancestry_arms_on_the_recorded_session_identity
+test_severed_ancestry_refuses_a_foreign_session_identity
 test_inert_when_lock_held_by_other_harness
 test_inert_when_afk
 test_stale_lock_recovery_preserves_afk_and_need_gates

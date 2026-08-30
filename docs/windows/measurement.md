@@ -1291,21 +1291,149 @@ and `state/.watch-cycle-exits.log` shows both cycles closing with an actionable 
 What is missing is the translation step: for a Claude primary, an actionable arm close is turned into a wake by the Stop hook exiting 2 with a banner on stderr, and by the same hook re-arming for the next cycle.
 Without an identity, neither happens, so each cycle is the last one and the first mate must arm the watcher by hand at every turn end - which it did, twice, and the turn-end guard blocked it twice more when a cycle closed before the next arm.
 
-**Verdict:** the crewmate-finishes-wakes-an-idle-primary proof cannot be produced on Windows with the current identity contract.
-This is a documented blocker with evidence, not an unexplained failure, and it is not fixable by a mode relaxation or an argument-conversion branch.
-A fix has to give a hook an identity that does not depend on its parent still being alive.
-The obvious candidate is the Stop payload's own `session_id`, recorded into the lock by the SessionStart hook that already exists (`bin/fm-sessionstart-nudge.sh`) and compared by equality in the hook - which would be *stronger* than an ancestry walk, not weaker, on every platform.
-That is an upstream design change to a security-relevant predicate, so it is written down here rather than implemented in a port slice.
+**Verdict at the time of the run:** a documented blocker with evidence.
+The fix had to give a hook an identity that does not depend on its parent still being alive - the Stop payload's own `session_id`, recorded beside the pid in the lock and compared by equality.
+That is what slice 8 below implements, after finding out *why* the parent is gone.
+
+### C4b. Root cause of the severed ancestry, and the fix (slice 8)
+
+C4 above stops one question short: it proves the hook's Win32 parent is gone and infers that this is simply "how the harness starts a hook on Windows".
+It is not.
+
+**The generalization was too wide.** A throwaway project whose Stop and SessionStart hooks each run `probe.sh <label>` - no `exec` - resolves its whole ancestry from inside all three hooks, in the same shape Phase C used (a real interactive `claude --dangerously-skip-permissions` in a herdr pwsh pane, Claude Code 2.1.251):
+
+```
+1780    296896  /usr/bin/bash                        bash /tmp/fm-hookprobe/probe.sh sessionstart
+296896  296956  C:/Program Files/Git/bin/../usr/bin/bash
+296956  294192  C:/Program Files/Git/bin/bash
+294192  264860  C:/Users/ebatt/.local/bin/claude
+264860  215332  .../PowerShell_7.6.5.0/pwsh
+215332  0       C:/Users/ebatt/AppData/Local/Programs/herdr/herdr
+```
+
+`fm_harness_ancestry_pids` prints `294192` there - the identity gate would have passed.
+The same probe fires for the synchronous Stop hook, for the `asyncRewake` Stop hook, and for the `asyncRewake` hook even when the *synchronous* Stop hook exits 2 first (both markers are written 9 ms apart), so none of "async hooks do not run", "a blocking guard suppresses them", or "hook ancestry is always severed" is the explanation.
+
+**What is.** `bash -x` around the real hook, driven by the credentialed live E2E below, shows the walk dying at the boundary:
+
+```
++++ pwsh -NoProfile -NonInteractive -Command '... Get-Process -Id 296196 ... $p.Parent ...'
+++++ out='296196   0   C:\Program Files\Git\usr\bin\bash.exe'
+```
+
+The hook's own bash has no Win32 parent. It is reached through the tracked registration's `exec`:
+
+```json
+"command": "[ -z \"${GROK_AGENT:-}${GROK_HOOK_EVENT:-}\" ] || exit 0; exec \"$CLAUDE_PROJECT_DIR\"/bin/fm-claude-stop-autoarm.sh"
+```
+
+MSYS cannot implement POSIX `exec` on Windows: it starts a NEW Win32 process, hands it the same Cygwin pid, and exits the old one.
+The replacement therefore has a Win32 parent that is already dead and an MSYS ppid of `1`.
+Isolated with a native launcher so no MSYS parent can mask it (`pwsh -c "& 'C:\Program Files\Git\usr\bin\bash.exe' -c '<form>'"`):
+
+```
+exec /tmp/execprobe.sh EXEC      msyspid=12251 winpid=265292  parent=NULL  msys-ppid=1
+/tmp/execprobe.sh NOEXEC         msyspid=12257 winpid=291968  parent=NULL  msys-ppid=1
+/tmp/execprobe.sh NOEXEC2; :     msyspid=12264 winpid=292176  parent=NULL  msys-ppid=12263
+```
+
+The middle row is the important one: dropping the word `exec` changes nothing, because bash exec-optimizes the FINAL command of a `-c` script anyway.
+Only a command that is not last (`cmd; :`) keeps a live parent.
+So the severing is not a harness behavior at all - it is `exec` meeting MSYS, and every tracked hook entry in `.claude/settings.json`, `.codex/hooks.json` and the Cursor registration is written in exactly the form that triggers it.
+Editing the registrations out of it would be a fix that depends on an optimizer's discretion; the identity has to stop depending on the parent instead.
+
+**A local reproduction, in three minutes.** `tests/fm-claude-stop-autoarm-live-e2e.test.sh` is the opt-in credentialed regression for precisely this mechanism - real Claude Code, the real tracked hook registration, an isolated home and project - and it reproduces the Phase C blocker exactly:
+
+```sh
+FM_CLAUDE_LIVE_E2E=1 bash tests/fm-claude-stop-autoarm-live-e2e.test.sh
+#   not ok - expected exactly 2 hook-owned arm cycles, got :
+```
+
+with the same fingerprint the live run had: no `state/arm-ran`, no `state/.claude-autoarm-epoch`, the model woken only by the synchronous guard's `TURN WOULD END BLIND`, and two model-issued drains.
+Phase C did not need a captain, a crewmate or a sandbox repo to be reproduced - it needed one command.
+
+**The fix.** `state/.lock` keeps its one-bare-pid format, which fourteen readers in `bin/` and every fixture in `tests/` depend on (`fm_session_lock_owned_by_self` itself rejects a lock that is not purely numeric, so a second line there would make every session on every platform lock-less).
+The identity goes in a sidecar `state/.lock.session` holding `<pid> <session-id>`, written by `bin/fm-lock.sh` - the single acquisition owner - inside the same claim hold that publishes the lock, and REMOVED rather than left stale when the acquiring harness has no session identity.
+`bin/fm-claude-stop-autoarm.sh` lifts `.session_id` out of the Stop payload it already reads and offers it as a second proof at the identity gate only; everything downstream is untouched.
+`fm_session_lock_owned_by_session` accepts only when every one of these holds:
+
+| Clause | Why it is there |
+| --- | --- |
+| the id is 8-128 chars of `[A-Za-z0-9._-]` | it is written to a state file and compared by equality |
+| the sidecar is a regular non-symlink file with a `<pid> <id>` line | same shape check `fm-lock.sh` applies to the lock |
+| its pid equals the current lock pid | a pair left by an earlier session can never speak for this one |
+| its id equals the id in the payload | read from the PAYLOAD, never the environment: a watcher or background job inherits the owner's `CLAUDE_CODE_SESSION_ID`, and only the harness can deliver a Stop payload |
+| `fm_harness_ancestry_pids` found NO harness at all | when the walk can name one, that answer decides - which is what leaves macOS and Linux byte-identical |
+| the lock pid is still a live harness | otherwise the fallback would prove only that a session with this id *once* wrote the lock, and a resumed session would adopt a home nobody holds instead of going through `fm-lock.sh`'s guarded recovery |
+
+The write side reads `FM_HARNESS_SESSION_ID` if set, else `CLAUDE_CODE_SESSION_ID`.
+Measured on this machine, Claude Code 2.1.251: that variable is present in every hook process AND every Bash-tool shell, equals the payload's `session_id` for SessionStart and Stop alike, and a NESTED `claude -p` started from inside another session OVERRIDES it with its own id (outer `fddf2b81-...`, nested probe `cf40bab8-...`) rather than inheriting it.
+The override is load-bearing and is written into the code comment so a harness upgrade re-verifies it.
+The environment is the only source that covers how the lock is really acquired: in Phase C the lock was written by `bin/fm-session-start.sh` run as a Bash tool call, not by the SessionStart hook, so a payload-only write side would have recorded nothing.
+It is not a documented interface; when it disappears no pair is recorded, the fallback never fires, and every platform degrades to exactly today's ancestry-only behavior.
+
+**The proof, same command as the reproduction:**
+
+```
+state/arm-ran               arm-run=1 pid=2528
+                            arm-run=2 pid=2814
+state/.claude-autoarm-epoch epoch=2 owner_pid=2620 outcome=rewake updated_at=1788059041
+state/.lock                 290904
+state/.lock.session         290904 72f4bae3-c833-4a72-9dd1-6eace83be8ea
+```
+
+and in the transcript, two rewake deliveries that came from the hook rather than the guard:
+
+```
+Stop hook feedback: [... exec "$CLAUDE_PROJECT_DIR"/bin/fm-claude-stop-autoarm.sh]:
+  firstmate watcher wake - one supervision event needs a handling turn now.
+  stale: fixture-rapid-1
+...
+  stale: fixture-rapid-2
+```
+
+Two tokenless Stop-owned arm cycles, two hook-owned rewakes, three drains, zero model-issued arm commands, the stale dead-owner lock reclaimed through session start - nine of the regression's ten assertions, from zero before the fix.
+
+**The tenth assertion, and what it measures.** `! grep -q 'TURN WOULD END BLIND'` still fails: at the FIRST Stop of a session the synchronous guard blocks once before the auto-arm has claimed.
+It is a latency finding, not an identity one, and it is worth exact numbers (finding 27):
+
+```
+1788053788659 START guard      1788053788673 START autoarm     (14 ms apart)
+1788053798790 END   guard rc=2 1788053803837 END   autoarm rc=2 (guard gave up at 10.1 s)
+1788053811423 START guard      1788053811519 START autoarm
+1788053813903 END   guard rc=0 1788053825764 END   autoarm rc=2 (later Stops allow in 2.4 s)
+```
+
+The auto-arm's identity proof alone costs `2130 ms` (`fm_session_lock_owned_by_self`) plus `3009 ms` (the fallback) in the severed-hook shape, because each ancestry walk spawns a PowerShell, and `fm_pid_alive` on a NATIVE pid costs `1.2 s` because `kill -0` fails and `ps -W` scans the whole Win32 process table.
+The guard's cooperation window is expressed as `SYNC_WAIT_MS / 100` iterations of a `sleep 0.1` plus one poll, which assumes a free poll; measured here that loop actually spends 5.5 s for its nominal 800 ms (`wait=0` 3394 ms, `wait=800` 8896 ms, `wait=8000` 52845 ms - about 620 ms per iteration).
+Raising the budget alone would make the guard hold the turn for the better part of a minute, so the honest fix is a deadline rather than an iteration count, sized from a measured time-to-claim.
+That is left for a follow-up slice with its own measurement; the cost today is one forced continuation at the first Stop of a session, and every later Stop is clean.
+
+**Not fixed here, and newly visible.** `tests/fm-claude-stop-autoarm.test.sh` could not run at all on any platform: `install_autoarm_scripts` copies `fm-wake-lib.sh` but not `bin/fm-proc-lib.sh`, which slice 1 made it source, so the hook died on `FM_PROC_UNAME: unbound variable` at the first case.
+That is the sixth site of the same omission slice 6 fixed in five files.
+With it copied, and with two `[ "$i" -lt 50 ]` fixture waits raised to 400 (a 2.5 s bound on a platform where the hook needs 5 s to reach its arm - the same timing-assumption class slice 6 removed from `fm-herdr-lab`), the suite goes from 0 to 36 green here and stops at one deterministic red:
+
+```
+not ok - the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2
+```
+
+Reproduced with the product code stashed, so it is not this slice's doing (finding 28), and it belongs to the portable-serial lane's triage where every red gets a class.
+
+`tests/fm-turnend-guard.test.sh` had the same omission at two more sites, plus two of the open-coded fakebin symlink loops slice 4 named (a symlinked MSYS binary in a curated PATH cannot load `msys-2.0.dll`, so the guard exited 127 instead of failing open).
+With those four fixed it runs 7 -> 43 green here and stops in the OpenCode plugin's node harness, which is slice 6's `spawn()`-cannot-execute-a-shebang finding rather than anything about the guard.
+One case in between, `test_hook_runs_fast`, sits exactly on its own 3 s bound because of finding 27 and flips either way on a loaded box - a timing assumption that a deadline-based cooperation window would also settle.
 
 ### C5. Findings this run added to the ledger
 
 | # | Subsystem | Result | Measured detail | Fix owner |
 | --- | --- | --- | --- | --- |
-| 22 | Hook process ancestry | **FAIL** | A Claude Code hook's Win32 parent has already exited when the hook body runs (`293396 GONE`), so `Get-Process().Parent` and `Win32_Process.ParentProcessId` both dead-end and `fm_proc_chain "$$"` returns one row. `fm_session_lock_owned_by_self` can never be true in a hook, so `bin/fm-claude-stop-autoarm.sh` exits 0 at its identity gate on every firing and tokenless watcher continuity is off. | open: needs a payload-`session_id` identity, not a port branch (C4) |
+| 22 | Hook process ancestry | **FIXED** | MSYS cannot implement POSIX `exec` on Windows: it starts a new Win32 process, gives it the old Cygwin pid, and exits the original, so anything reached through `exec` - which is how every tracked hook entry is written, and what bash does anyway to a `-c` script's final command - has a dead Win32 parent and MSYS ppid 1. Both halves of the walk dead-end, `fm_session_lock_owned_by_self` can never be true in a hook, and `bin/fm-claude-stop-autoarm.sh` exited 0 at its identity gate on every firing. Not a harness behavior: a hook command that is NOT the shell's final command keeps its parent, and the same probe resolves seven hops to `herdr.exe` from a Bash-tool shell. Fixed by recording the harness session id beside the pid (`state/.lock.session`) and accepting the Stop payload's `session_id` when, and only when, the walk finds no harness at all (C4b). | slice 8; proven by `tests/fm-claude-stop-autoarm-live-e2e.test.sh` |
 | 23 | git path form vs shell path form | **FAIL** | `git rev-parse --show-toplevel` answers `C:/Users/ebatt/firstmate/projects/fm-windows-e2e` while `pwd -P` answers `/c/Users/ebatt/firstmate/projects/fm-windows-e2e`. Six sites compare the two forms directly (`bin/fm-fleet-sync.sh:315`, `bin/fm-spawn.sh:1744`, `bin/fm-teardown.sh:1207`, `bin/fm-control.sh:693`, `bin/fm-config-inherit-lib.sh:163`, and the isolation instruction `bin/fm-brief.sh` gives every crewmate). Measured effect: `bin/fm-fleet-sync.sh` skips every project clone, so a merged PR never reaches the local clone. | a Phase B follow-up slice; one comparison helper, not six branches |
 | 24 | Guarded PR merge | **FAIL** | `bin/fm-pr-merge.sh` refuses because it insists on the PR-poll registration that `fm_pr_poll_prepare` cannot do here (`error: could not prepare PR poll`, row 21 / D6). The captain's merge had to go through the forge tool directly. | row 21 / decision D6 |
 | 25 | Watcher identity across a clock step | **FAIL, provisional** | `fm_wake_identity`'s `proc-starttime` is `/proc/<pid>/stat` field 22, and its comment says that field is "immune to the wall-clock steps". That is true on Linux and false on Cygwin, which derives it from `btime` (`now - uptime`), so a wall-clock step shifts it for every pid at once. Observed once here: the recorded watcher identity `936149599` against a live `936148558`, a 1041-tick drift, after the machine slept and resumed mid-run - which made `fm_watcher_healthy` report a live, lock-holding watcher as dead. Field 22 and `/proc/stat`'s `btime` were both stable over 75 s with no step, so a step is what it takes. | a Phase B follow-up; the identity needs a step-immune component on MSYS |
 | 26 | Tracked symlink at checkout | **FAIL** | Git for Windows ships `core.symlinks=false` in its SYSTEM config, so a plain clone materializes a tracked symlink as a regular text file holding its target path. This repository has exactly one tracked symlink and it is `.claude/skills -> ../.agents/skills`, which is how Claude Code is shown firstmate's twenty skills. In the live home it was a 17-byte file, so `/bearings` answered `Unknown command: /bearings` and the first mate had run this entire session with zero skills loaded. `git config core.symlinks true` plus `git checkout -- .claude/skills` restored the link (Developer Mode is on, so no admin step), and Claude Code picked the skills up live in the already-running session: `20 skills available`. | PR-1's territory: a setup step, not a repo file - `.gitattributes` cannot express it |
+| 27 | Stop-hook cooperation window | **FAIL** | The synchronous guard waits `SYNC_WAIT_MS / 100` iterations of `sleep 0.1` plus one poll for the auto-arm to claim, which assumes a free poll. Measured here: `wait=0` 3394 ms, `wait=800` 8896 ms, `wait=8000` 52845 ms - about 620 ms per iteration, because `fm_pid_alive` on a native pid falls back to a whole-table `ps -W` (1.2 s). Meanwhile the auto-arm's identity proof alone is 2130 ms + 3009 ms in the severed-hook shape, so the first Stop of a session costs one forced continuation (`TURN WOULD END BLIND`) before the hook can claim. Every later Stop allows in 2.4 s. | a follow-up slice: a deadline instead of an iteration count, sized from a measured time-to-claim (C4b) |
+| 28 | `fm-claude-stop-autoarm` suite | **FAIL, 1 of 37** | `install_autoarm_scripts` never copied `bin/fm-proc-lib.sh`, which slice 1 made `fm-wake-lib.sh` source, so the whole suite died on `FM_PROC_UNAME: unbound variable` at case 1 on every platform - the sixth site of slice 6's omission. `tests/fm-turnend-guard.test.sh` had two more, plus two open-coded fakebin symlink loops. With those fixed and two 2.5 s fixture waits raised, the suite runs 36 green and stops at `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2`, reproduced with the product code stashed. | the portable-serial lane's triage |
 
 Row 24 is the D6 trigger the plan predicted in slice 6, arriving exactly where slice 6 said it would.
 

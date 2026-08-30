@@ -6,6 +6,9 @@
 # bin/fm-lock.sh uses it to acquire and inspect state/.lock;
 # bin/fm-claude-stop-autoarm.sh uses it to prove a Stop hook fires inside the
 # lock-owning primary session before it may arm or rewake.
+# It owns TWO proofs of that one question: the process ancestry, and - only
+# where the ancestry walk dead-ends - the harness session identity recorded
+# beside the lock (see the section at the end of this file).
 # This file is sourced by scripts and has no side effects on source.
 
 # Cursor process identity is NOT expressible as a command-name pattern and is
@@ -184,4 +187,133 @@ fm_session_lock_owned_by_self() {
 $pids
 EOF
   return 1
+}
+
+# --- session identity: the proof that survives a severed ancestry ------------
+#
+# Every predicate above walks upward from this process. On Git Bash that walk
+# can be cut at the first hop, and the tracked hook registrations are exactly
+# where it happens: MSYS implements exec() by starting a NEW Win32 process and
+# exiting the old one, so a hook body reached through `exec` (or through bash's
+# implicit exec of a `-c` script's final command) is left with a Win32 parent
+# that has already exited and an MSYS ppid of 1. Both halves of the hybrid walk
+# dead-end there, `fm_harness_ancestry_pids` finds no harness at all, and a
+# Stop hook can never prove it belongs to the session that holds the lock
+# (docs/windows/measurement.md, finding 22).
+#
+# So the lock carries a SECOND, ancestry-free proof: the harness's own session
+# identity, recorded beside the pid when the lock is acquired and presented back
+# by the hook out of the payload the harness delivers to it. It is a fallback,
+# never a replacement - the ancestry proof above is tried first and its answer
+# always stands - so macOS and Linux never reach this path and decide exactly
+# what they decided before.
+#
+# The pair lives in its own file rather than in state/.lock, whose one-bare-pid
+# format is a contract shared by fourteen readers in bin/ and every fixture in
+# tests/: fm_session_lock_owned_by_self itself rejects a lock that is not purely
+# numeric, so a second line there would make every session on every platform
+# lock-less.
+FM_SESSION_LOCK_SIDECAR=.lock.session
+
+# True when $1 is shaped like a harness session identity: 8-128 characters of
+# unreserved ASCII. Bounded and charset-checked because it is written to a state
+# file and compared by equality; a UUID (36) and any opaque token fit.
+fm_session_id_wellformed() {  # <id>
+  local id=${1-}
+  case "$id" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#id}" -ge 8 ] && [ "${#id}" -le 128 ]
+}
+
+# Print this process's harness session identity, or return 1 when there is none.
+#
+# FM_HARNESS_SESSION_ID is the explicit form a hook entrypoint can set from the
+# payload it just parsed. CLAUDE_CODE_SESSION_ID is what Claude Code itself
+# exports into every hook process AND every Bash tool shell, which is the only
+# source that covers how the lock is really acquired: bin/fm-session-start.sh
+# runs bin/fm-lock.sh, and a Claude primary normally runs session start as a
+# tool call rather than inside the SessionStart hook.
+#
+# MEASURED (Claude Code 2.1.251, 2026-08-29): the variable equals the payload's
+# session_id for SessionStart and Stop alike, and a NESTED `claude -p` started
+# from inside another session OVERRIDES it with its own id rather than
+# inheriting. That override is load-bearing - it is what keeps a nested session
+# from recording the outer session's identity - so re-verify it when the harness
+# is upgraded. It is not a documented interface: when it disappears, no identity
+# is found, no pair is recorded, the fallback never fires, and every platform
+# degrades to exactly the ancestry-only behavior it has today.
+fm_harness_session_id() {
+  local id=${FM_HARNESS_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}
+  fm_session_id_wellformed "$id" || return 1
+  printf '%s\n' "$id"
+}
+
+# Record "<pid> <session-id>" beside the lock in state $1 for the pid $2 that
+# was just verified into it, or REMOVE the pair when this process has no session
+# identity. Refreshing unconditionally is what keeps the pair honest: a lock
+# acquired by a harness that has no session id (every non-Claude adapter, or a
+# future Claude Code without the variable) must not leave the previous session's
+# id behind for a reused pid to match. Best effort by design - the lock is
+# already published and verified, and this proof is an addition to it.
+fm_session_lock_record_session() {  # <state> <pid>
+  local state=$1 pid=$2 id file="$1/$FM_SESSION_LOCK_SIDECAR"
+  if id=$(fm_harness_session_id); then
+    { printf '%s %s\n' "$pid" "$id" > "$file"; } 2>/dev/null || true
+  else
+    rm -f "$file" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# True when state dir $1 holds a session lock recorded by the harness session
+# whose identity is $2 - the ancestry-free proof of the same question
+# fm_session_lock_owned_by_self answers.
+#
+# Every clause fails closed, and three of them carry the whole contract:
+#   - the ancestry walk must have found NO harness at all. When it can name one,
+#     that answer is the decision, whether or not it matched the lock: a hook
+#     whose walk reaches a DIFFERENT live session must stay inert exactly as it
+#     does today. This is what leaves macOS and Linux byte-identical.
+#   - the recorded pid must still be the lock pid, so a pair left by an earlier
+#     session can never speak for the current one.
+#   - that pid must still be a live harness. Without this the fallback would
+#     prove only that a session with this id once wrote the lock, and a resumed
+#     session whose original process is dead would take ownership of a home
+#     nobody holds instead of going through fm-lock.sh's guarded recovery.
+#
+# Two known residuals, both Low and both bounded by what a pid can promise:
+#   - a walk that resolves a harness which is not the lock owner refuses here
+#     even when the ancestry was truncated below the real owner. That shape is
+#     not what a severed hook produces (measured: no harness at all), and
+#     admitting it would weaken the competing-session boundary above.
+#   - nothing deletes the pair when its owner dies, so a resumed session
+#     carrying the same id whose recorded pid has since been REUSED by another
+#     harness-shaped process passes every clause. That is the pid-reuse exposure
+#     fm_harness_pid_alive already carries for the plain lock, not a new one.
+# The clause ORDER is cost, not logic: every one of them must hold, and the two
+# process questions are the expensive pair - each costs a PowerShell-backed
+# ancestry walk on Git Bash (measured at 2.1 s and 0.9 s), where the file reads
+# above them cost nothing. A firing that is going to refuse almost always
+# refuses on the pair or the identity, so it refuses before paying for either.
+fm_session_lock_owned_by_session() {  # <state> <session-id>
+  local state=$1 claimed=${2-} file line recorded_pid recorded_id lock_pid
+  fm_session_id_wellformed "$claimed" || return 1
+  lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
+  case "$lock_pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  file="$state/$FM_SESSION_LOCK_SIDECAR"
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  IFS= read -r line < "$file" 2>/dev/null || return 1
+  case "$line" in
+    *' '*) : ;;
+    *) return 1 ;;
+  esac
+  recorded_pid=${line%% *}
+  recorded_id=${line#* }
+  [ "$recorded_pid" = "$lock_pid" ] || return 1
+  [ "$recorded_id" = "$claimed" ] || return 1
+  fm_harness_ancestry_pids >/dev/null 2>&1 && return 1
+  fm_harness_pid_alive "$lock_pid"
 }
