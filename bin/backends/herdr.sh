@@ -454,6 +454,58 @@ fm_backend_herdr_cli_win32() {  # <session> <herdr-subcommand-and-args...>
     herdr ${args[@]+"${args[@]}"} --session "$session"
 }
 
+# fm_backend_herdr_jq_rows: read a MULTI-ROW `jq -r` answer out of one JSON
+# document. Byte-identical to the `printf '%s' "$json" | jq -r "$@" 2>/dev/null`
+# each of these call sites ran before - same filter, same stdout, same exit
+# status - except on a Windows userland, where the record terminator's CR is
+# removed.
+#
+# jq there is a native binary that opens stdout in TEXT mode, so it ends every
+# record `\r\n` (measured on both builds present on the port machine, mingw-w64
+# jq-1.6 and WinGet jq-1.8.2, so it is the platform and not a package; no mount
+# option or shell flag suppresses it).
+#
+# Only multi-row reads need this, which is why it is a funnel for those and not
+# the adapter's single jq path: command substitution drops the FINAL CRLF, so
+# every single-value read here is already exact on Windows and pays nothing. A
+# multi-row read keeps the CR on every record but the last, and those records
+# are workspace, tab, pane and session ids that go straight back to herdr -
+# `herdr tab close "w1:t2<CR>"` is not a tab id - or into an operator-facing
+# refusal that renders as `w1<CR> w7`.
+#
+# Keyed on the userland rather than on jq being a native binary (the shape
+# fm_backend_herdr_win32_cli needs) because unlike argument conversion this
+# branch cannot change a correct answer: it is the exact inverse of the text
+# mode translation, so against any jq that emits plain LF - every POSIX host,
+# and any shell-script fake - it is a no-op on the byte stream.
+#
+# The `&& printf X` sentinel is what makes that exactness true rather than
+# nearly true. Command substitution strips trailing newlines (and on MSYS the
+# CR that comes with them), which would leave the last record's terminator
+# unrecoverable and, worse, indistinguishable from a CR that is part of a
+# VALUE - a jq answer of "1<CR>" arrives as the same bytes as a terminator a
+# shell half-ate, and guessing wrong there silently rewrites data. With the
+# sentinel the capture is jq's byte stream exactly, terminator included, and
+# `\r\n` -> `\n` is all that is needed. jq -r always terminates its last
+# record, so the byte before the sentinel is always the newline jq wrote.
+# `&&` rather than a status variable so a failing jq still returns ITS status;
+# the partial rows it may have printed are dropped, which every caller that
+# checks the status treats as fatal anyway.
+fm_backend_herdr_jq_rows() {  # <json> <jq-argument>...
+  local json=${1-} rows
+  shift
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *)
+      printf '%s' "$json" | jq -r "$@" 2>/dev/null
+      return
+      ;;
+  esac
+  rows=$(printf '%s' "$json" | jq -r "$@" 2>/dev/null && printf X) || return
+  rows=${rows%X}
+  printf '%s' "${rows//$'\r'$'\n'/$'\n'}"
+}
+
 # fm_backend_herdr_win32_pane_bash: the Windows spelling of THIS Git Bash's own
 # bash.exe, printed on stdout - or a non-zero return when the panes herdr opens
 # on this host already run a POSIX shell and need no bootstrap at all.
@@ -1695,8 +1747,9 @@ fm_backend_herdr_workspace_find_all() {  # <session>
   # compile error that `2>/dev/null` would silently swallow, making this find
   # ALWAYS return empty and every spawn mint a fresh "firstmate" workspace
   # (the workspace leak).
-  printf '%s' "$list" | jq -r --arg want "$label" \
-    '.result.workspaces[]? | select(.label == $want) | .workspace_id' 2>/dev/null
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  fm_backend_herdr_jq_rows "$list" --arg want "$label" \
+    '.result.workspaces[]? | select(.label == $want) | .workspace_id'
 }
 
 # fm_backend_herdr_workspace_find: this HOME's own workspace id inside
@@ -1883,7 +1936,8 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
   tab_count=$(printf '%s' "$tabs" | jq -r '.result.tabs? // [] | length' 2>/dev/null)
   case "$tab_count" in ''|*[!0-9]*|0|1) return 0 ;; esac
-  current_label=$(printf '%s' "$tabs" | jq -r --arg t "$tab_id" '.result.tabs[]? | select(.tab_id == $t) | .label' 2>/dev/null)
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  current_label=$(fm_backend_herdr_jq_rows "$tabs" --arg t "$tab_id" '.result.tabs[]? | select(.tab_id == $t) | .label')
   [ "$current_label" = "1" ] || return 0
   pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || return 0
   [ -n "$pane_id" ] || return 0
@@ -2207,7 +2261,8 @@ fm_backend_herdr_create_task() {  # <container> <label> <cwd> <seeded_default_ta
   session=${container%%:*}
   wsid=${container#*:}
   list=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 1
-  dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" 'if (.result.tabs | type) == "array" then .result.tabs[] | select(.label == $want) | .tab_id else error("missing result.tabs") end' 2>/dev/null) || {
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  dup_tabs=$(fm_backend_herdr_jq_rows "$list" --arg want "$label" 'if (.result.tabs | type) == "array" then .result.tabs[] | select(.label == $want) | .tab_id else error("missing result.tabs") end') || {
     echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
     return 1
   }
@@ -2248,8 +2303,9 @@ EOF
       echo "error: could not parse herdr tab list output for workspace $wsid (session $session)" >&2
       return 1
     fi
-    remaining_dup_tabs=$(printf '%s' "$list" | jq -r --arg want "$label" --arg replacement "$tab_id" \
-      '.result.tabs[]? | select(.label == $want and .tab_id != $replacement) | .tab_id' 2>/dev/null)
+    # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+    remaining_dup_tabs=$(fm_backend_herdr_jq_rows "$list" --arg want "$label" --arg replacement "$tab_id" \
+      '.result.tabs[]? | select(.label == $want and .tab_id != $replacement) | .tab_id')
     remaining_dup_tabs=${remaining_dup_tabs//$'\n'/ }
     if [ -n "$remaining_dup_tabs" ]; then
       echo "error: failed to remove preexisting herdr tab(s) $remaining_dup_tabs for label '$label' in workspace $wsid (session $session)" >&2
@@ -2652,8 +2708,9 @@ fm_backend_herdr_projection_recovery_allows_flat() {  # <session> <journal> <tas
     echo "error: could not parse herdr workspaces while inspecting the quarantined presentation for $id" >&2
     return 1
   fi
-  wsids=$(printf '%s' "$list" | jq -r --arg suffix " · p:$token" \
-    '.result.workspaces[]? | select((.label | type) == "string" and (.label | endswith($suffix))) | .workspace_id' 2>/dev/null)
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  wsids=$(fm_backend_herdr_jq_rows "$list" --arg suffix " · p:$token" \
+    '.result.workspaces[]? | select((.label | type) == "string" and (.label | endswith($suffix))) | .workspace_id')
   count=$(printf '%s\n' "$wsids" | awk 'NF { n += 1 } END { print n + 0 }')
   if [ "$count" -eq 0 ]; then
     echo "warning: no exact herdr presentation token match for $id; leaving any stale space untouched and spawning flat" >&2
@@ -2672,7 +2729,7 @@ fm_backend_herdr_projection_recovery_allows_flat() {  # <session> <journal> <tas
       echo "error: could not parse herdr presentation workspace $wsid for $id; refusing duplicate launch" >&2
       return 1
     fi
-    pane_ids=$(printf '%s' "$panes" | jq -r '.result.panes[]? | .pane_id' 2>/dev/null)
+    pane_ids=$(fm_backend_herdr_jq_rows "$panes" '.result.panes[]? | .pane_id')
     while IFS= read -r pane; do
       [ -n "$pane" ] || continue
       state=$(fm_backend_herdr_pane_agent_state "$session" "$pane")
@@ -2703,8 +2760,9 @@ fm_backend_herdr_projection_endpoint_matches_journal() {  # <session> <workspace
   token=$(fm_backend_herdr_projection_journal_token "$journal" "$id") || return 1
   list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
   printf '%s' "$list" | jq -e '(.result.workspaces | type) == "array"' >/dev/null 2>&1 || return 1
-  matches=$(printf '%s' "$list" | jq -r --arg suffix " · p:$token" \
-    '.result.workspaces[]? | select((.label | type) == "string" and (.label | endswith($suffix))) | .workspace_id' 2>/dev/null)
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  matches=$(fm_backend_herdr_jq_rows "$list" --arg suffix " · p:$token" \
+    '.result.workspaces[]? | select((.label | type) == "string" and (.label | endswith($suffix))) | .workspace_id')
   [ "$matches" = "$workspace_id" ]
 }
 
@@ -3313,8 +3371,9 @@ fm_backend_herdr_wait_for_working() {  # <session> <pane_id> <budget-seconds> <p
 fm_backend_herdr_pane_for_tab() {  # <session> <workspace_id> <tab_id>
   local session=$1 wsid=$2 tab_id=$3 panes
   panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) || return 1
-  printf '%s' "$panes" | jq -r --arg tab "$tab_id" \
-    '.result.panes[]? | select(.tab_id == $tab) | .pane_id' 2>/dev/null | head -1
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  fm_backend_herdr_jq_rows "$panes" --arg tab "$tab_id" \
+    '.result.panes[]? | select(.tab_id == $tab) | .pane_id' | head -1
 }
 
 # fm_backend_herdr_resolve_bare_selector: the live-tab-listing fallback for an
@@ -3324,15 +3383,18 @@ fm_backend_herdr_pane_for_tab() {  # <session> <workspace_id> <tab_id>
 # server the way a single tmux server is. Rare path in practice (herdr tasks
 # normally carry meta), best-effort.
 fm_backend_herdr_resolve_bare_selector() {  # <name>
-  local name=$1 sessions session tabs tab_id wsid pane_id
-  sessions=$(herdr session list --json 2>/dev/null | jq -r '.sessions[]? | select(.running == true) | .name' 2>/dev/null)
+  local name=$1 session_list sessions session tabs tab_id wsid pane_id
+  session_list=$(herdr session list --json 2>/dev/null)
+  sessions=$(fm_backend_herdr_jq_rows "$session_list" '.sessions[]? | select(.running == true) | .name')
   while IFS= read -r session; do
     [ -n "$session" ] || continue
     tabs=$(fm_backend_herdr_cli "$session" tab list 2>/dev/null) || continue
-    tab_id=$(printf '%s' "$tabs" | jq -r --arg want "$name" \
-      '.result.tabs[]? | select(.label == $want) | .tab_id' 2>/dev/null | head -1)
+    # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+    tab_id=$(fm_backend_herdr_jq_rows "$tabs" --arg want "$name" \
+      '.result.tabs[]? | select(.label == $want) | .tab_id' | head -1)
     [ -n "$tab_id" ] || continue
-    wsid=$(printf '%s' "$tabs" | jq -r --arg tab "$tab_id" '.result.tabs[]? | select(.tab_id == $tab) | .workspace_id' 2>/dev/null | head -1)
+    # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+    wsid=$(fm_backend_herdr_jq_rows "$tabs" --arg tab "$tab_id" '.result.tabs[]? | select(.tab_id == $tab) | .workspace_id' | head -1)
     [ -n "$wsid" ] || continue
     pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
@@ -3366,7 +3428,7 @@ fm_backend_herdr_list_live() {  # <session>
     pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || continue
     [ -n "$pane_id" ] || continue
     printf '%s:%s\t%s\n' "$session" "$pane_id" "$label"
-  done < <(printf '%s' "$tabs" | jq -r '.result.tabs[]? | select(.label | startswith("fm-")) | "\(.tab_id)\t\(.label)"' 2>/dev/null)
+  done < <(fm_backend_herdr_jq_rows "$tabs" '.result.tabs[]? | select(.label | startswith("fm-")) | "\(.tab_id)\t\(.label)"')
 }
 
 # --- native event push: pane.agent_status_changed subscriber -----------------
@@ -3388,9 +3450,11 @@ fm_backend_herdr_list_live() {  # <session>
 # session's - verified: default -> ~/.config/herdr/herdr.sock, named ->
 # ~/.config/herdr/sessions/<name>/herdr.sock). Empty on any failure.
 fm_backend_herdr_socket_path() {  # <session>
-  local session=$1
-  herdr session list --json 2>/dev/null \
-    | jq -r --arg name "$session" '.sessions[]? | select(.name == $name) | .socket_path // empty' 2>/dev/null \
+  local session=$1 session_list
+  session_list=$(herdr session list --json 2>/dev/null)
+  # shellcheck disable=SC2016 # jq filter; ShellCheck only exempts a literal jq call.
+  fm_backend_herdr_jq_rows "$session_list" --arg name "$session" \
+    '.sessions[]? | select(.name == $name) | .socket_path // empty' \
     | head -1
 }
 

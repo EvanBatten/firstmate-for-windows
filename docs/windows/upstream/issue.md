@@ -84,10 +84,10 @@ It is on Linux; on Cygwin it is derived from `btime` and a suspend/resume moves 
 
 ## What the four PRs do not fix
 
-**One known defect inside PR-3's area, named so it is not rediscovered.**
+**One defect inside PR-3's area, fixed after the branch was cut.**
 A native `jq.exe` opens stdout in text mode, so a `jq -r` read that returns multiple rows carries an interior CR.
-The adapter's workspace-ambiguity refusal renders `w1\r w7`, which looks correct on a terminal and matches nothing.
-Nine of the adapter's 62 `jq -r` reads are multi-row; the fix is one funnel with those nine moved onto it, and it belongs as a follow-up commit on PR-3 rather than a fifth branch.
+The adapter's workspace-ambiguity refusal rendered `w1\r w7`, which looks correct on a terminal and matches nothing.
+Thirteen of the adapter's 61 `jq -r` reads can emit more than one record; all of them now go through one `fm_backend_herdr_jq_rows` funnel that undoes jq's record terminator on a Windows userland and changes nothing on a POSIX one. It rides as a follow-up commit on PR-3 rather than a fifth branch.
 
 **The cross-cutting one, which is a decision rather than a patch.**
 Every Git Bash mount is `noacl`, so POSIX modes are not representable: `mkdir -m 700` creates a 755 directory *and exits 1*, and `chmod 600` reads back 644.

@@ -50,7 +50,7 @@ Wall time is roughly 10x Linux because every process spawn crosses the MSYS/Win3
 | Script | Result | First failing assertion | Class (provisional) |
 | --- | --- | --- | --- |
 | fm-send-popup-settle, fm-tmux-submit-busy, fm-send-settle, fm-send-strict, fm-spawn-batch, fm-supervision-instructions | **PASS** | | |
-| fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | **product** - NOT resolved in slice 3 (that verdict was wrong); settled in slice 6: a native `jq.exe` writes CRLF, so the two-row read is `w1\r\nw7` and the refusal renders `w1\r w7`. Still red; the fix is a PR-3 follow-up |
+| fm-backend-herdr | FAIL | "the ambiguity refusal did not name the candidate workspaces (missing: 'w1 w7')", yet the captured stderr names `(w1 w7)` | **product** - NOT resolved in slice 3 (that verdict was wrong); settled in slice 6: a native `jq.exe` writes CRLF, so the two-row read is `w1\r\nw7` and the refusal renders `w1\r w7`. Resolved in slice 9 by the `fm_backend_herdr_jq_rows` funnel (finding 29); now 181/181 |
 | fm-arm-pretool-check | FAIL | "D01 via codex must deny, got exit 0" for `bin/fm-watch-arm.sh &` | **product** - resolved in slice 4: the watcher seatbelt was inert on Windows for three separate reasons (`node:path`, MSYS argument conversion, `jq` CRLF); now 145/145 |
 | fm-crew-state | FAIL | "timed-out no-mistakes falls back to pane (missing: 'state: working')" | **test** - resolved in slice 6: `make_no_timeout_toolbin`'s symlinked MSYS binaries became the child's whole `PATH`; now green |
 | fm-herdr-lab | FAIL | "timed-out provision must fail: expected exit 1, got 0" | **test + product** - resolved in slice 6: the fixture raced the poll loop, and removing the race exposed a cross-platform cancellation bug in `fm_herdr_lab_provision`; now 7/7 |
@@ -1461,6 +1461,112 @@ Charted Next       Nothing is queued.
 
 The live home is left checked out on `windows`, only the `fm-primary` tab created here is left open, and no tab created by anyone else was touched.
 
+## Phase B slice 9: the herdr adapter's multi-row `jq` reads
+
+The follow-up [prs.md](prs.md) names as the one known defect still open inside `pr-3`'s area, and the last of the Phase A red list.
+`tests/fm-backend-herdr.test.sh` stopped 19 cases in on this machine, at the workspace-ambiguity refusal, and had done since Phase A.
+
+### The defect, in bytes
+
+`jq` on Windows is a native binary and opens stdout in TEXT mode, so it ends every record `\r\n` (both builds present here do it, so it is the platform and not a package; no mount option or shell flag suppresses it):
+
+```sh
+$ printf '{"a":["w1","w7"]}' | jq -r '.a[]' | od -c
+0000000   w   1  \r  \n   w   7  \r  \n
+```
+
+Command substitution eats the LAST record's terminator whole - CR included, measured - which is why the roughly fifty single-value reads in this adapter are already exact on Windows and why almost everything works.
+A multi-row read keeps the CR on every record but the last:
+
+```sh
+# the ambiguity refusal's own expression, before and after
+$ printf '(%s)' "${matches//$'\n'/ }" | od -c
+0000000   (   w   1  \r       w   7   )      # bare jq -r
+0000000   (   w   1       w   7   )          # through the funnel
+```
+
+On a terminal that first line prints as `(w1 w7)`, which is exactly why Phase A recorded "the refusal did not name the candidate workspaces, yet the captured stderr names `(w1 w7)`".
+The consequence is worse than a message: these records are workspace, tab, pane and session ids that go straight back to herdr, and `herdr tab close "w1:t2<CR>"` is not a tab id.
+
+### The funnel, and which sites moved onto it
+
+`fm_backend_herdr_jq_rows <json> <jq-argument>...` runs the same `printf '%s' "$json" | jq -r "$@" 2>/dev/null` its call sites always ran, and on a Windows userland only, undoes jq's record terminator: every `\r\n` back to one `\n`, and nothing else.
+
+"And nothing else" is load-bearing, and it took a second pass to earn.
+The first version also stripped a trailing lone CR, on the theory that a shell which ate only the LF would leave one - and the acceptance review proved that theory changes data: MSYS `$()` eats a final CRLF whole but keeps a lone trailing CR, so after capture, any CR still at the end is the VALUE's own.
+A tab genuinely labelled `1<CR>` would have passed `[ "$current_label" = "1" ]` on Windows and nowhere else, which is the gate in front of a destructive prune.
+The fix is to stop guessing: `jq -r "$@" && printf X` makes the capture jq's byte stream exactly, terminator included, so `\r\n` -> `\n` is the whole transform and it is the exact inverse of text mode for every input.
+`&&` rather than a status variable keeps jq's own exit status; `jq -r` always terminates its last record, so the byte before the sentinel is always the newline jq wrote.
+Measured both ways afterwards: the msys branch on `1<CR><CR><LF>` and the POSIX branch on `1<CR><LF>` now produce the same bytes.
+
+Thirteen call sites moved onto it, which is more than the nine [prs.md](prs.md) predicted.
+The criterion is mechanical rather than a judgement about how many rows each answer holds in practice: **a `jq -r` read whose filter iterates an array**.
+Four of the thirteen (`fm_backend_herdr_pane_for_tab`, two reads in `fm_backend_herdr_resolve_bare_selector`, and `fm_backend_herdr_socket_path`) end in `| head -1`, which reduces the answer to one record and hands the CR to a command substitution that eats it - so they were not broken, they were masked, and the mask is one refactor away from lifting.
+
+| Site | What the CR reached |
+| --- | --- |
+| `fm_backend_herdr_workspace_find_all` | the ambiguity refusal's workspace list, and `${matches%%$'\n'*}` as a workspace id |
+| `fm_backend_herdr_workspace_prune_seeded_default_tab` | the `[ "$current_label" = "1" ]` prune gate |
+| `fm_backend_herdr_create_task` (dup tabs) | `herdr tab close "$dup"` - a real mutation aimed at an id with a control character in it |
+| `fm_backend_herdr_create_task` (remaining dups) | the "failed to remove preexisting herdr tab(s)" refusal |
+| presentation quarantine inspect (workspace ids, pane ids) | `pane list --workspace "$wsid"` and `agent get "$pane"`, the duplicate-launch refusal's own evidence |
+| `fm_backend_herdr_projection_endpoint_matches_journal` | a `[ "$matches" = "$workspace_id" ]` identity test |
+| `fm_backend_herdr_list_live` | every recovery row's tab id AND label, through a `while IFS=$'\t' read` |
+| `fm_backend_herdr_resolve_bare_selector` (session names) | `tab list` in a session named `fmtest<CR>` |
+| the four `| head -1` sites | masked today; see above |
+
+The other reads are untouched by design: a filter that collects (`[...] | if length == 1 then .[0] else empty end`), counts (`| length`), interpolates one string, or `@tsv`s one row cannot produce a second record, and routing it through the funnel would buy nothing and cost a subshell per call on the slow platform.
+
+### Why the userland is the right gate here, when the CLI's gate is the binary
+
+Slice 2 keys the argument-conversion branch on whether `herdr` is a native PE image, because that branch CHANGES the call and a wrong answer would corrupt it.
+This branch cannot change a correct answer, now that the sentinel removed the guesswork: it removes only a CR that immediately precedes an LF `jq` itself wrote, so against any jq that emits plain LF - every POSIX host, and every shell-script fake - it is a no-op on the byte stream.
+That makes `case "${OSTYPE:-}" in msys*|mingw*|cygwin*)` both sufficient and testable from any host, and it is the same gate `fm_hook_payload_string` uses for the same translation in slice 4.
+
+macOS and Linux run the identical `jq` invocation through the identical pipeline and get jq's own bytes and jq's own exit status; the Windows branch buffers through a command substitution, which is the one thing it costs.
+A jq that FAILS after printing partial rows loses that partial output on the Windows branch and keeps it on POSIX - the divergence is deliberate and matches `fm_hook_payload_string`; every caller that checks the status treats it as fatal.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `tests/fm-backend-herdr.test.sh` (the regression net, real jq) | **181 / 181, exit 0** - was red at case 19 since Phase A. 828 s on this machine |
+| `tests/fm-backend-herdr-windows.test.sh` | **43 / 43, exit 0** (was 32); eleven new cases, four of them driving a real call path from any host through a text-mode jq fake, one of which is the exact refusal Phase A found |
+| `tests/fm-backend-herdr-smoke.test.sh` (real herdr 0.8.2) | 16 / 16, exit 0 - unchanged |
+| `shellcheck -x --external-sources bin/backends/herdr.sh` | clean |
+| Mutation: drop the CRLF undo | `a text-mode jq's CR must not survive into a multi-row read, got 'w1RNw7RN'` |
+| Mutation: leave the `X` sentinel in the answer | the same case, `got 'w1Nw7NX'` |
+| Mutation: let the POSIX branch transform too | `the POSIX branch must hand back jq's bytes untouched, got 'w1Nw7N'` |
+| Mutation: `;` instead of `&&` before the sentinel, swallowing jq's status | `jq's own exit status is what fm_backend_herdr_create_task refuses on, got posix=5 msys=0` |
+| Mutation: revert the `create_task` duplicate-tab site to a bare `jq -r` | `both husks must be closed by an id herdr recognises; got 0 such calls` |
+
+### Findings this slice adds to the ledger
+
+| # | Subsystem | Result | Measured detail | Fix owner |
+| --- | --- | --- | --- | --- |
+| 29 | Multi-row `jq` reads in the herdr adapter | **FIXED** | A native `jq.exe` ends every record CR LF; command substitution eats only the last one, so the ~50 single-value reads are exact and the array-iterating ones keep an interior CR. Workspace, tab, pane and session ids went back to herdr with a control character in them, and the ambiguity refusal rendered `(w1\r w7)`. Thirteen reads moved onto `fm_backend_herdr_jq_rows`. | slice 9; `tests/fm-backend-herdr.test.sh` 181/181 |
+| 30 | The same defect in `bin/fm-bearings-snapshot.sh` | **FAIL** | The survey this slice's criterion implies found two more array-iterating reads outside the adapter, both feeding a `while IFS= read` loop: `.tasks[].pr.url` and `.tasks[] | select(.kind != "secondmate") | .paths.worktree.path`. Measured with two tasks: the FIRST worktree path arrives as `/tmp/bearprobe-a\r`, `[ -d "$wt" ]` is false, and its repository is dropped from the PR scan - so `/bearings` silently reports on the last task's repo only. Phase C never saw it because the digest ran with one task in flight. `bin/backends/cmux.sh` and `bin/backends/zellij.sh` have the same shape, on hosts the port does not target. | a follow-up slice, with a design question attached: one shared multi-row reader for every caller, or a second adapter-local funnel |
+
+The portable-parallel lane count is deliberately NOT restated here.
+`tests/fm-backend-herdr.test.sh` was one of slice 6's four remaining reds and is green standalone now, which would make the lanes 20 green / 3 red of 24 - but the lane was not re-run for this slice, and a count nobody measured is worth less than none.
+The portable-serial slice re-runs both lanes.
+
+One neighbour suite was run for completeness and is red for a reason that predates this slice.
+`tests/fm-backend-herdr-eventwait-smoke.test.sh` fails its one transition case (`wait_transition should return 0 on a real idle->blocked transition, got rc='2'`) because Windows Python has no `socket.AF_UNIX` (confirmed: `hasattr(socket, 'AF_UNIX')` is `False` on both interpreters here), so the raw-socket reader cannot connect and `fm_backend_herdr_wait_transition` fails closed to polling exactly as designed.
+`fm_backend_herdr_events_capable` still passes its gate, since it checks protocol, schema and the presence of a python - not whether that python can open a Unix socket.
+It is a real-herdr-gated test outside the portable lanes, it touches none of the reads this slice moved, and the classification is platform.
+
+The four integration cases matter more than the seven unit ones: `test_ambiguity_refusal_names_clean_workspace_ids_under_a_text_mode_jq` drives `fm_backend_herdr_workspace_ensure` end to end against a `jq` that is the real jq with a text-mode stdout, so the exact defect Phase A found on Windows now fails a Linux CI run too, and `test_create_task_closes_real_tab_ids_under_a_text_mode_jq` covers the one DESTRUCTIVE call on any of these paths - reverting that single site to a bare `jq -r` fails it with `got 0 such calls`.
+
+The coverage that is NOT there is worth naming, because the acceptance review measured it: nine of the thirteen converted sites have no cross-platform case, so a revert of any of them is invisible to a Linux lane and is caught only by `tests/fm-backend-herdr.test.sh` on a real Windows box, and only where that suite happens to exercise the path.
+Four of those nine are the `| head -1` sites, where a revert is harmless today by construction.
+The remaining five - the prune gate, the create_task remaining-duplicates message, the two quarantine reads and the endpoint identity test - would each need their own fake-herdr fixture, which is a bigger investment than this slice; they are named here so the next contributor picks them up deliberately rather than assuming the funnel is covered end to end.
+
+Three test-fixture facts came out of building them.
+A `jq` fake that wraps the real binary has to resolve it BEFORE the fakebin shadows PATH and re-terminate with `${line%$'\r'}` guarding, or it doubles the CR on Windows and models nothing.
+And this file inherits a live herdr pane identity from the terminal the suite is launched in - `HERDR_PANE_ID` and friends - which sent `workspace_ensure` looking for a launcher socket none of these fakes model; `tests/fm-backend-herdr.test.sh` drops those six variables for the same reason, and this file now does too rather than sourcing the real-herdr safety helper it has no other use for.
+And those three cases are the only ones in a file that fakes everything else which need a real tool, so they note and skip where `jq` is absent instead of turning a missing package into a red.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -1533,4 +1639,10 @@ git log --oneline upstream/main..0865847 -- bin/fm-proc-lib.sh     # 0865847 and
 git diff pr-2-proc-lib:bin/fm-proc-lib.sh 0865847:bin/fm-proc-lib.sh   # empty
 git diff --name-only upstream/main 0865847  # every path must land in a pr-* branch or be integration-only
 git log --oneline upstream/main..pr-4-herdr-windows-pane
+
+# slice 9 (the multi-row jq reads; the first line is the whole defect)
+printf '{"a":["w1","w7"]}' | jq -r '.a[]' | od -c            # w 1 \r \n w 7 \r \n
+m=$(printf '{"a":["w1","w7"]}' | jq -r '.a[]'); printf '(%s)' "${m//$'\n'/ }" | od -c   # ( w 1 \r   w 7 )
+bash -c '. bin/backends/herdr.sh; fm_backend_herdr_jq_rows "$1" ".a[]"' _ '{"a":["w1","w7"]}' | od -c   # w 1 \n w 7 \n
+python -c "import socket; print(hasattr(socket,'AF_UNIX'))"   # False - why the eventwait smoke test is red
 ```

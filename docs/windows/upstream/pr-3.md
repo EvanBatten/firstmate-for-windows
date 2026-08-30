@@ -103,7 +103,6 @@ On such a mount the 700 requirement is unsatisfiable rather than protective, so 
 **Two accepted limitations.** A `pane send-text` payload that is literally `--cwd=<path>` would be converted, because the scan is positional-blind; that is contrived and strictly better than the pre-change MSYS behavior.
 A `herdr` installed as a `.bat`/`.cmd` shim would be native to MSYS without being a PE image, so it would take the plain branch and get its arguments mangled; the official installer ships an `.exe`.
 
-**One known defect still open in this area.** `tests/fm-backend-herdr.test.sh` is red on Windows at the workspace-ambiguity refusal.
-A native `jq.exe` writes CRLF, so a multi-row read carries an interior CR and the refusal renders `w1\r w7` instead of `w1 w7` - it looks correct on a terminal and does not match.
-The adapter has 62 `jq -r` reads of which nine produce multiple rows; the fix is one `fm_backend_herdr_jq` funnel with those nine sites moved onto it, verified against that 60-plus-case suite.
-It is named here so it is a known follow-up rather than a surprise, and it can land as an additional commit on this branch.
+**One defect in this area that this branch does not carry yet.** A native `jq.exe` opens stdout in text mode, so a multi-row `jq -r` read carries an interior CR: the workspace-ambiguity refusal rendered `w1\r w7`, which looks correct on a terminal and matches nothing, and `tests/fm-backend-herdr.test.sh` was red at that case on Windows.
+The fix is one `fm_backend_herdr_jq_rows` funnel with every array-iterating read moved onto it - thirteen of the adapter's 61 `jq -r` reads, four of them previously masked by a `| head -1` rather than fixed by it - and on a POSIX host it runs the identical pipeline for identical bytes and status.
+It is written and verified (that suite is 181/181 on Windows, plus eleven cross-platform cases, four of which drive a real call path - including that refusal - through a text-mode jq fake) and it arrives as a follow-up commit on this branch.

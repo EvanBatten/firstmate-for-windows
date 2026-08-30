@@ -75,12 +75,16 @@ It is real and it is measured, but it is not part of the four patches the plan s
 | The three cross-cutting fixes from lane triage (slice 6) | `bin/fm-ensure-agents-md.sh`, `bin/fm-herdr-lab.sh`, `tests/fm-composer-lib.test.sh`, `tests/fm-crew-state.test.sh`, `tests/fm-herdr-lab.test.sh` | Each is a genuine cross-platform bug rather than a Windows branch - notably `fm_herdr_lab_cancel_provision` orphaning the server it meant to kill on every platform - and each belongs in its own small PR against the file it fixes. |
 | The port's own documents | `docs/windows/` | Working notes for this port. The evidence a reviewer needs is in the PR bodies under `docs/windows/upstream/`. |
 
-## One known defect still open inside `pr-3`'s area
+## The one defect that was open inside `pr-3`'s area, and is now fixed
 
-`tests/fm-backend-herdr.test.sh` is still red on Windows at the workspace-ambiguity refusal.
-A native `jq.exe` writes CRLF, so a multi-row read carries an interior CR and the refusal renders `w1\r w7` instead of `w1 w7`.
-The adapter has 62 `jq -r` reads of which nine produce multiple rows; the fix is one `fm_backend_herdr_jq` funnel with those nine sites moved onto it.
-It is named here so a reviewer of `pr-3` knows it is known, and so it can land as a follow-up commit on that branch rather than being rediscovered.
+`tests/fm-backend-herdr.test.sh` was red on Windows at the workspace-ambiguity refusal, and had been since Phase A.
+A native `jq.exe` writes CRLF, so a multi-row read carries an interior CR and the refusal rendered `w1\r w7` instead of `w1 w7`.
+
+Slice 9 fixed it on the integration branch with one `fm_backend_herdr_jq_rows` funnel.
+Thirteen array-iterating reads moved onto it rather than the nine predicted here: four more were masked by a `| head -1`, which reduces the answer to the single record command substitution already cleans up - a mask rather than a fix.
+The suite is 181/181 on Windows and `tests/fm-backend-herdr-windows.test.sh` gained ten cases that drive the same refusal from any host through a text-mode jq fake.
+
+It belongs on `pr-3-herdr-windows-cli` as a follow-up commit, which the re-split slice adds.
 Adding a commit to a pushed branch is fine; none of these branches may be force-pushed.
 
 ## One safety note about these branches
