@@ -120,6 +120,14 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_CMUX_ROOT/bin/fm-composer-lib.sh"
 
+# Shared CR LF -> LF undo for a native jq's text-mode stdout (bin/fm-jq-lib.sh).
+# fm_backend_cmux_capture's `.text` read is one multi-line VALUE rather than
+# rows, but the undo fm_jq_rows performs is exactly what that value needs too:
+# every LF a text-mode jq widens to CRLF, whether it separates array rows or
+# sits inside one string's own embedded newlines, collapses back to LF alone.
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_BACKEND_CMUX_ROOT/bin/fm-jq-lib.sh"
+
 # Verified minimum: the version the live pass ran against (docs/cmux-backend.md).
 FM_BACKEND_CMUX_MIN_MAJOR=0
 FM_BACKEND_CMUX_MIN_MINOR=64
@@ -525,7 +533,7 @@ fm_backend_cmux_capture() {  # <target> <lines> [expected-label]
   fetch=$lines
   case "$fetch" in ''|*[!0-9]*) fetch=200 ;; *) [ "$fetch" -ge 200 ] || fetch=200 ;; esac
   raw=$(fm_backend_cmux_cli read-screen --workspace "$FM_BACKEND_CMUX_WORKSPACE" --surface "$FM_BACKEND_CMUX_SURFACE" --scrollback --lines "$fetch" --json 2>/dev/null) || return 1
-  out=$(printf '%s' "$raw" | jq -r '.text // empty' 2>/dev/null) || return 1
+  out=$(fm_jq_rows "$raw" '.text // empty') || return 1
   printf '%s' "$out" | tail -n "$lines"
 }
 

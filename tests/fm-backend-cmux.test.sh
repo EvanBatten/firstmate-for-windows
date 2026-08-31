@@ -557,6 +557,50 @@ test_capture_trims_locally() {
   pass "fm_backend_cmux_capture: fetches generously and trims to N lines locally"
 }
 
+# make_text_mode_jq: install a `jq` in <dir>/fakebin that behaves like a
+# native jq.exe (every LF widened to CRLF on stdout), staged on any host by
+# wrapping the real jq - so this case forces the Windows branch regardless of
+# what jq the box actually has. Mirrors tests/fm-jq-lib.test.sh's helper of
+# the same name.
+make_text_mode_jq() {  # <dir> -> writes <dir>/fakebin/jq
+  local dir=$1 fb real bytes
+  fb=$(fm_fakebin "$dir")
+  real=$(command -v jq)
+  # `x` plus its terminator: 2 bytes under a POSIX jq, 3 under a text-mode one.
+  bytes=$(printf '%s' '{}' | "$real" -r '"x"' | wc -c | tr -d ' ')
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -u\n'
+    printf 'real=%q\n' "$real"
+    if [ "$bytes" = 3 ]; then
+      cat <<'SH'
+exec "$real" "$@"
+SH
+    else
+      cat <<'SH'
+"$real" "$@" | while IFS= read -r line || [ -n "$line" ]; do printf '%s\r\n' "$line"; done
+exit "${PIPESTATUS[0]}"
+SH
+    fi
+  } > "$fb/jq"
+  chmod +x "$fb/jq"
+}
+
+test_capture_strips_cr_under_a_text_mode_jq() {
+  local dir fb out
+  dir="$TMP_ROOT/capture-text-mode-jq"; mkdir -p "$dir/responses"
+  # 1: list-panes --json --id-format uuids (target_ready)
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  # 2: read-screen --scrollback --lines 200 --json (actual fetch)
+  cmux_read_screen_response "$dir" 2 $'line one\nline two\nline three\nline four'
+  fb=$(make_cmux_fakebin "$dir")
+  make_text_mode_jq "$dir"
+  out=$( OSTYPE=msys PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_capture "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" 2' "$ROOT" )
+  [ "$out" = $'line three\nline four' ] || fail "capture must strip a text-mode jq's CR from every captured line, got '$out'"
+  pass "fm_backend_cmux_capture: strips a text-mode jq's CR from every captured line under OSTYPE=msys"
+}
+
 test_capture_fails_when_read_screen_fails_empty() {
   local dir fb status
   dir="$TMP_ROOT/capture-read-fail"; mkdir -p "$dir/responses"
@@ -1134,6 +1178,7 @@ test_target_ready_fails_when_target_absent
 test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch
 test_capture_trims_locally
+test_capture_strips_cr_under_a_text_mode_jq
 test_capture_fails_when_read_screen_fails_empty
 test_capture_fails_when_target_not_ready
 test_send_key_normalizes_and_targets
