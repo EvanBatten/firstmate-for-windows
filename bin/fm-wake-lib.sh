@@ -23,12 +23,22 @@ _FM_UNAME=$FM_PROC_UNAME
 # Same argument for CLK_TCK, which only fm_pid_identity's non-Linux /proc branch
 # needs: it is 1000 on this MSYS userland and 100 on Linux, so it is read and
 # never assumed. Linux keeps raw ticks and macOS has no /proc, so neither forks.
+# The probe stays callable afterwards because this gate reads the /proc override
+# at SOURCE time while fm_pid_identity reads it at CALL time: a caller that
+# exports the override after sourcing this file would otherwise be left with an
+# empty answer for the rest of the process, and every identity comparison is an
+# equality, so an empty answer is a permanent mismatch rather than a slow path.
 _FM_CLK_TCK=
-if [ "$_FM_UNAME" != Linux ] && [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/stat" ]; then
-  _FM_CLK_TCK=$(getconf CLK_TCK 2>/dev/null || true)
-  case "$_FM_CLK_TCK" in
-    ''|*[!0-9]*|0) _FM_CLK_TCK= ;;
+_fm_clk_tck_probe() {
+  local ticks
+  ticks=$(getconf CLK_TCK 2>/dev/null || true)
+  case "$ticks" in
+    ''|*[!0-9]*|0) return 1 ;;
   esac
+  _FM_CLK_TCK=$ticks
+}
+if [ "$_FM_UNAME" != Linux ] && [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/uptime" ]; then
+  _fm_clk_tck_probe || true
 fi
 mkdir -p "$STATE"
 
@@ -45,24 +55,110 @@ fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
 }
 
-# _fm_proc_btime <proc_root>: sets _FM_PROC_BTIME to the boot-time origin that
-# /proc/<pid>/stat field 22 counts from, or returns 1. The answer is passed back
-# in a global rather than printed because command substitution forks, and this
-# runs inside the same polls the CLK_TCK note above is about. btime sits below
-# the per-cpu rows, so the line has to be found rather than taken.
-_FM_PROC_BTIME=
-_fm_proc_btime() {
-  local field value
-  _FM_PROC_BTIME=
-  while read -r field value _; do
-    [ "$field" = btime ] || continue
-    case "$value" in
-      ''|*[!0-9]*) return 1 ;;
+# Every helper below passes its answer back in a global rather than printing it,
+# because command substitution forks and these run inside the same 0.2s confirm
+# and 0.5s attach polls the CLK_TCK note above is about.
+
+# _fm_decimal_ms <value>: sets _FM_DECIMAL_MS to a decimal number of seconds,
+# expressed in whole milliseconds, or returns 1. Both separators are accepted
+# because bash renders EPOCHREALTIME with the LOCALE's decimal point, which is a
+# comma under e.g. de_DE, while /proc/uptime is always written with a period.
+_FM_DECIMAL_MS=
+_fm_decimal_ms() {
+  local value=$1 sec frac
+  _FM_DECIMAL_MS=
+  sec=${value%%[.,]*}
+  case "$sec" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  case "$value" in
+    *[.,]*) frac=${value#*[.,]} ;;
+    *) frac=0 ;;
+  esac
+  case "$frac" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  # Exactly three fraction digits: /proc/uptime's centiseconds are padded and
+  # EPOCHREALTIME's microseconds are truncated, so both land on milliseconds.
+  while [ "${#frac}" -lt 3 ]; do frac=${frac}0; done
+  frac=${frac:0:3}
+  _FM_DECIMAL_MS=$(( sec * 1000 + 10#$frac ))
+}
+
+# _fm_proc_uptime_ms <proc_root>: sets _FM_PROC_UPTIME_MS to how long the
+# machine has been up, in milliseconds, or returns 1. This clock is monotonic -
+# no wall-clock step moves it - which is the whole reason the branch below
+# reaches for it instead of /proc/stat's btime.
+_FM_PROC_UPTIME_MS=
+_fm_proc_uptime_ms() {
+  local up=
+  _FM_PROC_UPTIME_MS=
+  [ -r "$1/uptime" ] || return 1
+  { read -r up _ < "$1/uptime"; } 2>/dev/null || true
+  [ -n "$up" ] || return 1
+  _fm_decimal_ms "$up" || return 1
+  _FM_PROC_UPTIME_MS=$_FM_DECIMAL_MS
+}
+
+# _fm_proc_now_ms: sets _FM_PROC_NOW_MS to the wall clock in milliseconds, or
+# returns 1. EPOCHREALTIME is a bash builtin variable, so the common path costs
+# no process at all; `date +%s%N` covers a bash too old to have it and is
+# rejected outright where it answers with a literal N. FM_PROC_NOW_OVERRIDE is
+# the fixture seam beside FM_PROC_ROOT_OVERRIDE - milliseconds, so a test can
+# step the clock deterministically - and is read at call time like that one.
+_FM_PROC_NOW_MS=
+_fm_proc_now_ms() {
+  local now
+  _FM_PROC_NOW_MS=
+  now=${FM_PROC_NOW_OVERRIDE:-}
+  if [ -n "$now" ]; then
+    case "$now" in
+      *[!0-9]*) return 1 ;;
     esac
-    _FM_PROC_BTIME=$value
+    _FM_PROC_NOW_MS=$now
     return 0
-  done < "$1/stat"
-  return 1
+  fi
+  now=${EPOCHREALTIME:-}
+  if [ -n "$now" ]; then
+    _fm_decimal_ms "$now" || return 1
+    _FM_PROC_NOW_MS=$_FM_DECIMAL_MS
+    return 0
+  fi
+  now=$(date +%s%N 2>/dev/null) || return 1
+  case "$now" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "${#now}" -gt 9 ] || return 1
+  _FM_PROC_NOW_MS=$(( now / 1000000 ))
+}
+
+# _fm_proc_createtime <proc_root> <starttime-ticks>: sets _FM_PROC_CREATETIME to
+# the whole second in which the process was created, or returns 1 so the caller
+# can fall through to its portable fallback.
+#
+# MSYS has no boot timestamp of its own. It derives the origin as `now - uptime`
+# at every read and anchors /proc/<pid>/stat field 22 to that derived origin, so
+# a clock step of D raises the origin by D and lowers field 22 by exactly D
+# (docs/windows/measurement.md row 25). Re-adding the origin at FULL precision
+# cancels the step exactly, whatever its size, because uptime does not move.
+# /proc/stat's own btime cannot serve as that origin: it is truncated to whole
+# seconds while field 22 carries milliseconds, so their sum still shifts by a
+# second on a FRACTIONAL step - the ordinary shape of an NTP correction.
+#
+# The single floor is applied to the summed milliseconds, so the only residual
+# is that /proc/uptime is published in centiseconds: a process created within
+# about 10 ms of a second boundary can be recorded one second apart by two
+# reads. That is a rare false mismatch (a watcher treated as dead and re-armed),
+# never a false match, and Win32's own creation time is the only way to remove
+# it entirely.
+_FM_PROC_CREATETIME=
+_fm_proc_createtime() {
+  local proc_root=$1 ticks=$2
+  _FM_PROC_CREATETIME=
+  [ -n "$_FM_CLK_TCK" ] || _fm_clk_tck_probe || return 1
+  _fm_proc_uptime_ms "$proc_root" || return 1
+  _fm_proc_now_ms || return 1
+  _FM_PROC_CREATETIME=$(( (_FM_PROC_NOW_MS - _FM_PROC_UPTIME_MS + ticks * 1000 / _FM_CLK_TCK) / 1000 ))
 }
 
 fm_pid_identity() {
@@ -89,24 +185,28 @@ fm_pid_identity() {
     case "$starttime" in
       ''|*[!0-9]*) return 1 ;;
     esac
-    cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
-    [ -n "$cmdline_hex" ] || return 1
-    if [ "$_FM_UNAME" = Linux ]; then
-      identity_key=linux-starttime
-    else
-      # Only Linux writes btime once at boot. MSYS derives it as `now - uptime`
-      # at every read and anchors field 22 to that origin, so a clock step of D
-      # raises btime by D and lowers field 22 by exactly D, and the raw field
-      # evicts a live watcher on any NTP resync (docs/windows/measurement.md
-      # row 25). Their sum is when the process was created, which no step moves.
-      # It costs one-second granularity, which cmdline-hex already covers.
-      _fm_proc_btime "$proc_root" || return 1
-      [ -n "$_FM_CLK_TCK" ] || return 1
-      identity_key=proc-createtime
-      starttime=$(( _FM_PROC_BTIME + starttime / _FM_CLK_TCK ))
+    identity_key=linux-starttime
+    if [ "$_FM_UNAME" != Linux ]; then
+      # Only Linux counts field 22 from an origin fixed at boot, so only Linux
+      # can use the raw field: see _fm_proc_createtime for what the other
+      # dialect records instead and why. An empty key here means the clock,
+      # uptime or CLK_TCK could not be read, which is not a reason to report no
+      # identity at all - every caller compares identities for EQUALITY, so a
+      # host in that state would fail every comparison forever and treat a live
+      # watcher as dead on every turn. It falls through to the ps fallback.
+      if _fm_proc_createtime "$proc_root" "$starttime"; then
+        identity_key=proc-createtime
+        starttime=$_FM_PROC_CREATETIME
+      else
+        identity_key=
+      fi
     fi
-    printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
-    return 0
+    if [ -n "$identity_key" ]; then
+      cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
+      [ -n "$cmdline_hex" ] || return 1
+      printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
+      return 0
+    fi
   fi
   # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
   # written under one locale but re-read under the machine's ambient locale, which

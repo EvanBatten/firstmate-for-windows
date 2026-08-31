@@ -28,11 +28,13 @@ It takes `--source <name>` when the adapter knows the source natively, and other
 | `resume`, `reload`, `fork` | Delegate to the nudge wrapper | Prior context is restored, so re-running is redundant when the lock is still ours and an instruction is enough when a new process resumed an old session. |
 | unreadable or unrecognized | Full digest | Taking the helm redundantly is cheap and idempotent; not taking it is the bug this tier exists to fix. |
 
-One userland answers ahead of the source table.
-The run tier's premise is that the hook process can prove which harness session it belongs to, and on MSYS (Git Bash, MSYS2, Cygwin) it cannot.
-MSYS has no POSIX `exec`: it starts a new Win32 process, hands it the old Cygwin pid, and exits the original, so a script reached through a tracked registration's `exec` - which is also what bash does to a `-c` script's final command - has a dead Win32 parent and an MSYS ppid of 1.
-`fm_harness_ancestry_pid()` finds no harness from there, `bin/fm-lock.sh` refuses, and every digest a hook runs on that userland ends in the read-only banner while the agent goes on to run `bin/fm-session-start.sh` from its own shell, where the walk resolves.
-So `bin/fm-sessionstart-run.sh` hands the whole open to the nudge tier there, whatever the source, and spends one instruction line instead of a bounded digest that cannot take the helm.
+One condition answers ahead of the source table: an MSYS userland (Git Bash, MSYS2, Cygwin) whose ancestry names no harness.
+The run tier's premise is that the hook process can prove which harness session it belongs to, and there it cannot.
+MSYS has no POSIX `exec`: it starts a new Win32 process, hands it the old Cygwin pid, and exits the original, so a script reached through a registration's `exec` - which is also what bash does to a `-c` script's final command - has a dead Win32 parent and an MSYS ppid of 1.
+`fm_harness_ancestry_pid()` finds no harness from there, `bin/fm-lock.sh` refuses, and every digest such a hook runs ends in the read-only banner while the agent goes on to run `bin/fm-session-start.sh` from its own shell, where the walk resolves.
+So `bin/fm-sessionstart-run.sh` hands the whole open to the nudge tier in that case, whatever the source, and spends one instruction line instead of a bounded digest that cannot take the helm.
+The severed ancestry, not the userland, is the gate, because not every registration severs it: the Codex entry pipes its payload into the wrapper, and bash forks a pipeline element instead of exec-optimizing it, so that transport keeps a live parent chain the hybrid walk crosses to the native harness.
+There the digest can take the lock and the source table decides as it does anywhere else - which matters most for `clear` and `compact`, where diverting to the nudge would leave the session that just lost its context with nothing at all, since the nudge sees this harness already holds the lock and stays silent.
 The measurement is section C4b and findings row 22 of [`windows/measurement.md`](windows/measurement.md).
 
 This deliberately inverts the previous nudge matcher, which fired on `startup|resume|clear` and excluded `compact`.
