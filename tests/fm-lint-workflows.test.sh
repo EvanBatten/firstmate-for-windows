@@ -589,13 +589,64 @@ SH
 }
 
 test_windows_branch_in_ci_and_required_workflows() {
-  local rc
+  local out rc
+  # The workflow paths travel as argv: the heredoc is quoted so the shell leaves
+  # the python alone, which also means $ROOT would never be expanded inside it.
+  # A missing python3 is a skip, the same way a missing yaml module is; a
+  # traceback of any other kind is a failure, never a skip.
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "skip: python3 not found for the workflow trigger check"
+    return 0
+  fi
+  # The substitution closes after the terminator: a heredoc opened on the same
+  # line as `$(...)` closes never reaches the command, which then runs an empty
+  # script and exits 0, and the case passes without testing anything.
   rc=0
-  grep -q 'windows' "$ROOT/.github/workflows/ci.yml" \
-    || fail "ci.yml must include 'windows' in its branch filters"
-  grep -q 'windows' "$ROOT/.github/workflows/no-mistakes-required.yml" \
-    || fail "no-mistakes-required.yml must include 'windows' in its branch filters"
-  pass "both ci.yml and no-mistakes-required.yml name windows in their branch filters"
+  out=$(python3 - "$ROOT/.github/workflows/ci.yml" "$ROOT/.github/workflows/no-mistakes-required.yml" 2>&1 << 'PYEOF'
+import sys
+
+try:
+  import yaml
+except ImportError:
+  print('skip: python3 with yaml not found for the workflow trigger check')
+  sys.exit(0)
+
+with open(sys.argv[1]) as f:
+  ci = yaml.safe_load(f)
+with open(sys.argv[2]) as f:
+  nm = yaml.safe_load(f)
+
+# PyYAML reads the bare key `on` as the boolean True, so look under both.
+ci_trigger = ci.get('on') or ci.get(True) or {}
+nm_trigger = nm.get('on') or nm.get(True) or {}
+
+ci_push = (ci_trigger.get('push') or {}).get('branches') or []
+ci_pr = (ci_trigger.get('pull_request') or {}).get('branches') or []
+nm_pr = (nm_trigger.get('pull_request') or {}).get('branches') or []
+
+errors = []
+if 'windows' not in ci_push:
+  errors.append('ci.yml push.branches missing windows')
+if 'windows' not in ci_pr:
+  errors.append('ci.yml pull_request.branches missing windows')
+if 'windows' not in nm_pr:
+  errors.append('no-mistakes-required.yml pull_request.branches missing windows')
+
+if errors:
+  for e in errors:
+    print(e)
+  sys.exit(1)
+PYEOF
+) || rc=$?
+
+  case "$out" in
+    skip:*)
+      echo "$out"
+      return 0
+      ;;
+  esac
+  [ "$rc" -eq 0 ] || fail "workflow branch filters: $out"
+  pass "both ci.yml and no-mistakes-required.yml have windows in branch filters"
 }
 
 test_pins_an_explicit_version
