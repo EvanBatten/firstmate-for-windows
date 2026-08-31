@@ -589,7 +589,9 @@ SH
 }
 
 test_windows_branch_in_ci_and_required_workflows() {
-  local out rc
+  local tmp out err rc skip_line ok_line
+  skip_line='skip: python3 with yaml not found for the workflow trigger check'
+  ok_line='windows: present in ci.yml push, ci.yml pull_request, no-mistakes-required.yml pull_request'
   # The workflow paths travel as argv: the heredoc is quoted so the shell leaves
   # the python alone, which also means $ROOT would never be expanded inside it.
   # A missing python3 is a skip, the same way a missing yaml module is; a
@@ -598,11 +600,19 @@ test_windows_branch_in_ci_and_required_workflows() {
     echo "skip: python3 not found for the workflow trigger check"
     return 0
   fi
+  tmp=$(fm_test_tmproot fm-lint-wf-windows)
+  # Both states the python can reach announce themselves on stdout, and stderr
+  # is kept in its own file so nothing an interpreter writes there can be
+  # mistaken for either: a DeprecationWarning ahead of the skip line no longer
+  # hides the skip, and only the positive marker passes the case, so an
+  # interpreter that dies before parsing a single workflow fails loudly instead
+  # of reporting an assertion that never ran.
+  #
   # The substitution closes after the terminator: a heredoc opened on the same
   # line as `$(...)` closes never reaches the command, which then runs an empty
   # script and exits 0, and the case passes without testing anything.
   rc=0
-  out=$(python3 - "$ROOT/.github/workflows/ci.yml" "$ROOT/.github/workflows/no-mistakes-required.yml" 2>&1 << 'PYEOF'
+  out=$(python3 - "$ROOT/.github/workflows/ci.yml" "$ROOT/.github/workflows/no-mistakes-required.yml" 2>"$tmp/stderr" << 'PYEOF'
 import sys
 
 try:
@@ -636,16 +646,26 @@ if errors:
   for e in errors:
     print(e)
   sys.exit(1)
+
+print('windows: present in ci.yml push, ci.yml pull_request, no-mistakes-required.yml pull_request')
 PYEOF
 ) || rc=$?
+  err=$(cat "$tmp/stderr" 2>/dev/null) || err=
 
-  case "$out" in
-    skip:*)
-      echo "$out"
+  case $'\n'"$out"$'\n' in
+    *$'\n'"$skip_line"$'\n'*)
+      echo "$skip_line"
       return 0
       ;;
   esac
-  [ "$rc" -eq 0 ] || fail "workflow branch filters: $out"
+  case $'\n'"$out"$'\n' in
+    *$'\n'"$ok_line"$'\n'*) ;;
+    *)
+      fail "workflow branch filters: no verdict line, exit $rc"$'\n'"stdout: $out"$'\n'"stderr: $err"
+      ;;
+  esac
+  [ "$rc" -eq 0 ] ||
+    fail "workflow branch filters: exit $rc"$'\n'"stdout: $out"$'\n'"stderr: $err"
   pass "both ci.yml and no-mistakes-required.yml have windows in branch filters"
 }
 

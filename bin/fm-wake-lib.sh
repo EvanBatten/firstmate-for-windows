@@ -167,10 +167,20 @@ _fm_proc_now_ms() {
 # straddles it: two readers can record that one process a second apart, and they
 # keep doing so for its whole life rather than once. Its every health check is
 # then a coin toss - a live watcher treated as dead and re-armed until the next
-# arm re-records the identity. It stays a false mismatch, never a false match.
-# Removing it entirely needs either a tolerance at the equality sites that
-# compare these strings or Win32's own creation time, which carries the
+# arm re-records the identity. That jitter stays a false mismatch, never a false
+# match. Removing it entirely needs either a tolerance at the equality sites
+# that compare these strings or Win32's own creation time, which carries the
 # sub-second digits /proc never publishes.
+#
+# The whole second the key records costs something separate from that jitter,
+# and in the other direction: MSYS reports CLK_TCK as 1000, so the raw field 22
+# this replaced distinguished creation instants a millisecond apart, while this
+# key cannot tell apart two processes created inside the same second. The window
+# in which a REUSED pid compares equal to the recorded identity therefore widens
+# from about a millisecond to a second. cmdline-hex is what keeps that rare: the
+# reuse must also relaunch a byte-identical command line, which for a watcher
+# means a watcher for the same home, so the process a stale lock then matches is
+# itself the live watcher the lock is meant to name.
 _FM_PROC_CREATETIME=
 _fm_proc_createtime() {
   local proc_root=$1 ticks=$2
