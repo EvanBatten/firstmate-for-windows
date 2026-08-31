@@ -1023,6 +1023,8 @@ SH
   pass "fm_pid_identity is locale-invariant across LC_ALL/LC_TIME"
 }
 
+FAKE_PROC_CMDLINE_HEX=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700
+
 write_fake_proc_identity() {
   local proc_root=$1 pid=$2 starttime=$3
   mkdir -p "$proc_root/$pid"
@@ -1030,35 +1032,126 @@ write_fake_proc_identity() {
   printf 'bash\0/path with spaces/fm-watch.sh\0--flag\0' > "$proc_root/$pid/cmdline"
 }
 
-test_proc_pid_identity_ignores_wall_clock_and_detects_pid_reuse() {
-  local dir state proc_root pid identity_key before after_time_jump after_pid_reuse
-  dir=$(make_case proc-pid-identity)
+# write_fake_proc_stat <proc_root> <btime>
+# The system-wide file. Its btime is written once at boot on Linux and derived
+# as `now - uptime` at every read on MSYS (measurement.md row 25), which is why
+# only one of the two dialects below may read it. Real /proc/stat carries btime
+# below its per-cpu rows, so a reader that took the first line would pass
+# against a one-line fixture and then find nothing on a live machine.
+write_fake_proc_stat() {
+  local proc_root=$1 btime=$2
+  mkdir -p "$proc_root"
+  {
+    printf 'cpu 957196696 0 891910304 12956040558\n'
+    printf 'cpu0 28768125 0 36727421 859826281\n'
+    printf 'btime %s\n' "$btime"
+    printf 'processes 0\n'
+  } > "$proc_root/stat"
+}
+
+# fake_uname <fakebin> <answer>
+# fm_pid_identity picks its /proc dialect off `uname -s`, which bin/fm-proc-lib.sh
+# resolves once at source time, so a PATH stub runs BOTH dialects from any host
+# rather than leaving each one assertable on only one machine.
+fake_uname() {
+  local fakebin=$1 answer=$2
+  mkdir -p "$fakebin"
+  cat > "$fakebin/uname" <<SH
+#!/usr/bin/env bash
+printf '%s\n' '$answer'
+SH
+  chmod +x "$fakebin/uname"
+}
+
+proc_identity() {  # <fakebin> <proc_root> <state> <pid>
+  PATH="$1:$PATH" FM_PROC_ROOT_OVERRIDE="$2" FM_STATE_OVERRIDE="$3" \
+    bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$4"
+}
+
+test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse() {
+  local dir state proc_root fakebin pid before after_time_jump after_pid_reuse
+  dir=$(make_case linux-proc-pid-identity)
   state="$dir/state"
   proc_root="$dir/proc"
+  fakebin="$dir/uname-linux"
   pid=4242
-  identity_key=proc-starttime
-  [ "$(uname)" != Linux ] || identity_key=linux-starttime
-  mkdir -p "$proc_root"
-  printf 'btime 1784094040\n' > "$proc_root/stat"
+  fake_uname "$fakebin" Linux
+  write_fake_proc_stat "$proc_root" 1784094040
   write_fake_proc_identity "$proc_root" "$pid" 987654
 
-  before=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+  before=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
     || fail "could not read initial fake Linux process identity"
-  printf 'btime 1784094016\n' > "$proc_root/stat"
-  after_time_jump=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+  write_fake_proc_stat "$proc_root" 1784094016
+  after_time_jump=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
     || fail "could not re-read fake Linux process identity after btime change"
 
   [ "$after_time_jump" = "$before" ] \
-    || fail "/proc process identity changed with btime (before '$before', after '$after_time_jump')"
-  [ "$before" = "$identity_key=987654 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700" ] \
-    || fail "/proc process identity did not combine parsed starttime field 22 with the full cmdline ('$before')"
-  pass "/proc process identity ignores simulated btime changes"
+    || fail "Linux process identity changed with btime (before '$before', after '$after_time_jump')"
+  [ "$before" = "linux-starttime=987654 cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "Linux process identity did not combine parsed starttime field 22 with the full cmdline ('$before')"
+  pass "Linux process identity is field 22 alone and ignores btime"
 
   write_fake_proc_identity "$proc_root" "$pid" 987655
-  after_pid_reuse=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
-    || fail "could not read reused fake /proc pid identity"
-  [ "$after_pid_reuse" != "$before" ] || fail "/proc process identity missed changed starttime for reused pid"
-  pass "/proc process identity detects pid reuse"
+  after_pid_reuse=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "could not read reused fake Linux pid identity"
+  [ "$after_pid_reuse" != "$before" ] || fail "Linux process identity missed changed starttime for reused pid"
+  pass "Linux process identity detects pid reuse"
+}
+
+test_msys_proc_pid_identity_survives_a_clock_step() {
+  local dir state proc_root fakebin pid clk_tck btime start expected
+  local before after_step after_rounded_step after_pid_reuse
+  dir=$(make_case msys-proc-pid-identity)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys"
+  pid=4242
+  btime=1784094040
+  start=987654
+  # 1000 on this MSYS userland and 100 on Linux, so the fixture reads it too
+  # rather than baking in either machine's answer.
+  clk_tck=$(getconf CLK_TCK 2>/dev/null) || clk_tck=
+  case "$clk_tck" in
+    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$clk_tck')" ;;
+  esac
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  write_fake_proc_stat "$proc_root" "$btime"
+  write_fake_proc_identity "$proc_root" "$pid" "$start"
+  expected="proc-createtime=$(( btime + start / clk_tck )) cmdline-hex=$FAKE_PROC_CMDLINE_HEX"
+
+  before=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "could not read initial fake MSYS process identity"
+  [ "$before" = "$expected" ] \
+    || fail "MSYS process identity is not the absolute creation time (got '$before', want '$expected')"
+
+  # A step of D raises the derived btime by D and lowers field 22 by exactly D,
+  # so their sum - when the process was created - stands still.
+  write_fake_proc_stat "$proc_root" "$(( btime + 3 ))"
+  write_fake_proc_identity "$proc_root" "$pid" "$(( start - 3 * clk_tck ))"
+  after_step=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "could not re-read fake MSYS process identity after a clock step"
+  [ "$after_step" = "$before" ] \
+    || fail "MSYS process identity changed across a 3s clock step (before '$before', after '$after_step')"
+
+  # The measured step was fractional (1.041s, row 25): btime carries only its
+  # whole seconds and the sum's own truncation absorbs the remainder.
+  write_fake_proc_stat "$proc_root" "$(( btime + 1 ))"
+  write_fake_proc_identity "$proc_root" "$pid" "$(( start - clk_tck - clk_tck / 4 ))"
+  after_rounded_step=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "could not re-read fake MSYS process identity after a fractional clock step"
+  [ "$after_rounded_step" = "$before" ] \
+    || fail "MSYS process identity changed across a 1.25s clock step (before '$before', after '$after_rounded_step')"
+  pass "MSYS process identity survives a wall-clock step"
+
+  # Second granularity is what that invariance costs, so a reused pid is told
+  # apart once it starts in a later second; cmdline-hex covers the rest.
+  write_fake_proc_stat "$proc_root" "$btime"
+  write_fake_proc_identity "$proc_root" "$pid" "$(( start + clk_tck ))"
+  after_pid_reuse=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "could not read reused fake MSYS pid identity"
+  [ "$after_pid_reuse" != "$before" ] \
+    || fail "MSYS process identity missed a later creation time for a reused pid"
+  pass "MSYS process identity detects pid reuse"
 }
 
 test_stale_watch_reclaim_publishes_before_clear() {
@@ -1118,7 +1211,7 @@ test_msys_pid_identity_uses_proc() {
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
   case "$identity" in
-    proc-starttime=*" cmdline-hex="*) ;;
+    proc-createtime=*" cmdline-hex="*) ;;
     *) fail "MSYS process identity did not use compatible /proc fields ('$identity')" ;;
   esac
   pass "MSYS process identity uses compatible /proc fields"
@@ -1126,7 +1219,8 @@ test_msys_pid_identity_uses_proc() {
 
 test_singleton_start
 test_pid_identity_is_locale_invariant
-test_proc_pid_identity_ignores_wall_clock_and_detects_pid_reuse
+test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
+test_msys_proc_pid_identity_survives_a_clock_step
 test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed
 test_stale_watch_reclaim_publishes_before_clear

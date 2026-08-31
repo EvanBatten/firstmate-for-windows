@@ -20,6 +20,16 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # the platform (Git Bash/MSYS) that already pays the highest fork price. The leaf
 # library above has already paid for that one fork, so reuse its answer.
 _FM_UNAME=$FM_PROC_UNAME
+# Same argument for CLK_TCK, which only fm_pid_identity's non-Linux /proc branch
+# needs: it is 1000 on this MSYS userland and 100 on Linux, so it is read and
+# never assumed. Linux keeps raw ticks and macOS has no /proc, so neither forks.
+_FM_CLK_TCK=
+if [ "$_FM_UNAME" != Linux ] && [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/stat" ]; then
+  _FM_CLK_TCK=$(getconf CLK_TCK 2>/dev/null || true)
+  case "$_FM_CLK_TCK" in
+    ''|*[!0-9]*|0) _FM_CLK_TCK= ;;
+  esac
+fi
 mkdir -p "$STATE"
 
 # Most wake-library consumers need only queue and lock primitives, including
@@ -35,6 +45,26 @@ fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
 }
 
+# _fm_proc_btime <proc_root>: sets _FM_PROC_BTIME to the boot-time origin that
+# /proc/<pid>/stat field 22 counts from, or returns 1. The answer is passed back
+# in a global rather than printed because command substitution forks, and this
+# runs inside the same polls the CLK_TCK note above is about. btime sits below
+# the per-cpu rows, so the line has to be found rather than taken.
+_FM_PROC_BTIME=
+_fm_proc_btime() {
+  local field value
+  _FM_PROC_BTIME=
+  while read -r field value _; do
+    [ "$field" = btime ] || continue
+    case "$value" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    _FM_PROC_BTIME=$value
+    return 0
+  done < "$1/stat"
+  return 1
+}
+
 fm_pid_identity() {
   local pid=$1 out proc_root stat_line starttime cmdline_hex identity_key
   local -a stat_fields
@@ -42,10 +72,12 @@ fm_pid_identity() {
     ''|*[!0-9]*) return 1 ;;
   esac
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  # Prefer a Linux-compatible /proc when present: stat field 22 (starttime, clock ticks since boot) is
-  # immune to the wall-clock steps that re-render the ps lstart fallback's date
-  # (observed as WSL2 btime drift) and would evict a live watcher; combining the
-  # full NUL-separated cmdline keeps PID reuse a mismatch even on a tick collision.
+  # Prefer a Linux-compatible /proc when present: it survives the wall-clock steps
+  # that re-render the ps lstart fallback's date (observed as WSL2 btime drift) and
+  # would evict a live watcher, and combining the full NUL-separated cmdline keeps
+  # PID reuse a mismatch even on a start-time collision. What is read out of it
+  # differs by dialect - see the branch below - because only on Linux is stat field
+  # 22 (starttime, clock ticks since boot) a step-invariant number on its own.
   # Git Bash/MSYS exposes these compatible files but its Cygwin ps rejects the
   # portable fallback's -o fields, so capability detection must not key on uname.
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
@@ -59,8 +91,20 @@ fm_pid_identity() {
     esac
     cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
     [ -n "$cmdline_hex" ] || return 1
-    identity_key=proc-starttime
-    [ "$_FM_UNAME" != Linux ] || identity_key=linux-starttime
+    if [ "$_FM_UNAME" = Linux ]; then
+      identity_key=linux-starttime
+    else
+      # Only Linux writes btime once at boot. MSYS derives it as `now - uptime`
+      # at every read and anchors field 22 to that origin, so a clock step of D
+      # raises btime by D and lowers field 22 by exactly D, and the raw field
+      # evicts a live watcher on any NTP resync (docs/windows/measurement.md
+      # row 25). Their sum is when the process was created, which no step moves.
+      # It costs one-second granularity, which cmdline-hex already covers.
+      _fm_proc_btime "$proc_root" || return 1
+      [ -n "$_FM_CLK_TCK" ] || return 1
+      identity_key=proc-createtime
+      starttime=$(( _FM_PROC_BTIME + starttime / _FM_CLK_TCK ))
+    fi
     printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
     return 0
   fi
