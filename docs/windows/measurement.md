@@ -2316,7 +2316,7 @@ Three more got partway and are parked on their branches with the progress writte
 #3, #6, #8, #9 and #10 were never started.
 
 The workers surfaced eight more defects on the way.
-#14 is filed; the rest are queued: `fm_pid_identity`'s 1.4 s cost per call on Windows, `fm-wake-queue` case 2 red at HEAD, the extension host's Linux-only identity dialect, `fm-cursor-primary` needing a C compiler to run at all here, four Pi cases in the nudge suite failing on a node warning, the 120 s digest bound that keeps the run tier red on Windows, and the `fm-on` remote-jobs stall after `git` resolves.
+#14 is filed, as are `fm-cursor-primary` needing a C compiler to run at all here (#21) and the four Pi cases in the nudge suite failing on a node warning (#22); the rest are queued: `fm_pid_identity`'s 1.4 s cost per call on Windows, `fm-wake-queue` case 2 red at HEAD, the extension host's Linux-only identity dialect, the 120 s digest bound that keeps the run tier red on Windows, and the `fm-on` remote-jobs stall after `git` resolves.
 
 One lesson, measured three times: a headless worker's session ends with its final message, so a worker that ends a turn "waiting for a background suite" loses both the suite and its commit.
 The brief for the remaining issues now says to run suites in the foreground.

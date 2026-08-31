@@ -80,6 +80,7 @@ When supervising live crewmates, keep firstmate's own long validation or build c
 Crewmate validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in firstmate docs.
 Firstmate's wrapper still matters: crewmates route every `ask-user` finding to firstmate, which applies `ask-user-authority`, and crewmates never pass `--yes` or `-y` because either flag bypasses that check and any required captain escalation.
 `.no-mistakes.yaml` publishes test evidence to the orphan `no-mistakes/evidence` branch, which shares no history with code branches, and pins the gate's lint command to `bin/fm-lint.sh`, matching the Linux CI lint job.
+The same file sets `test.instructions`, the gate Test agent's working contract for this fork's Git Bash host, where a whole suite can take twenty minutes; it owns the exact rules there and why a Windows box needs them.
 Local no-mistakes Test is intent-targeted and must not re-run every `tests/*.test.sh`; `.github/workflows/ci.yml` owns the broad behavior suite plus platform-specific compatibility lanes.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
 
