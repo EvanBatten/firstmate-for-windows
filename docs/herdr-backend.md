@@ -328,7 +328,7 @@ Two more MSYS-only branches: `fm_backend_herdr_cli` sets `MSYS2_ARG_CONV_EXCL='*
 Those two are selected by capability (is this `herdr` a PE image, is there a `cygpath`), never by `uname`, so the fake `herdr` in the test suites keeps taking the POSIX path on every host.
 
 A third reads in the other direction. A native `jq.exe` opens stdout in text mode and ends every record CR LF, and command substitution eats only the last terminator, so a read that iterates an array keeps a CR on every record but its last - a workspace id that no longer matches, or a tab id sent back to `herdr tab close`.
-All thirteen reads that can emit more than one record go through `fm_backend_herdr_jq_rows`, which is a one-line delegate to `fm_jq_rows` in `bin/fm-jq-lib.sh` - the fleet-wide owner of that undo, shared with the other callers that read rows back into a shell loop.
+All thirteen reads that can emit more than one record go through `fm_backend_herdr_jq_rows`, which is a one-line delegate to `fm_jq_rows` in `bin/fm-jq-lib.sh` - the fleet-wide owner of that undo, shared with its other callers.
 It undoes exactly that terminator on a Windows userland and runs the identical pipeline everywhere else; a read whose filter iterates an array but collects to at most one record is already exact, and stays off it.
 This one is keyed on `$OSTYPE` rather than on the binary, because removing a CR that immediately precedes an LF `jq` itself wrote cannot change what a POSIX `jq`'s output means. It captures through a `&& printf X` sentinel so the last record's terminator is never guessed at: a CR that is the final byte of a VALUE survives, which a trailing-CR strip would have eaten.
 

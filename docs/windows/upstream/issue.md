@@ -97,11 +97,12 @@ Four things came out of that which the subsystem-by-subsystem measurement had no
 3. **The guarded merge cannot run**, because it insists on a PR poll that the mode-600 question above stops from being registered.
 4. **`/bearings` said `Unknown command`** because the one tracked symlink in the repository had been checked out as a text file, which is the `core.symlinks` finding in PR-1's body.
 
-There is a fifth, still open and now measured rather than guessed at: `fm_pid_identity` uses `/proc/<pid>/stat` field 22 with a comment saying that field is immune to wall-clock steps.
+There is a fifth, measured rather than guessed at and since fixed on the fork: `fm_pid_identity` uses `/proc/<pid>/stat` field 22 with a comment saying that field is immune to wall-clock steps.
 It is on Linux; here `/proc/stat`'s `btime` is `now - uptime` recomputed at every read and field 22 is anchored to it, so a clock correction moves the identity of every pid at once and a live lock-holding watcher reads as dead.
 `CLK_TCK` on this userland is 1000, not 100, so the sensitivity is a millisecond and an ordinary NTP resync is enough - a closed lid is not required.
-The remedy is to record `btime + field22/CLK_TCK`, the absolute creation time, which is invariant because a step of D raises one term by D and lowers the other by exactly D.
-It is left as a finding rather than a patch, because that invariance has not yet been observed across a real step.
+The remedy is to record the absolute creation time, but not as the obvious `btime + field22/CLK_TCK`: `btime` is truncated to whole seconds while field 22 carries milliseconds, so their sum still moves by a second on a FRACTIONAL step, which is the ordinary shape of an NTP correction.
+What the fork records instead, on a non-Linux `/proc` and under its own `proc-createtime` key, is that same origin at full precision - `now - uptime + field22/CLK_TCK`, floored once, `now` from bash's `EPOCHREALTIME` and `uptime` monotonic - while Linux keeps the raw field unchanged.
+A fake `/proc` stepped by 3 s and by a fractional 1.25 s yields one identity; row 25 of the ledger carries the measurement and the residual that `/proc/uptime`'s centisecond granularity leaves behind.
 
 ## What these PRs do not fix
 

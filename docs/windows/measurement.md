@@ -2247,8 +2247,8 @@ Every leg matched or improved on Phase C:
 - [PR #3](https://github.com/EvanBatten/fm-windows-e2e/pull/3), NFD decomposition with the combining marks stripped, one new test, CI green on `ubuntu-latest`, merged 2026-08-30T19:48:27Z on the captain's word - through the forge tool after the guarded path refused (row 24, unchanged).
 - `bin/fm-teardown.sh` stopped the worker, returned the worktree, closed the tab and cleared every `state/slugify-accents-c3.*` file; the backlog row is Done with the PR link.
 
-One observation the first mate raised itself, recorded and not acted on: the hook's read-only digest means every session start on this machine runs the digest twice, and the hook's copy is wasted.
-A port follow-up could skip or de-`exec` the tracked SessionStart hook on MSYS; that is row 22's remaining half and it costs one banner and one redundant digest per session today.
+One observation the first mate raised itself, recorded rather than acted on at the time: the hook's read-only digest means every session start on this machine runs the digest twice, and the hook's copy is wasted.
+That was row 22's remaining half, and the issue sweep's #2 took it: on an MSYS userland whose ancestry names no harness the hook's open now goes to the nudge tier, so the banner and the redundant digest are gone and the agent is asked for the one run that can take the helm.
 
 ### The CI lane's first run
 
