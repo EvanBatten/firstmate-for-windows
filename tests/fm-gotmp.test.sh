@@ -72,6 +72,10 @@ make_fake_root() {
   # wedge detector's bounded worktree write probe.
   ln -s "$ROOT/bin/fm-timeout-lib.sh" "$fake/bin/fm-timeout-lib.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  # fm-path-lib.sh: teardown sources it directly for "is this path already
+  # rooted". fm-proc-lib.sh is the leaf fm-wake-lib.sh sources for liveness.
+  ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
+  ln -s "$ROOT/bin/fm-proc-lib.sh" "$fake/bin/fm-proc-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
@@ -165,6 +169,10 @@ test_teardown_skips_gracefully_without_tasktmp() {
   # wedge detector's bounded worktree write probe.
   ln -s "$ROOT/bin/fm-timeout-lib.sh" "$fake/bin/fm-timeout-lib.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  # fm-path-lib.sh: teardown sources it directly for "is this path already
+  # rooted". fm-proc-lib.sh is the leaf fm-wake-lib.sh sources for liveness.
+  ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
+  ln -s "$ROOT/bin/fm-proc-lib.sh" "$fake/bin/fm-proc-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
