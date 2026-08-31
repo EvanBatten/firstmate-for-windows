@@ -32,12 +32,24 @@ jobs:
           set -eu
           bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      # Single owner of the lint definition (shell file set, config, version,
-      # and GitHub workflow lint). Do not re-spell the checks here; keep CI
-      # and the pre-push gate on this script so a self-broken ci.yml still
-      # fails locally before merge. --jobs is the runner's memory bound, not a
-      # change to what gets linted: see the note on the job above.
-      - run: bin/fm-lint.sh --jobs 1
+      # TEMPORARY diagnostic, to be removed before this lands: the job dies with
+      # exit 143 and no finding printed, and 143 is fm-lint.sh's own SIGTERM
+      # trap, so this records what the machine looks like on the way down.
+      - name: Lint with a memory trace
+        run: |
+          set -u
+          echo "--- runner ---"; nproc; free -m; df -h / | tail -1
+          ( while sleep 10; do
+              printf '%s avail_mb=%s sc_rss_mb=%s sc_n=%s\n' "$(date +%T)" \
+                "$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)" \
+                "$(ps -eo rss,comm --no-headers | awk '/shellcheck/{s+=$1} END{print int(s/1024)}')" \
+                "$(pgrep -xc shellcheck || echo 0)"
+            done ) &
+          sampler=$!
+          bin/fm-lint.sh --jobs 1; rc=$?
+          kill "$sampler" 2>/dev/null || true
+          echo "lint rc=$rc"
+          exit "$rc"
 
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,
