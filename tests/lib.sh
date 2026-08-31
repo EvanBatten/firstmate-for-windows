@@ -35,10 +35,19 @@ FM_TEST_LIB_SOURCED=1
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
-# Resolve the repo root from this library's own location. Consumed by sourcing
-# test files, not by this library, so it reads as "unused" here.
-# shellcheck disable=SC2034
+# Resolve the repo root from this library's own location. Exported (not just
+# set) so a fixture that writes a STANDALONE script into a fakebin - one that
+# runs as its own process, with none of this file's functions in scope - can
+# still find bin/fm-proc-lib.sh by absolute path: `. "$ROOT/bin/fm-proc-lib.sh"`.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ROOT
+
+# The one owner of "what process is this" (ppid, pgid, comm, args, liveness)
+# across macOS, Linux and MSYS, where `ps -o` does not exist at all
+# (docs/windows/measurement.md row 2). Sourced here so fm_test_ppid, fm_test_pgid
+# and fm_test_stat below can wrap it.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$ROOT/bin/fm-proc-lib.sh"
 
 # --- reporters --------------------------------------------------------------
 
@@ -275,6 +284,42 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/$tool"
+}
+
+# --- process identity (ps -o replacement) ------------------------------------
+#
+# MSYS `ps` rejects `-o` outright, so a fixture that used to spell
+# `ps -o ppid=/pgid=/stat= -p <pid>` calls these instead. On macOS and Linux
+# each one runs that literal `ps -o` command, so those platforms see no
+# behavior change at all - only bin/fm-proc-lib.sh's MSYS branch is new.
+#
+# A fixture that writes a STANDALONE script into a fakebin cannot call these:
+# that script runs as its own process, with none of this file's functions in
+# scope. It sources bin/fm-proc-lib.sh by absolute path instead
+# (`. "$ROOT/bin/fm-proc-lib.sh"`, $ROOT being exported above) and calls
+# fm_proc_ppid/fm_proc_pgid directly.
+
+# fm_test_ppid <pid>: the parent pid, the same answer `ps -o ppid=` gives.
+fm_test_ppid() {
+  fm_proc_ppid "$1"
+}
+
+# fm_test_pgid <pid>: the process group id, the same answer `ps -o pgid=` gives.
+fm_test_pgid() {
+  fm_proc_pgid "$1"
+}
+
+# fm_test_stat <pid>: the same answer `ps -o stat=` gives. Every caller of this
+# one only distinguishes "gone" (empty, or a zombie: `''|Z*`) from "still
+# running", so the MSYS branch answers exactly that: MSYS has no zombie state
+# for `fm_pid_alive` to report, so a gone pid prints nothing and a live one
+# prints 'R'.
+fm_test_stat() {
+  if [ "$FM_PROC_OS" = msys ]; then
+    fm_pid_alive "$1" && printf 'R\n'
+    return 0
+  fi
+  ps -o stat= -p "$1" 2>/dev/null
 }
 
 # --- deterministic git identity and fixtures --------------------------------
