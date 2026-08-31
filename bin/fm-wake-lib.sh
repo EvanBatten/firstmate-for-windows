@@ -114,7 +114,8 @@ _fm_proc_uptime_ms() {
 # the silent failure - dividing ten digits by a million yields a small number that
 # is perfectly stable, so every identity still compares equal and nothing looks
 # wrong, while the origin has stopped tracking the clock and the step invariance
-# below is gone. Returning 1 reaches the portable ps fallback instead.
+# below is gone. Returning 1 keeps the raw field 22 under the proc-starttime key
+# instead, which is honest about being step-sensitive.
 #
 # FM_PROC_NOW_OVERRIDE is the fixture seam beside FM_PROC_ROOT_OVERRIDE -
 # milliseconds, so a test can step the clock deterministically - and is read at
@@ -147,7 +148,7 @@ _fm_proc_now_ms() {
 
 # _fm_proc_createtime <proc_root> <starttime-ticks>: sets _FM_PROC_CREATETIME to
 # the whole second in which the process was created, or returns 1 so the caller
-# can fall through to its portable fallback.
+# can fall back to the raw field 22 it replaces.
 #
 # MSYS has no boot timestamp of its own. It derives the origin as `now - uptime`
 # at every read and anchors /proc/<pid>/stat field 22 to that derived origin, so
@@ -219,24 +220,28 @@ fm_pid_identity() {
     if [ "$_FM_UNAME" != Linux ]; then
       # Only Linux counts field 22 from an origin fixed at boot, so only Linux
       # can use the raw field: see _fm_proc_createtime for what the other
-      # dialect records instead and why. An empty key here means the clock,
-      # uptime or CLK_TCK could not be read, which is not a reason to report no
-      # identity at all - every caller compares identities for EQUALITY, so a
-      # host in that state would fail every comparison forever and treat a live
-      # watcher as dead on every turn. It falls through to the ps fallback.
+      # dialect records instead and why. When the clock, uptime or CLK_TCK
+      # cannot be read, the raw field is still the answer, under the
+      # proc-starttime key this dialect carried before the creation time
+      # existed. The ps fallback below cannot be the safety net for that state:
+      # MSYS is the only platform this branch exists for and its Cygwin ps
+      # rejects the -o fields, so reaching it would report no identity at all -
+      # and every caller compares identities for EQUALITY, so such a host would
+      # fail every comparison for the rest of its life and treat a live watcher
+      # as dead on every turn. The cost is that proc-starttime moves with a
+      # wall-clock step, which is exactly what proc-createtime buys, so it is a
+      # degraded answer taken only when the creation origin is unreadable.
       if _fm_proc_createtime "$proc_root" "$starttime"; then
         identity_key=proc-createtime
         starttime=$_FM_PROC_CREATETIME
       else
-        identity_key=
+        identity_key=proc-starttime
       fi
     fi
-    if [ -n "$identity_key" ]; then
-      cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
-      [ -n "$cmdline_hex" ] || return 1
-      printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
-      return 0
-    fi
+    cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
+    [ -n "$cmdline_hex" ] || return 1
+    printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
+    return 0
   fi
   # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
   # written under one locale but re-read under the machine's ambient locale, which

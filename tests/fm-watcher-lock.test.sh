@@ -1192,13 +1192,17 @@ test_msys_proc_pid_identity_survives_a_clock_step() {
 }
 
 # A non-Linux /proc that cannot supply the origin - no readable uptime, no
-# CLK_TCK on a curated PATH, no usable clock - must reach the portable ps
-# fallback rather than report no identity at all. Every caller compares
-# identities for equality, so a bare failure there is not a slow path: it is
-# fm_watcher_lock_matches_pid answering "no" for the rest of the host's life,
-# fm_watcher_healthy permanently false, and a live watcher re-armed every turn.
-test_msys_proc_pid_identity_falls_back_when_the_origin_is_unreadable() {
-  local dir state proc_root fakebin pid identity
+# CLK_TCK on a curated PATH, no usable clock - must still answer, with the raw
+# field 22 under the proc-starttime key this dialect carried before the creation
+# time existed. The portable ps fallback cannot be that answer on the only
+# platform this branch exists for: Cygwin ps rejects `-o lstart= -o command=`,
+# so the stub below fails exactly the way the real one does on this host. Every
+# caller compares identities for equality, so no identity at all is not a slow
+# path: it is fm_watcher_lock_matches_pid answering "no" for the rest of the
+# host's life, fm_watcher_healthy permanently false, and a live watcher re-armed
+# every turn.
+test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable() {
+  local dir state proc_root fakebin pid identity again
   dir=$(make_case msys-proc-identity-fallback)
   state="$dir/state"
   proc_root="$dir/proc"
@@ -1207,7 +1211,8 @@ test_msys_proc_pid_identity_falls_back_when_the_origin_is_unreadable() {
   fake_uname "$fakebin" MINGW64_NT-10.0-26200
   cat > "$fakebin/ps" <<'SH'
 #!/usr/bin/env bash
-printf '  Mon Jul 28 20:00:00 2026 bash /path with spaces/fm-watch.sh --flag\n'
+printf 'ps: unknown option -- o\n' >&2
+exit 1
 SH
   chmod +x "$fakebin/ps"
   write_fake_proc_stat "$proc_root" 1784094040
@@ -1215,9 +1220,13 @@ SH
 
   identity=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
     || fail "a non-Linux /proc with no uptime reported no identity at all"
-  [ "$identity" = "Mon Jul 28 20:00:00 2026 bash /path with spaces/fm-watch.sh --flag" ] \
-    || fail "a non-Linux /proc with no uptime did not fall back to ps lstart ('$identity')"
-  pass "MSYS process identity falls back to ps when the creation origin is unreadable"
+  [ "$identity" = "proc-starttime=987054 cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "a non-Linux /proc with no uptime did not keep the raw field 22 ('$identity')"
+  again=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "a second read of the same fake process reported no identity"
+  [ "$again" = "$identity" ] \
+    || fail "two reads of one unreadable-origin process disagreed ('$identity' then '$again')"
+  pass "MSYS process identity keeps the raw starttime when the creation origin is unreadable"
 }
 
 # The wall clock is read from bash's EPOCHREALTIME, and `date +%s%N` covers a
@@ -1226,8 +1235,8 @@ SH
 # the value is stable, so every identity still compares equal and nothing
 # reports an error, while the origin has stopped tracking the clock and a step
 # once again evicts a live watcher. The identity must refuse such an answer and
-# take the portable fallback, so this stages exactly that `date` with the whole
-# rest of the machine readable.
+# keep the raw field 22 instead, so this stages exactly that `date` with the
+# whole rest of the machine readable.
 test_msys_proc_pid_identity_rejects_a_nanosecondless_date() {
   local dir state proc_root fakebin pid identity
   dir=$(make_case msys-proc-identity-seconds-only-date)
@@ -1243,7 +1252,8 @@ SH
   chmod +x "$fakebin/date"
   cat > "$fakebin/ps" <<'SH'
 #!/usr/bin/env bash
-printf '  Mon Jul 28 20:00:00 2026 bash /path with spaces/fm-watch.sh --flag\n'
+printf 'ps: unknown option -- o\n' >&2
+exit 1
 SH
   chmod +x "$fakebin/ps"
   MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
@@ -1262,8 +1272,8 @@ SH
   case "$identity" in
     proc-createtime=*) fail "a seconds-only date was accepted as a creation origin ('$identity')" ;;
   esac
-  [ "$identity" = "Mon Jul 28 20:00:00 2026 bash /path with spaces/fm-watch.sh --flag" ] \
-    || fail "a seconds-only date did not fall back to ps lstart ('$identity')"
+  [ "$identity" = "proc-starttime=$(ticks_for "$MSYS_FIXTURE_START_MS") cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "a seconds-only date did not keep the raw field 22 ('$identity')"
   pass "MSYS process identity refuses a date that answers without nanoseconds"
 }
 
@@ -1334,7 +1344,7 @@ test_singleton_start
 test_pid_identity_is_locale_invariant
 test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
 test_msys_proc_pid_identity_survives_a_clock_step
-test_msys_proc_pid_identity_falls_back_when_the_origin_is_unreadable
+test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable
 test_msys_proc_pid_identity_rejects_a_nanosecondless_date
 test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed

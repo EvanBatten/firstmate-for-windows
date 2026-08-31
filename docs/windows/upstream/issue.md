@@ -140,7 +140,7 @@ Each is a candidate for its own small PR if it is wanted.
   The ancestry rather than the userland is the gate, and resume, reload and fork delegate to the nudge without paying the roughly one-second hybrid walk whose answer they would ignore.
   Ledger row 22.
 - **The step-exact process identity**, which is the fifth finding above.
-  Listed here as well because it is on the fork and in none of the seven branches: `now - uptime + field22/CLK_TCK`, floored once, under its own `proc-createtime` key, on a non-Linux `/proc` only, with a documented per-process residual and a fall-through when the clock, uptime or `CLK_TCK` is unreadable.
+  Listed here as well because it is on the fork and in none of the seven branches: `now - uptime + field22/CLK_TCK`, floored once, under its own `proc-createtime` key, on a non-Linux `/proc` only, with a documented per-process residual and a fall back to the raw field 22 under the old `proc-starttime` key when the clock, uptime or `CLK_TCK` is unreadable, since Cygwin `ps` cannot answer the portable fallback at all.
   Ledger row 25.
 - **CI triggers on the fork's default branch.**
   `.github/workflows/ci.yml` and `no-mistakes-required.yml` name `main` only, so on a fork whose default branch is `windows` neither has ever run: no lint, no test shard and no required check on anything pushed here.
