@@ -188,17 +188,27 @@ make_run_primary() {
   : > "$dir/AGENTS.md"
 }
 
-run_hook() {  # <root> [args...]
-  local root=$1
-  shift
+# The userland is an explicit fixture input, not the host's. The run wrapper
+# diverts to the nudge tier on an MSYS one (docs/windows/measurement.md C4b),
+# so a case that does not name its userland would test a different tier on
+# Windows than on Linux.
+run_hook_as() {  # <ostype> <root> [args...]
+  local ostype=$1 root=$2
+  shift 2
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE="$ostype" \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
+}
+
+run_hook() {  # <root> [args...]
+  run_hook_as linux-gnu "$@"
 }
 
 run_hook_pi() {  # <root> [args...]
   local root=$1
   shift
   env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+    OSTYPE=linux-gnu \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
 }
 
@@ -220,6 +230,39 @@ test_run_startup_runs_the_full_digest() {
   assert_not_contains "$out" "FIRSTMATE_OP" "a run-tier open also emitted the nudge instruction"
   assert_contains "$out" "NEXT STEP" "the run wrapper did not deliver a complete digest"
   pass "run wrapper: startup runs the full digest and never also nudges"
+}
+
+# MSYS cannot implement POSIX exec, so a hook reached through the tracked
+# registration's `exec` has a dead Win32 parent and an MSYS ppid of 1: the walk
+# bin/fm-lock.sh needs can never name a harness there, and the digest this
+# wrapper would run is guaranteed to end in the read-only banner
+# (docs/windows/measurement.md C4b, findings row 22). The userland is forced
+# rather than read off the host so the regression is identical everywhere.
+test_run_on_an_msys_userland_nudges_instead_of_the_digest() {
+  local root="$TMP_ROOT/run-msys" out status=0
+  make_run_primary "$root"
+  out=$(run_hook_as msys "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper startup on an MSYS userland"
+  [ "$out" = "$NUDGE_LINE" ] \
+    || fail "an MSYS session open printed something other than the nudge: $out"
+  assert_not_contains "$out" "$FULL_BANNER" "an MSYS session open still ran the digest"
+  assert_not_contains "$out" "$REEMIT_BANNER" "an MSYS session open still ran the digest"
+  assert_absent "$root/state/.lock" "an MSYS session open still tried to take the fleet lock"
+  assert_absent "$root/state/.session-start-complete" \
+    "an MSYS session open recorded a startup it never ran"
+  pass "run wrapper: an MSYS hook nudges instead of a digest that cannot take the lock"
+}
+
+test_run_on_a_posix_userland_still_runs_the_digest() {
+  local root="$TMP_ROOT/run-posix-userland" out status=0
+  make_run_primary "$root"
+  out=$(run_hook_as linux-gnu "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper startup on a POSIX userland"
+  assert_contains "$out" "$FULL_BANNER$root" "a POSIX session open stopped running the digest"
+  assert_contains "$out" "lock acquired: harness pid" \
+    "a POSIX session open stopped taking the fleet lock"
+  assert_not_contains "$out" "FIRSTMATE_OP" "a POSIX session open was diverted to the nudge"
+  pass "run wrapper: the MSYS diversion is gated on the userland alone"
 }
 
 test_run_clear_and_compact_reemit() {
@@ -1024,6 +1067,8 @@ test_missing_state_is_silent
 test_owned_lock_is_silent
 test_opencode_plugin_delivers_exact_nudge_once
 test_run_startup_runs_the_full_digest
+test_run_on_an_msys_userland_nudges_instead_of_the_digest
+test_run_on_a_posix_userland_still_runs_the_digest
 test_run_clear_and_compact_reemit
 test_run_rebuild_forwards_source_to_drifted_instruction_refresh
 test_run_compact_without_completion_refreshes_before_finishing_startup

@@ -230,7 +230,10 @@ SH
   out=$(printf '%s' "$CURSOR_PAYLOAD" | FM_HOME="$dir" bash "$dir/bin/fm-sessionstart-run.sh" 2>&1)
   [ -z "$out" ] || fail "the run wrapper emitted a digest for the Cursor duplicate: $out"
   [ ! -e "$dir/state/digest-ran" ] || fail "the run wrapper took the helm twice under Cursor"
-  out=$(printf '{"source":"startup","session_id":"s"}' | FM_HOME="$dir" bash "$dir/bin/fm-sessionstart-run.sh" 2>&1)
+  # The userland is named because the run tier only exists on one: on MSYS the
+  # wrapper hands every source to the nudge, since no hook process there can
+  # prove which session it is (docs/sessionstart-nudge.md, source routing).
+  out=$(printf '{"source":"startup","session_id":"s"}' | OSTYPE=linux-gnu FM_HOME="$dir" bash "$dir/bin/fm-sessionstart-run.sh" 2>&1)
   case "$out" in *'DIGEST BODY'*) ;; *) fail "a Claude-shaped payload must still run the digest, got: $out" ;; esac
   pass "fm-sessionstart-run: inert on a Cursor payload, unchanged otherwise"
 }

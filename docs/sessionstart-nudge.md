@@ -28,13 +28,20 @@ It takes `--source <name>` when the adapter knows the source natively, and other
 | `resume`, `reload`, `fork` | Delegate to the nudge wrapper | Prior context is restored, so re-running is redundant when the lock is still ours and an instruction is enough when a new process resumed an old session. |
 | unreadable or unrecognized | Full digest | Taking the helm redundantly is cheap and idempotent; not taking it is the bug this tier exists to fix. |
 
+One userland answers ahead of the source table.
+The run tier's premise is that the hook process can prove which harness session it belongs to, and on MSYS (Git Bash, MSYS2, Cygwin) it cannot.
+MSYS has no POSIX `exec`: it starts a new Win32 process, hands it the old Cygwin pid, and exits the original, so a script reached through a tracked registration's `exec` - which is also what bash does to a `-c` script's final command - has a dead Win32 parent and an MSYS ppid of 1.
+`fm_harness_ancestry_pid()` finds no harness from there, `bin/fm-lock.sh` refuses, and every digest a hook runs on that userland ends in the read-only banner while the agent goes on to run `bin/fm-session-start.sh` from its own shell, where the walk resolves.
+So `bin/fm-sessionstart-run.sh` hands the whole open to the nudge tier there, whatever the source, and spends one instruction line instead of a bounded digest that cannot take the helm.
+The measurement is section C4b and findings row 22 of [`windows/measurement.md`](windows/measurement.md).
+
 This deliberately inverts the previous nudge matcher, which fired on `startup|resume|clear` and excluded `compact`.
 Compaction is covered where a tracked adapter delivers that source because a compacted session has lost exactly the digest it needs, and resume is excluded from the run because it restores that digest instead of losing it.
 
 Current harness ownership of the lock and its matching `state/.session-start-complete` record together are the idempotency interlock for the whole scheme.
 The full digest clears that completion record after acquiring the lock and republishes the lock owner's pid only after every stage completes, so `clear` or `compact` cannot skip startup sweeps after a truncated run.
 `bin/fm-lock.sh` already treats a lock this session's own harness holds as its own, so a proven `clear` or `compact` re-emit re-verifies ownership and proceeds, while a lock another live session took meanwhile still produces the ordinary read-only digest.
-On a run-tier harness the nudge cannot also fire: `resume`, `reload`, and `fork` are the only sources routed to it, and on those its own ancestry check stays silent whenever this process already holds the lock.
+On a run-tier harness with POSIX `exec` the nudge cannot also fire: `resume`, `reload`, and `fork` are the only sources routed to it, and on those its own ancestry check stays silent whenever this process already holds the lock.
 
 `bin/fm-session-start.sh --reemit` owns which work a re-emit skips, its true-start AGENTS.md baseline, and its supported stale-instruction refresh pairs; its header is the single owner of those mechanics.
 
