@@ -13,6 +13,13 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    # One ShellCheck worker holds about 7.6 GB on this file set with extended
+    # analysis on; two hold about 11.6 GB at once (measured by sampling the
+    # summed worker RSS on Ubuntu 24.04). A 16 GB runner cannot carry the pair,
+    # and the job died twice at 11 to 13 minutes with exit 143 and no finding
+    # printed. The cap below is a hang tripwire, not the expected end: one
+    # worker finishes the same file set in about 5 minutes on a 16-core box.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - name: Install pinned ShellCheck
@@ -28,8 +35,9 @@ jobs:
       # Single owner of the lint definition (shell file set, config, version,
       # and GitHub workflow lint). Do not re-spell the checks here; keep CI
       # and the pre-push gate on this script so a self-broken ci.yml still
-      # fails locally before merge.
-      - run: bin/fm-lint.sh
+      # fails locally before merge. --jobs is the runner's memory bound, not a
+      # change to what gets linted: see the note on the job above.
+      - run: bin/fm-lint.sh --jobs 1
 
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,
