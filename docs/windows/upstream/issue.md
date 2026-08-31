@@ -129,12 +129,29 @@ Each is a candidate for its own small PR if it is wanted.
   And four test fixtures built from `\uHHHH` escapes assert on literal escape text wherever `LANG` is not a UTF-8 locale, which includes a bare Linux container as much as Git Bash.
 - **A `windows-latest` CI lane** running `bin/fm-lint.sh` and both portable parallel shards under Git Bash, as the count to beat.
   Worth knowing before adopting it: the full `CI=true bin/fm-lint.sh` needs a 60-minute cap there, and the slow part is ShellCheck's cross-file `--external-sources` analysis rather than spawn tax.
+- **The cmux adapter's `.text` capture.**
+  `fm_backend_cmux_capture` read a surface's `.text` - one multi-line value - straight out of `jq -r`, so under a native jq every captured line but the last kept the CR that text-mode stdout inserts.
+  `bin/fm-jq-lib.sh` already owned that undo for the herdr adapter's thirteen multi-row reads; this widens the leaf's contract from many rows to any answer carrying a newline that is not its last byte, which is the same defect inside a single string, and moves the cmux read onto it.
+  Ledger row 32; two further inline `jq -r` reads in that adapter are recorded follow-ups rather than part of the fix.
+- **The SessionStart run wrapper's tier choice on a severed ancestry.**
+  This is the open-side half of the ancestry finding above, whose Stop-side half is PR-7's session-id fallback.
+  A digest launched from a SessionStart hook on an MSYS userland whose ancestry names no harness can never take the session lock, so it spent a full digest to arrive at the read-only banner and the agent had to run `bin/fm-session-start.sh` by hand anyway.
+  `bin/fm-sessionstart-run.sh` now hands a startup, clear, compact or unrecognized open to the nudge tier in exactly that state and nowhere else: a transport that keeps a live parent chain still gets the run tier and its `--reemit`, because the Codex entry pipes its payload in and bash forks a pipeline element rather than exec-optimizing it.
+  The ancestry rather than the userland is the gate, and resume, reload and fork delegate to the nudge without paying the roughly one-second hybrid walk whose answer they would ignore.
+  Ledger row 22.
+- **The step-exact process identity**, which is the fifth finding above.
+  Listed here as well because it is on the fork and in none of the seven branches: `now - uptime + field22/CLK_TCK`, floored once, under its own `proc-createtime` key, on a non-Linux `/proc` only, with a documented per-process residual and a fall-through when the clock, uptime or `CLK_TCK` is unreadable.
+  Ledger row 25.
+- **CI triggers on the fork's default branch.**
+  `.github/workflows/ci.yml` and `no-mistakes-required.yml` name `main` only, so on a fork whose default branch is `windows` neither has ever run: no lint, no test shard and no required check on anything pushed here.
+  Both now name `windows` as well, asserted by parsing the workflow YAML rather than by matching its text, and skipping honestly where a YAML parser is absent.
+  Fork-only by construction and nothing to send, since your default branch is already `main` - recorded only because it is why nothing on this fork carries a CI result yet, and every count quoted above was run by hand.
 
 ## What I am asking for
 
 A read of PR-1 first, since nothing downstream is reviewable without it.
 Then PR-2, PR-3, PR-5 and PR-6 in any order; PR-4 is stacked on PR-3 and PR-7 on PR-2, so those two want their base merged first.
 An opinion on the mode-700 question above.
-And a yes or no on whether the guard fixes and the four platform-neutral fixes are wanted as further PRs, or whether you would rather they stayed on the fork. PR-5, PR-6 and PR-7 are the ones most likely to be out of scope for you; they are separated so they can be dropped without touching the first four.
+And a yes or no on whether anything in the held-back list above is wanted as further PRs, or whether you would rather it stayed on the fork. PR-5, PR-6 and PR-7 are the ones most likely to be out of scope for you; they are separated so they can be dropped without touching the first four.
 
 Happy to rebase, split further, or drop any of it.
