@@ -42,8 +42,9 @@ fm_hook_payload_is_foreign_host() {  # <payload>
 # WHY THIS IS NOT A BARE `jq -r`: a native Windows jq.exe opens stdout in text
 # mode, so every LF inside a multi-line value is written as CRLF (measured on
 # both jq-1.6 mingw-w64 and jq-1.8.2, so it is the platform and not one bad
-# build). MSYS bash strips a trailing CRLF in a command substitution, so a
-# single-line value still arrives exact; a MULTI-LINE one arrives with a stray CR
+# build). A command substitution strips trailing LINE FEEDS, not a trailing
+# CRLF, so even a single-line value arrives with the CR that text mode paired
+# with jq's final LF still on the end; a MULTI-LINE one also carries a stray CR
 # before every interior newline. That is enough to change what the shell
 # classifier is shown: `bin/fm-watc\<newline>h-arm.sh &` stops being a line
 # continuation, so the watcher-arm seatbelt ALLOWS a command the shell would have
@@ -58,6 +59,10 @@ fm_hook_payload_string() {  # <payload> <jq-filter>
   case "${OSTYPE:-}" in
     msys*|mingw*|cygwin*)
       raw=$(printf '%s' "$payload" | jq -r "$filter" 2>/dev/null) || return
+      # The substitution above already ate jq's final LF. In text mode that LF
+      # arrived as CR LF, so its CR is still on the end with nothing after it,
+      # where the interior pass below can no longer see it as half of a pair.
+      raw=${raw%$'\r'}
       printf '%s\n' "${raw//$'\r'$'\n'/$'\n'}"
       return 0
       ;;
