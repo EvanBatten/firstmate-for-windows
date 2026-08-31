@@ -1,0 +1,4 @@
+ok - fm_backend_cmux_capture: fetches generously and trims to N lines locally
+ok - fm_backend_cmux_capture: strips a text-mode jq's CR from every captured line under OSTYPE=msys
+ok - fm_backend_cmux_capture: propagates a read-screen failure even when stdout is empty
+ok - fm_backend_cmux_capture: fails when the target surface is absent

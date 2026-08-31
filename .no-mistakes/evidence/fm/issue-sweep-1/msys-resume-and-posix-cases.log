@@ -1,0 +1,3 @@
+ok - run wrapper: resume delegates to the nudge instead of re-running the digest
+ok - run wrapper: an MSYS resume delegates to the nudge without walking the ancestry
+ok - run wrapper: a POSIX userland always runs the digest

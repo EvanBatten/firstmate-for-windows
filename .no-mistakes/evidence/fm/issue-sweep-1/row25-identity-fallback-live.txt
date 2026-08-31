@@ -1,0 +1,20 @@
+host: MINGW64_NT-10.0-26200 3.5.7-463ebcdc.x86_64   CLK_TCK=1000
+
+$ LC_ALL=C ps -p $$ -o lstart= -o command=      # the portable fallback the row used to name
+ps: unknown option -- o
+Try `ps --help' for more information.
+rc=1  <- Cygwin ps rejects -o, so falling through there yields NO identity
+
+live pid 25016, raw /proc/25016/stat field 22 = 1124383020
+
+$ fm_pid_identity <pid>                          # real /proc, uptime readable
+proc-createtime=1788213607 cmdline-hex=736c6565700031323000
+
+$ FM_PROC_ROOT_OVERRIDE=<fixture with no /proc/uptime> fm_pid_identity <pid>
+proc-starttime=1124383020 cmdline-hex=736c6565700031323000
+rc=0
+VERDICT: unreadable origin kept the raw field 22 (1124383020) under proc-starttime - identity still answered
+
+$ FM_PROC_ROOT_OVERRIDE=<same fixture, /proc/uptime restored> fm_pid_identity <pid>
+proc-createtime=1788213607 cmdline-hex=736c6565700031323000
+VERDICT: a readable origin still takes the step-invariant proc-createtime path

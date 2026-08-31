@@ -1,0 +1,2 @@
+ok - run wrapper: a severed MSYS hook nudges instead of a digest that cannot take the lock
+not ok - an MSYS startup with a resolvable harness did not run the digest at all

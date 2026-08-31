@@ -1,0 +1,9 @@
+ok - real ps fallback locale check skipped where ps -o lstart= is unsupported
+ok - fm_pid_identity is locale-invariant across LC_ALL/LC_TIME
+ok - Linux process identity is field 22 alone and ignores btime
+ok - Linux process identity detects pid reuse
+ok - MSYS process identity survives a whole-second and a fractional wall-clock step
+ok - MSYS process identity detects pid reuse
+ok - MSYS process identity keeps the raw starttime when the creation origin is unreadable
+ok - MSYS process identity refuses a date that answers without nanoseconds
+ok - MSYS process identity uses compatible /proc fields

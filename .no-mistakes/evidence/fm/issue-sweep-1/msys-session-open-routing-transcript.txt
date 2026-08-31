@@ -1,0 +1,66 @@
+host: MINGW64_NT-10.0-26200, OSTYPE=msys, digest budget FM_SESSION_START_TIMEOUT=25s
+
+===== MSYS userland, ancestry names NO harness (exec'd hook registration), source=startup =====
+exit=0
+tier: NUDGE (operational instruction only)
+fleet lock taken: no
+first 6 lines of what the agent sees:
+  | ⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+
+===== MSYS userland, ancestry names NO harness, source=compact =====
+exit=0
+tier: NUDGE (operational instruction only)
+fleet lock taken: no
+first 6 lines of what the agent sees:
+  | ⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+
+===== MSYS userland, ancestry names NO harness, unrecognized source =====
+exit=0
+tier: NUDGE (operational instruction only)
+fleet lock taken: no
+first 6 lines of what the agent sees:
+  | ⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+
+===== MSYS userland, ancestry NAMES a harness (piped Codex-style transport), source=startup =====
+exit=0
+tier: OTHER
+fleet lock taken: no
+first 6 lines of what the agent sees:
+  | 
+  | ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  | ●  STARTUP TRUNCATED - SESSION START HIT ITS 25s RUNTIME BOUND
+  | ●  It stopped during the "unknown" stage, so everything above is COMPLETE
+  | ●  only up to that point.
+  | ●  RECONCILE these stages before acting on anything they would have shown:
+
+===== POSIX userland, same severed ps fixture, source=startup =====
+exit=0
+tier: RUN (full digest banner printed)
+fleet lock taken: no
+first 6 lines of what the agent sees:
+  | 
+  | ================================================================================
+  | SESSION START - /tmp/fm-sessionstart-nudge.vV568a/r5
+  | ================================================================================
+  | 
+  | LOCK
+
+===== MSYS userland, source=resume (delegates without walking the ancestry) =====
+exit=0
+tier: NUDGE (operational instruction only)
+fleet lock taken: no
+first 6 lines of what the agent sees:
+  | ⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+
+===== rerun of the MSYS-with-a-live-harness case at a 100s digest budget =====
+exit=0
+tier: RUN (full digest banner printed)
+nudge instruction present: no
+  | 
+  | ================================================================================
+  | SESSION START - /tmp/fm-sessionstart-nudge.aXrGL0/r4-again
+  | ================================================================================
+  | 
+  | LOCK
+  | --------------------------------------------------------------------------------
+  | lock acquired: harness pid 65520

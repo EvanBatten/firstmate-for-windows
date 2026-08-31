@@ -1,0 +1,29 @@
+host:        MINGW64_NT-10.0-26200
+CLK_TCK:     1000
+live pid:    10037  (sleep 600 )
+
+real /proc/10037/stat field 22 (raw starttime ticks): 1122960505
+real /proc/uptime:                                   1122963.22 841533.75
+
+=== 1. identity of the live process, clock pinned at now ===
+proc-createtime=1788212184 cmdline-hex=736c6565700036303000
+created at:  2026-08-31 17:36:24 EDT
+now:         2026-08-31 17:36:31 EDT
+
+=== 2. the wall clock steps forward 3600s (NTP correction) ===
+field 22 as MSYS then reports it: 1119360505  (was 1122960505, lower by 3600000 ticks)
+proc-createtime=1788212184 cmdline-hex=736c6565700036303000
+
+RESULT: identity UNCHANGED across the clock step - the watcher stays healthy.
+for comparison, the pre-change key was the raw field 22 alone:
+  proc-starttime=1122960505   ->   proc-starttime=1119360505   (mismatch: watcher evicted)
+
+=== 3. same box, creation origin unreadable (no /proc/uptime) ===
+proc-starttime=1122960505 cmdline-hex=736c6565700036303000
+RESULT: still answers, and two reads agree - comparisons keep working.
+(the real Cygwin ps on this host cannot serve as that fallback: ps: unknown option -- o)
+
+=== 4. is the recorded creation second the RIGHT second? ===
+launched at:  1788212241.922746
+identity:     proc-createtime=1788212241 cmdline-hex=736c65657000363000
+recorded second minus launch second: 0

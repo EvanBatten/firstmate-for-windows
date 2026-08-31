@@ -1,0 +1,3 @@
+not ok - workflow branch filters: no verdict line, exit 1
+stdout: ci.yml push.branches missing windows
+stderr: 

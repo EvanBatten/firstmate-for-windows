@@ -1,0 +1,22 @@
+Why the fourth sessionstart-nudge case is red on this box, measured rather than assumed.
+
+test_run_on_an_msys_userland_with_a_live_harness_still_reemits asserts
+state/.session-start-complete exists after a full startup digest. On this Windows
+box the digest does not finish inside its budget, so the proof file is never
+written and the case stops there - before it ever reaches the routing assertion
+it exists to make.
+
+  17:14:30  FM_SESSION_START_TIMEOUT=280 bash <one-case copy>   (command bound 292s)
+  17:19:23  Terminated, rc=124
+
+fm-session-start.sh's own budget is FM_SESSION_START_TIMEOUT, default 120s
+(bin/fm-session-start.sh:272). Raising it to 280s did not let the digest finish
+either, so this is spawn cost, not a 120s cliff and not the branch's logic.
+docs/windows/measurement.md rows 2307/2312/2319 classify exactly this case as
+red here "at the 120 s digest bound rather than on its own logic".
+
+The routing decision the case is about IS proven, in
+msys-session-open-routing-transcript.txt: at a 100s budget the same MSYS open
+with a resolvable harness ancestry reaches the run tier, prints
+"SESSION START - <home>", takes the fleet lock ("lock acquired: harness pid
+65520") and emits no nudge instruction.

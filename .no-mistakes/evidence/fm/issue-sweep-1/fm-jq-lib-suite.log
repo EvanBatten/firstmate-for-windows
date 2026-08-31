@@ -1,0 +1,7 @@
+ok - fm_jq_rows: a POSIX host still gets jq's own bytes, CRs included
+ok - fm_jq_rows: a Windows userland gets LF-terminated rows out of a text-mode jq
+ok - fm_jq_rows: a CR inside a value survives - the undo is exact, not a blanket strip
+ok - fm_jq_rows: a CR that is the last byte of a VALUE survives - the undo is exact, not a guess
+ok - fm_jq_rows: an empty answer emits zero bytes and exits 0 on both branches
+ok - fm_jq_rows: a failing jq's status reaches the caller on both branches, with no rows
+ok - fm_jq_rows: arguments past the JSON reach jq unchanged on both branches
