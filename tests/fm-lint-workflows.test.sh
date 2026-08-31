@@ -588,6 +588,16 @@ SH
   pass "fm-lint.sh default path catches a self-broken ci.yml"
 }
 
+test_windows_branch_in_ci_and_required_workflows() {
+  local rc
+  rc=0
+  grep -q 'windows' "$ROOT/.github/workflows/ci.yml" \
+    || fail "ci.yml must include 'windows' in its branch filters"
+  grep -q 'windows' "$ROOT/.github/workflows/no-mistakes-required.yml" \
+    || fail "no-mistakes-required.yml must include 'windows' in its branch filters"
+  pass "both ci.yml and no-mistakes-required.yml name windows in their branch filters"
+}
+
 test_pins_an_explicit_version
 test_current_workflows_pass
 test_col0_heredoc_fails_with_clear_error
@@ -605,3 +615,4 @@ test_installer_prefers_sha256sum_over_shasum
 test_installer_verifies_a_checksum_under_a_backslash_temp_root
 test_installer_rejects_unsupported_platform
 test_fm_lint_default_path_catches_broken_ci_yml
+test_windows_branch_in_ci_and_required_workflows
