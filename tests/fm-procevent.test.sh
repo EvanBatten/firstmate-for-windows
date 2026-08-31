@@ -178,9 +178,9 @@ pass "one blocking completion yields exactly one bounded normalized event"
 
 RESULT=$(first_result "$H1" src-one || true)
 [ -n "$RESULT" ] || fail "no durable result was captured"
-mode=$(PATH="${FM_TEST_BASE_PATH:-$(fm_test_base_path)}" bash -c \
-  '. "$1/bin/fm-pr-lib.sh"; fm_pr_file_mode "$2"' _ "$ROOT" "$RESULT")
-assert_contains "$mode" 600 "the captured result is private"
+PATH="${FM_TEST_BASE_PATH:-$(fm_test_base_path)}" bash -c \
+  '. "$1/bin/fm-private-lib.sh"; fm_private_mode_ok "$2" 600' _ "$ROOT" "$RESULT" 2>/dev/null \
+  || fail "the captured result is private"
 assert_grep 'payload one' "$RESULT" "the captured result holds the source output verbatim"
 assert_grep 'lavish' "${RESULT%.result}.adapter" "the captured result retains its immutable adapter"
 assert_absent "${RESULT%.result}.handled" "publication alone never marks a result handled"

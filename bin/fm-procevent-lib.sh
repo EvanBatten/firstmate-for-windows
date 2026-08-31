@@ -15,7 +15,9 @@
 #
 # DURABILITY BOUNDARY, stated precisely. This runner proves exactly one thing:
 # once a child process has exited and its output has been read, that output is
-# stored atomically at mode 0600 BEFORE any event referencing it is published,
+# stored atomically as a private file (mode 0600 where the filesystem can
+# carry it - bin/fm-private-lib.sh owns that decision) BEFORE any event
+# referencing it is published,
 # and a captured result with no durable handled acknowledgement remains eligible
 # for bounded re-announcement - including across a restart between publication
 # and handling - until `fm-procevent.sh handled` records it. It proves nothing
@@ -28,6 +30,13 @@
 # acknowledgement can still repeat the effect on replay. Never describe this
 # runner as at-least-once, no-loss, or lossless, and never claim generic
 # exactly-once effects from the handled acknowledgement alone.
+
+# Mode-700/600 privacy is enforced through the one owner of decision D6, which
+# accepts a measured best effort on a mount that cannot carry POSIX modes
+# (ledger row 21) and stays the exact chmod-and-stat contract everywhere else.
+_FM_PROCEVENT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_PROCEVENT_LIB_DIR="."
+# shellcheck source=bin/fm-private-lib.sh
+. "$_FM_PROCEVENT_LIB_DIR/fm-private-lib.sh"
 
 # Machine-wide claim root. Homes can share one underlying source store, so the
 # "one owner per canonical source" rule cannot live inside a single home.
@@ -715,11 +724,11 @@ fm_procevent_capture() {
     rm -f -- "$tmp" "$adapter_tmp" "$extension_tmp"
     return 1
   fi
-  if ! chmod 0600 "$tmp" "$adapter_tmp"; then
+  if ! fm_private_file_chmod 0600 "$tmp" "$adapter_tmp"; then
     rm -f -- "$tmp" "$adapter_tmp" "$extension_tmp"
     return 1
   fi
-  if [ "$#" -eq 9 ] && ! chmod 0600 "$extension_tmp"; then
+  if [ "$#" -eq 9 ] && ! fm_private_file_chmod 0600 "$extension_tmp"; then
     rm -f -- "$tmp" "$adapter_tmp" "$extension_tmp"
     return 1
   fi

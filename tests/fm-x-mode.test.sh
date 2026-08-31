@@ -101,12 +101,12 @@ make_sample_image() {
   esac
 }
 
-path_mode() {
-  if [ "$(uname)" = Darwin ]; then
-    stat -f %Lp "$1"
-  else
-    stat -c %a "$1"
-  fi
+# Privacy assertions go through the owner of decision D6: exact on a
+# mode-capable filesystem, the measured best effort on a mount that drops
+# POSIX modes (ledger row 21).
+assert_private_mode() {  # <path> <mode> <label>
+  bash -c '. "$1/bin/fm-private-lib.sh"; fm_private_mode_ok "$2" "$3"' \
+    _ "$ROOT" "$1" "$2" 2>/dev/null || fail "$3"
 }
 
 assert_no_private_artifact_temps() {
@@ -203,8 +203,8 @@ test_poll_auth_error_reports_once() {
   [ "$out" = "x-mode-error relay returned HTTP 401" ] \
     || fail "poll auth error must emit one visible diagnostic (got: $out)"
   assert_present "$home/state/x-poll.error" "poll auth error must write a dedupe marker"
-  [ "$(path_mode "$home/state")" = 700 ] || fail "poll auth error must create private state"
-  [ "$(path_mode "$home/state/x-poll.error")" = 600 ] || fail "poll auth error marker must be private"
+  assert_private_mode "$home/state" 700 "poll auth error must create private state"
+  assert_private_mode "$home/state/x-poll.error" 600 "poll auth error marker must be private"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
     FAKE_POLL_CODE=401 \
     "$ROOT/bin/fm-x-poll.sh"); rc=$?
@@ -335,8 +335,7 @@ test_poll_mentions_wake_once_per_durable_offer() {
   [ "$out" = "x-mention req-new" ] \
     || fail "a genuinely new request_id must wake once (got: $out)"
   marker="$home/state/x-context/req-new.offered.json"
-  [ "$(path_mode "$marker")" = 600 ] \
-    || fail "the durable offer marker must be a private file"
+  assert_private_mode "$marker" 600 "the durable offer marker must be a private file"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_NOW_OVERRIDE=1700604921 \
     FMX_RELAY_URL="https://relay.test" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
     "$ROOT/bin/fm-x-poll.sh"); rc=$?
@@ -536,8 +535,8 @@ test_poll_inbox_private_publication_rejects_unsafe_paths() {
   expect_code 0 "$rc" "poll private inbox success exit"
   [ "$out" = "x-mention req-x" ] || fail "poll must still emit a wake after private publication (got: $out)"
   dir="$home/state/x-inbox"
-  [ "$(path_mode "$dir")" = 700 ] || fail "poll must create the inbox directory as private"
-  [ "$(path_mode "$dir/req-x.json")" = 600 ] || fail "poll must publish the inbox file as private"
+  assert_private_mode "$dir" 700 "poll must create the inbox directory as private"
+  assert_private_mode "$dir/req-x.json" 600 "poll must publish the inbox file as private"
   assert_no_private_artifact_temps "$dir"
   pass "fm-x-poll publishes inbox records only through private guarded artifacts"
 }

@@ -48,6 +48,13 @@
 #   fmx_meta_link_clear <meta> - remove the X-request link entirely
 # Callers must have FM_HOME set before calling fmx_load_config.
 
+# The private-artifact primitives delegate their mode decisions to the one
+# owner of decision D6, so a mount that cannot carry POSIX modes accepts the
+# measured best effort instead of refusing every artifact (ledger row 21).
+_FM_X_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_X_LIB_DIR="."
+# shellcheck source=bin/fm-private-lib.sh
+. "$_FM_X_LIB_DIR/fm-private-lib.sh"
+
 # Read the value of KEY from a .env-style file: last assignment wins; tolerates a
 # leading "export ", surrounding whitespace, and one layer of matching single or
 # double quotes. Prints nothing (and succeeds) when the file or key is absent, so
@@ -92,27 +99,20 @@ fmx_single_link_file_valid() {
 }
 
 fmx_single_link_file_mode_valid() {
-  local file=$1 expected_mode=$2 expected_device=${3-} mode
+  local file=$1 expected_mode=$2 expected_device=${3-}
   fmx_single_link_file_valid "$file" "$expected_device" || return 1
-  if [ "$(uname)" = Darwin ]; then
-    mode=$(stat -f %Lp "$file" 2>/dev/null) || return 1
-  else
-    mode=$(stat -c %a "$file" 2>/dev/null) || return 1
-  fi
-  [ "$mode" = "$expected_mode" ]
+  fm_private_mode_ok "$file" "$expected_mode"
 }
 
 fmx_private_artifact_dir_device() {
-  local dir=$1 mode device
+  local dir=$1 device
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   if [ "$(uname)" = Darwin ]; then
-    mode=$(stat -f %Lp "$dir" 2>/dev/null) || return 1
     device=$(stat -f %d "$dir" 2>/dev/null) || return 1
   else
-    mode=$(stat -c %a "$dir" 2>/dev/null) || return 1
     device=$(stat -c %d "$dir" 2>/dev/null) || return 1
   fi
-  [ "$mode" = 700 ] || return 1
+  fm_private_mode_ok "$dir" 700 || return 1
   printf '%s\n' "$device"
 }
 
