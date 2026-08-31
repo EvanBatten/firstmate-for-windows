@@ -186,6 +186,43 @@ MISE_EXPECTED=$(printf '%s\n' "$MISE_INSTALLS"/*/*/bin)
 rm -rf -- "$ACCOUNT_HOME/.local/share/mise"
 pass "operator PATH orders discovered tool installs deterministically"
 
+# The composition's system tail is a POSIX filesystem layout, and Git for
+# Windows puts git.exe in /mingw64/bin, so on an MSYS userland that tail
+# describes an account with no git and the entrypoint refuses every command
+# with "required tool git does not resolve on the remote operator PATH".
+# Both directions are pinned on every host: the branch is keyed on OSTYPE and
+# forced in a child shell, the way tests/fm-jq-lib.test.sh forces its own
+# userland branch, and the tools are a fixture in a directory the composition
+# discovers no other way, so the MSYS answer is the POSIX answer plus exactly
+# that directory rather than something host-shaped.
+compose_as() { # <ostype> <path-prefix> <snippet>
+  PATH="${2:+$2:}$PATH" bash -c \
+    "set -u; OSTYPE=$1; . \"\$0/bin/fm-remote-job-lib.sh\"
+     fm_remote_job_compose_operator_path \"\$1\" >/dev/null; $3" \
+    "$ROOT" "$ACCOUNT_HOME"
+}
+USERLAND_BIN="$TMP_ROOT/userland-bin"
+mkdir -p "$USERLAND_BIN"
+for TOOL in git jq; do
+  printf '#!/bin/bash\nexit 0\n' > "$USERLAND_BIN/$TOOL"
+  chmod +x "$USERLAND_BIN/$TOOL"
+done
+# shellcheck disable=SC2016 # Source for the child shell, which is the only one that composes a PATH.
+PRINT_COMPOSED='printf "%s\n" "$FM_REMOTE_JOB_OPERATOR_PATH"'
+POSIX_COMPOSED=$(compose_as linux-gnu "$USERLAND_BIN" "$PRINT_COMPOSED")
+[ "$POSIX_COMPOSED" = "$(compose_as linux-gnu '' "$PRINT_COMPOSED")" ] \
+  || fail "the POSIX composition followed the composing shell's own PATH"
+MSYS_COMPOSED=$(compose_as msys "$USERLAND_BIN" "$PRINT_COMPOSED")
+[ "$MSYS_COMPOSED" = "$POSIX_COMPOSED:$USERLAND_BIN" ] \
+  || fail "the MSYS composition did not append the directory git and jq resolve from"$'\n'"expected: $POSIX_COMPOSED:$USERLAND_BIN"$'\n'"actual:   $MSYS_COMPOSED"
+rm -rf -- "$USERLAND_BIN"
+# The host's own git, through the accessor the entrypoint gates on, because a
+# fixture tool proves the mechanism and only the real one proves the account
+# can act as a remote operator here.
+compose_as "$OSTYPE" '' 'fm_remote_job_operator_tool git' >/dev/null \
+  || fail "the composed operator PATH does not resolve this host's git"
+pass "operator PATH resolves git on an MSYS userland and is unchanged on POSIX"
+
 HOME="$ACCOUNT_HOME" PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_PERL_LOG="$FAKE_PERL_LOG" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=5 \

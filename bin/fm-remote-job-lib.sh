@@ -59,8 +59,10 @@
 # its configured FM_ROOT/bin. Every child receives env -i with the composed
 # PATH, HOME, FM_HOME, FM_ROOT_OVERRIDE, and FM_REMOTE_JOB_ACTIVE=1. The PATH
 # is intentionally filesystem-discovered rather than login-shell-derived:
-# ~/.local/bin; nvm, asdf, and mise shims/install bins; Nix; Homebrew; and the
-# system tail. No shell startup files are evaluated. Each discovered set is
+# ~/.local/bin; nvm, asdf, and mise shims/install bins; Nix; Homebrew; the
+# system tail; and, on an MSYS userland only, the directories where git and jq
+# actually resolve, because Git for Windows keeps them outside that tail. No
+# shell startup files are evaluated. Each discovered set is
 # appended in the shell's own sorted pathname-expansion order, so which install
 # of a multi-version tool wins is fixed by this composition rather than by the
 # order the filesystem happens to return.
@@ -255,6 +257,38 @@ fm_remote_job_nvm_selected_bin() { # <account-home>
   fi
 }
 
+# The system tail below is a POSIX filesystem layout, and on an MSYS userland
+# (Git Bash, MSYS2, Cygwin) it describes an account with no git: bash and the
+# coreutils live in /usr/bin, but Git for Windows installs git.exe in
+# /mingw64/bin and jq wherever its own installer put it. A Windows account then
+# cannot act as a remote operator at all - fm-remote-entrypoint.sh refuses every
+# command with "required tool git does not resolve on the remote operator PATH",
+# and fm_remote_job_code_identity cannot even establish the worker's identity.
+# Appending the directories those two tools actually resolve from restores the
+# tail's POSIX meaning; this is the product-side twin of the fixture PATH that
+# tests/lib.sh's fm_test_base_path repairs.
+#
+# git and jq, and nothing else, for the same reason that helper gives: those are
+# the two tools the tail is assumed to hold, while the discovery above
+# deliberately owns where every version-managed tool comes from, so appending a
+# tool of that second kind here would override the selection it just made.
+#
+# Appended after the tail rather than into it, so nothing that already resolved
+# resolves anywhere new, and the composition on macOS and Linux is byte-identical
+# because the branch is not taken there.
+fm_remote_job_append_userland_tool_dirs() {
+  local tool resolved
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *) return 0 ;;
+  esac
+  for tool in git jq; do
+    resolved=$(command -v "$tool" 2>/dev/null) || continue
+    case "$resolved" in /*) ;; *) continue ;; esac
+    fm_remote_job_path_append_if_dir "${resolved%/*}"
+  done
+}
+
 fm_remote_job_compose_operator_path() { # <account-home>
   local account_home=$1 account_user nvm_bin
   FM_REMOTE_JOB_OPERATOR_PATH=
@@ -279,6 +313,7 @@ fm_remote_job_compose_operator_path() { # <account-home>
   fm_remote_job_path_append /bin
   fm_remote_job_path_append /usr/sbin
   fm_remote_job_path_append /sbin
+  fm_remote_job_append_userland_tool_dirs
   printf '%s\n' "$FM_REMOTE_JOB_OPERATOR_PATH"
 }
 
