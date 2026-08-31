@@ -20,13 +20,18 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # the platform (Git Bash/MSYS) that already pays the highest fork price. The leaf
 # library above has already paid for that one fork, so reuse its answer.
 _FM_UNAME=$FM_PROC_UNAME
-# CLK_TCK is the opposite case, so it is probed lazily rather than here: it is
-# 1000 on this MSYS userland and 100 on Linux, so it is read and never assumed,
-# but only fm_pid_identity's non-Linux /proc branch needs it, and most of the
-# scripts that source this file - the PreToolUse and Stop hooks among them -
-# never reach that branch. _fm_proc_createtime runs the probe on first use and
-# caches the answer in the global below, so a process that asks for an identity
-# forks getconf once and one that never asks does not fork it at all.
+# Same argument for CLK_TCK, which only fm_pid_identity's non-Linux /proc branch
+# needs: it is 1000 on this MSYS userland and 100 on Linux, so it is read and
+# never assumed. Linux keeps raw ticks and macOS has no /proc, so neither forks.
+# Probing on first use instead would not survive: every caller reads
+# fm_pid_identity through command substitution, so the cached answer dies with
+# that subshell and getconf is forked again on every 0.2s confirm and 0.5s
+# attach poll. One fork per process start, on MSYS alone, is the cheaper side.
+# The probe stays callable afterwards because this gate reads the /proc override
+# at SOURCE time while fm_pid_identity reads it at CALL time: a caller that
+# exports the override after sourcing this file would otherwise be left with an
+# empty answer for the rest of the process, and every identity comparison is an
+# equality, so an empty answer is a permanent mismatch rather than a slow path.
 _FM_CLK_TCK=
 _fm_clk_tck_probe() {
   local ticks
@@ -36,6 +41,9 @@ _fm_clk_tck_probe() {
   esac
   _FM_CLK_TCK=$ticks
 }
+if [ "$_FM_UNAME" != Linux ] && [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/uptime" ]; then
+  _fm_clk_tck_probe || true
+fi
 mkdir -p "$STATE"
 
 # Most wake-library consumers need only queue and lock primitives, including
