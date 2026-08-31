@@ -1546,7 +1546,7 @@ A jq that FAILS after printing partial rows loses that partial output on the Win
 | # | Subsystem | Result | Measured detail | Fix owner |
 | --- | --- | --- | --- | --- |
 | 29 | Multi-row `jq` reads in the herdr adapter | **FIXED** | A native `jq.exe` ends every record CR LF; command substitution eats only the last one, so the ~50 single-value reads are exact and the array-iterating ones keep an interior CR. Workspace, tab, pane and session ids went back to herdr with a control character in them, and the ambiguity refusal rendered `(w1\r w7)`. Thirteen reads moved onto `fm_backend_herdr_jq_rows`. | slice 9; `tests/fm-backend-herdr.test.sh` 181/181 |
-| 30 | The same defect in `bin/fm-bearings-snapshot.sh` | **FAIL** | The survey this slice's criterion implies found two more array-iterating reads outside the adapter, both feeding a `while IFS= read` loop: `.tasks[].pr.url` and `.tasks[] | select(.kind != "secondmate") | .paths.worktree.path`. Measured with two tasks: the FIRST worktree path arrives as `/tmp/bearprobe-a\r`, `[ -d "$wt" ]` is false, and its repository is dropped from the PR scan - so `/bearings` silently reports on the last task's repo only. Phase C never saw it because the digest ran with one task in flight. `bin/backends/cmux.sh` and `bin/backends/zellij.sh` have the same shape, on hosts the port does not target. | a follow-up slice, with a design question attached: one shared multi-row reader for every caller, or a second adapter-local funnel |
+| 30 | The same defect in `bin/fm-bearings-snapshot.sh` | **FIXED** (Integration, "Row 30 fixed") | The survey this slice's criterion implies found two more array-iterating reads outside the adapter, both feeding a `while IFS= read` loop: `.tasks[].pr.url` and `.tasks[] | select(.kind != "secondmate") | .paths.worktree.path`. Measured with two tasks: the FIRST worktree path arrives as `/tmp/bearprobe-a\r`, `[ -d "$wt" ]` is false, and its repository is dropped from the PR scan - so `/bearings` silently reports on the last task's repo only. Phase C never saw it because the digest ran with one task in flight. `bin/backends/cmux.sh` and `bin/backends/zellij.sh` have the same shape, on hosts the port does not target. | a follow-up slice, with a design question attached: one shared multi-row reader for every caller, or a second adapter-local funnel |
 
 The portable-parallel lane count is deliberately NOT restated here.
 `tests/fm-backend-herdr.test.sh` was one of slice 6's four remaining reds and is green standalone now, which would make the lanes 20 green / 3 red of 24 - but the lane was not re-run for this slice, and a count nobody measured is worth less than none.
@@ -2268,6 +2268,33 @@ With `--jobs 1` (the supported worker-count override, not a re-spelling of the c
 So the full extended lint on `windows-latest` is somewhere past two hours, and the job is now `workflow_dispatch`-only at a 180-minute cap: ShellCheck's analysis is platform-independent and already gates every change on Linux CI and on this box (which lints in well under an hour), and the one Windows-specific fact the job could add - the pinned toolchain installing and running under Git Bash - is proven by `fm-lint.test.sh` running green inside the shards on every push.
 Runs 2 and 3 reproduced shard counts of 19 green / 4 red / 1 gate-skip with the same four scripts, so the behavior count is stable across three clean runners.
 `fm-captain-hold-lifecycle` also prints `shasum: command not found` on the runner (its line 208); `fm_pr_sha256` falls back to `sha256sum`, so it is noise there, and the suite's red is the documented slice 6 verdict either way.
+
+### Row 30 fixed: one owner for multi-row `jq -r` reads
+
+Fixed 2026-08-30 after the merge, test-first, by an Opus worker under a Fable diagnosis, in its own herdr tab in the captain's workspace.
+The mechanism was re-measured before a line was written: `printf '%s' '{"tasks":[{"p":"/tmp"},{"p":"/tmp"}]}' | jq -r '.tasks[].p'` is `/tmp\r\n/tmp\r\n` here, and through the script's heredoc'd command substitution the first row arrives as `/tmp<CR>` (`[ -d ]` false) while only the last is clean - so N tasks in flight scanned one repository.
+
+The design question rows 30 and 32 left open is settled as one owner.
+`bin/fm-jq-lib.sh` holds `fm_jq_rows` - slice 9's funnel body, moved with its reasoning intact - `fm_backend_herdr_jq_rows` is a one-line delegate so the adapter's thirteen call sites read unchanged, and `bin/fm-bearings-snapshot.sh`'s two feeds call the leaf.
+The fixture installers that copy the herdr adapter into a remote root (`tests/fm-on.test.sh`, `tests/fm-remote-transport-lanes.test.sh`) copy the leaf too, the omission that bit slices 1 and 6; every other site runs the script from the checkout, where the leaf already is.
+
+Tests were written and run red before the fix: `tests/fm-jq-lib.test.sh` (7 cases, both branches forced with `OSTYPE` on any host, including the sentinel proof that a CR ending a VALUE survives while the terminator's CR goes) and two cases in `tests/fm-bearings-snapshot.test.sh` that stage a text-mode jq and force the Windows branch, one per read site.
+The `pr.url` case records repository URLs rather than pull-request URLs on purpose: `repo_slug`'s `/pull/...` strip happens to eat a trailing CR along with the pull path, which masks that site for the common URL shape.
+
+| Check | Result |
+| --- | --- |
+| `tests/fm-jq-lib.test.sh` | 7/7, and 7/7 again on an independent run |
+| the two new bearings cases | red before the fix (repository dropped, slug carrying a CR), green after |
+| `tests/fm-bearings-snapshot.test.sh` as a whole | flaky at HEAD here before any change - two baseline runs of the unmodified file died at two different terminal-evidence cases - so the new cases were proven on a one-case copy of the suite; the lane's verdict for the suite is unchanged (issue #8) |
+| `tests/fm-backend-herdr-windows.test.sh` | 43/43 |
+| `tests/fm-afk-return.test.sh` | 6/6 |
+| `tests/fm-backend-herdr.test.sh` | 181/181 through the delegate, run alone after everything else |
+| `bin/fm-lint.sh` on all nine touched files | clean |
+| `bin/fm-test-run.sh --check-coverage` | ok, 177 scripts |
+| `git diff --check` | clean |
+
+Finding 36, from the fixture work: the MinGW `gawk` opens stdin in text mode and eats a CR before it can be re-emitted, so a fake jq that widens LF to CR LF has to use bash's own `read` loop rather than `awk '{ printf "%s\r\n", $0 }'`.
+It is the same CR reflex as findings 29 and 35, in a third tool, and it belongs in the ledger so the next Windows fixture does not rediscover it.
 
 ## What the spike did not know
 
