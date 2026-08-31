@@ -28,9 +28,9 @@
 #   clear, compact          `--reemit` digest only when this lock owner recorded
 #                           a completed full startup; otherwise a full digest,
 #                           so a startup killed mid-sweep is finished first
-# An MSYS userland whose ancestry names no harness answers ahead of that table
-# and delegates every source to the nudge wrapper, because such a hook process
-# cannot prove which session it is (see the branch below).
+# An MSYS userland whose ancestry names no harness sends the sources above to
+# the nudge wrapper too, because such a hook process cannot prove which session
+# it is (see the branch below).
 #
 #   resume, reload, fork    delegate to the nudge wrapper. Prior context is
 #                           restored on these, so re-running is redundant when
@@ -152,20 +152,27 @@ fi
 # silent on exactly the session that just lost its context. Called rather than
 # exec'd for the same reason the branch exists: exec is what severs the ancestry
 # the nudge's own ownership check reads. POSIX never enters here.
-case "${OSTYPE:-}" in
-  msys*|mingw*|cygwin*)
-    if ! fm_harness_ancestry_pid >/dev/null 2>&1; then
-      "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
-      exit 0
-    fi
-    ;;
-esac
+#
+# Only the sources that would otherwise spend a digest ask this question. That
+# walk costs about a second on MSYS (bin/fm-proc-lib.sh), and resume, reload and
+# fork reach the same nudge whatever it answers, so asking there would buy a
+# session open nothing but the delay - and the nudge repeats the walk itself.
+msys_severed_ancestry_delegates() {
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *) return 0 ;;
+  esac
+  fm_harness_ancestry_pid >/dev/null 2>&1 && return 0
+  "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
+  exit 0
+}
 
 case "$SOURCE" in
   resume|reload|fork)
     exec "$SCRIPT_DIR/fm-sessionstart-nudge.sh"
     ;;
   clear|compact)
+    msys_severed_ancestry_delegates
     if session_start_completed; then
       "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SOURCE" || true
     else
@@ -173,6 +180,7 @@ case "$SOURCE" in
     fi
     ;;
   *)
+    msys_severed_ancestry_delegates
     "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
     ;;
 esac

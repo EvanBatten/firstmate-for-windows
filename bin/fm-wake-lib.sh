@@ -102,10 +102,19 @@ _fm_proc_uptime_ms() {
 
 # _fm_proc_now_ms: sets _FM_PROC_NOW_MS to the wall clock in milliseconds, or
 # returns 1. EPOCHREALTIME is a bash builtin variable, so the common path costs
-# no process at all; `date +%s%N` covers a bash too old to have it and is
-# rejected outright where it answers with a literal N. FM_PROC_NOW_OVERRIDE is
-# the fixture seam beside FM_PROC_ROOT_OVERRIDE - milliseconds, so a test can
-# step the clock deterministically - and is read at call time like that one.
+# no process at all; `date +%s%N` covers a bash too old to have it.
+#
+# That answer must carry BOTH seconds and nanoseconds, so a `date` without %N is
+# refused twice over: it either prints a literal N, which the digit test rejects,
+# or a bare epoch, which the length test rejects. Accepting a bare epoch would be
+# the silent failure - dividing ten digits by a million yields a small number that
+# is perfectly stable, so every identity still compares equal and nothing looks
+# wrong, while the origin has stopped tracking the clock and the step invariance
+# below is gone. Returning 1 reaches the portable ps fallback instead.
+#
+# FM_PROC_NOW_OVERRIDE is the fixture seam beside FM_PROC_ROOT_OVERRIDE -
+# milliseconds, so a test can step the clock deterministically - and is read at
+# call time like that one.
 _FM_PROC_NOW_MS=
 _fm_proc_now_ms() {
   local now
@@ -128,7 +137,7 @@ _fm_proc_now_ms() {
   case "$now" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  [ "${#now}" -gt 9 ] || return 1
+  [ "${#now}" -ge 16 ] || return 1
   _FM_PROC_NOW_MS=$(( now / 1000000 ))
 }
 
@@ -146,11 +155,18 @@ _fm_proc_now_ms() {
 # second on a FRACTIONAL step - the ordinary shape of an NTP correction.
 #
 # The single floor is applied to the summed milliseconds, so the only residual
-# is that /proc/uptime is published in centiseconds: a process created within
-# about 10 ms of a second boundary can be recorded one second apart by two
-# reads. That is a rare false mismatch (a watcher treated as dead and re-armed),
-# never a false match, and Win32's own creation time is the only way to remove
-# it entirely.
+# is read jitter: /proc/uptime publishes centiseconds, and the two clocks are
+# sampled a moment apart, so the sum lands up to roughly 15 ms high. That error
+# is persistent PER PROCESS rather than random per read. Which side of a whole
+# second the sum falls on is decided by where the process's true creation
+# instant sits, so a process created within about 15 ms of a second boundary
+# straddles it: two readers can record that one process a second apart, and they
+# keep doing so for its whole life rather than once. Its every health check is
+# then a coin toss - a live watcher treated as dead and re-armed until the next
+# arm re-records the identity. It stays a false mismatch, never a false match.
+# Removing it entirely needs either a tolerance at the equality sites that
+# compare these strings or Win32's own creation time, which carries the
+# sub-second digits /proc never publishes.
 _FM_PROC_CREATETIME=
 _fm_proc_createtime() {
   local proc_root=$1 ticks=$2

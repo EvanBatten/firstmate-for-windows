@@ -240,6 +240,42 @@ run_hook_severed() {  # <root> [args...]
     PATH="$SEVERED_BIN:$RUN_PATH" "$RUN" "$@"
 }
 
+# The same severed table, with every lookup recorded. `-o args=` is the field
+# only an ancestry walk asks for - the MSYS capability probe in bin/fm-proc-lib.sh
+# asks for `comm=` - so counting it measures walks and nothing else, on either
+# host.
+COUNTING_BIN=$(fm_fakebin "$TMP_ROOT/counting-ancestry")
+cat > "$COUNTING_BIN/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -n "${FM_TEST_PS_LOG:-}" ]; then
+  printf '%s\n' "$field" >> "$FM_TEST_PS_LOG"
+fi
+case "$field" in
+  comm=) printf '%s\n' bash ;;
+  args=) printf '%s\n' 'bash /repo/bin/fm-sessionstart-run.sh' ;;
+  ppid=) printf '%s\n' 1 ;;
+esac
+SH
+chmod +x "$COUNTING_BIN/ps"
+
+run_hook_counting() {  # <root> <ps-log> [args...]
+  local root=$1 log=$2
+  shift 2
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys FM_TEST_PS_LOG="$log" \
+    FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" \
+    PATH="$COUNTING_BIN:$RUN_PATH" "$RUN" "$@"
+}
+
 run_hook_pi() {  # <root> [args...]
   local root=$1
   shift
@@ -1045,6 +1081,28 @@ test_run_resume_delegates_to_the_nudge() {
   pass "run wrapper: resume delegates to the nudge instead of re-running the digest"
 }
 
+# resume, reload and fork reach the nudge whichever way the severed-ancestry
+# question is answered, so asking it there buys the session open nothing but the
+# walk's own cost - about a second on the one platform the branch exists for
+# (bin/fm-proc-lib.sh), inside a SessionStart hook, and the nudge then repeats
+# the walk itself. With no session lock staged, the nudge's ownership check
+# returns before it walks anything, so the whole open must complete without a
+# single ancestry lookup.
+test_run_resume_on_msys_delegates_without_walking_the_ancestry() {
+  local root="$TMP_ROOT/run-msys-resume-walk" log out status=0 walks
+  make_run_primary "$root"
+  log="$root/ps-calls.log"
+  : > "$log"
+  out=$(run_hook_counting "$root" "$log" --source resume </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper resume on an MSYS userland"
+  [ "$out" = "$NUDGE_LINE" ] \
+    || fail "an MSYS resume printed something other than the nudge: $out"
+  walks=$(grep -c 'args=' "$log" 2>/dev/null) || walks=0
+  [ "$walks" -eq 0 ] \
+    || fail "an MSYS resume walked the ancestry $walks time(s) before delegating to the nudge"
+  pass "run wrapper: an MSYS resume delegates to the nudge without walking the ancestry"
+}
+
 test_run_reads_source_from_the_hook_payload() {
   local root="$TMP_ROOT/run-payload" out status=0
   make_run_primary "$root"
@@ -1134,6 +1192,7 @@ test_run_compact_without_completion_refreshes_before_finishing_startup
 test_run_clear_without_completion_finishes_startup
 test_run_clear_rejects_previous_owner_completion
 test_run_resume_delegates_to_the_nudge
+test_run_resume_on_msys_delegates_without_walking_the_ancestry
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent

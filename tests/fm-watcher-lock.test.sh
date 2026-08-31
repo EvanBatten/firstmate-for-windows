@@ -1220,6 +1220,53 @@ SH
   pass "MSYS process identity falls back to ps when the creation origin is unreadable"
 }
 
+# The wall clock is read from bash's EPOCHREALTIME, and `date +%s%N` covers a
+# bash too old to publish it. A `date` that silently drops %N answers with a
+# bare epoch, and taking that as nanoseconds divides the origin by a million:
+# the value is stable, so every identity still compares equal and nothing
+# reports an error, while the origin has stopped tracking the clock and a step
+# once again evicts a live watcher. The identity must refuse such an answer and
+# take the portable fallback, so this stages exactly that `date` with the whole
+# rest of the machine readable.
+test_msys_proc_pid_identity_rejects_a_nanosecondless_date() {
+  local dir state proc_root fakebin pid identity
+  dir=$(make_case msys-proc-identity-seconds-only-date)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-secondsdate"
+  pid=4242
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 1784095040
+SH
+  chmod +x "$fakebin/date"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+printf '  Mon Jul 28 20:00:00 2026 bash /path with spaces/fm-watch.sh --flag\n'
+SH
+  chmod +x "$fakebin/ps"
+  MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
+  case "$MSYS_FIXTURE_CLK_TCK" in
+    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$MSYS_FIXTURE_CLK_TCK')" ;;
+  esac
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" \
+    "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_START_MS ))"
+
+  # EPOCHREALTIME is unset in the reading shell so the `date` branch is the one
+  # under test; without the seam the override would answer before either.
+  identity=$(PATH="$fakebin:$PATH" FM_PROC_ROOT_OVERRIDE="$proc_root" \
+    FM_STATE_OVERRIDE="$state" \
+    bash -c 'unset EPOCHREALTIME; . "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+    || fail "a seconds-only date reported no identity at all"
+  case "$identity" in
+    proc-createtime=*) fail "a seconds-only date was accepted as a creation origin ('$identity')" ;;
+  esac
+  [ "$identity" = "Mon Jul 28 20:00:00 2026 bash /path with spaces/fm-watch.sh --flag" ] \
+    || fail "a seconds-only date did not fall back to ps lstart ('$identity')"
+  pass "MSYS process identity refuses a date that answers without nanoseconds"
+}
+
 test_stale_watch_reclaim_publishes_before_clear() {
   local dir state lockdir rc token
   dir=$(make_case stale-watch-publish-before-clear)
@@ -1288,6 +1335,7 @@ test_pid_identity_is_locale_invariant
 test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
 test_msys_proc_pid_identity_survives_a_clock_step
 test_msys_proc_pid_identity_falls_back_when_the_origin_is_unreadable
+test_msys_proc_pid_identity_rejects_a_nanosecondless_date
 test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed
 test_stale_watch_reclaim_publishes_before_clear
