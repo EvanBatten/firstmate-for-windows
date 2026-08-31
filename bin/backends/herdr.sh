@@ -86,6 +86,12 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-transition-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-transition-lib.sh"
 
+# Shared multi-row `jq -r` reader (bin/fm-jq-lib.sh). This adapter's thirteen
+# array-iterating reads go through it so a native jq's CR LF record terminator
+# cannot reach an id, a path, or a refusal message.
+# shellcheck source=bin/fm-jq-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-jq-lib.sh"
+
 FM_BACKEND_HERDR_MIN_PROTOCOL=14
 # events.subscribe (the native pane.agent_status_changed push stream) and its
 # subscription_event schema first shipped at protocol 16 (verified: herdr
@@ -454,56 +460,11 @@ fm_backend_herdr_cli_win32() {  # <session> <herdr-subcommand-and-args...>
     herdr ${args[@]+"${args[@]}"} --session "$session"
 }
 
-# fm_backend_herdr_jq_rows: read a MULTI-ROW `jq -r` answer out of one JSON
-# document. Byte-identical to the `printf '%s' "$json" | jq -r "$@" 2>/dev/null`
-# each of these call sites ran before - same filter, same stdout, same exit
-# status - except on a Windows userland, where the record terminator's CR is
-# removed.
-#
-# jq there is a native binary that opens stdout in TEXT mode, so it ends every
-# record `\r\n` (measured on both builds present on the port machine, mingw-w64
-# jq-1.6 and WinGet jq-1.8.2, so it is the platform and not a package; no mount
-# option or shell flag suppresses it).
-#
-# Only multi-row reads need this, which is why it is a funnel for those and not
-# the adapter's single jq path: command substitution drops the FINAL CRLF, so
-# every single-value read here is already exact on Windows and pays nothing. A
-# multi-row read keeps the CR on every record but the last, and those records
-# are workspace, tab, pane and session ids that go straight back to herdr -
-# `herdr tab close "w1:t2<CR>"` is not a tab id - or into an operator-facing
-# refusal that renders as `w1<CR> w7`.
-#
-# Keyed on the userland rather than on jq being a native binary (the shape
-# fm_backend_herdr_win32_cli needs) because unlike argument conversion this
-# branch cannot change a correct answer: it is the exact inverse of the text
-# mode translation, so against any jq that emits plain LF - every POSIX host,
-# and any shell-script fake - it is a no-op on the byte stream.
-#
-# The `&& printf X` sentinel is what makes that exactness true rather than
-# nearly true. Command substitution strips trailing newlines (and on MSYS the
-# CR that comes with them), which would leave the last record's terminator
-# unrecoverable and, worse, indistinguishable from a CR that is part of a
-# VALUE - a jq answer of "1<CR>" arrives as the same bytes as a terminator a
-# shell half-ate, and guessing wrong there silently rewrites data. With the
-# sentinel the capture is jq's byte stream exactly, terminator included, and
-# `\r\n` -> `\n` is all that is needed. jq -r always terminates its last
-# record, so the byte before the sentinel is always the newline jq wrote.
-# `&&` rather than a status variable so a failing jq still returns ITS status;
-# the partial rows it may have printed are dropped, which every caller that
-# checks the status treats as fatal anyway.
+# fm_backend_herdr_jq_rows: this adapter's name for the shared multi-row
+# `jq -r` reader. bin/fm-jq-lib.sh owns the behavior and the reasoning; the
+# name stays here so its thirteen call sites read as adapter calls.
 fm_backend_herdr_jq_rows() {  # <json> <jq-argument>...
-  local json=${1-} rows
-  shift
-  case "${OSTYPE:-}" in
-    msys*|mingw*|cygwin*) ;;
-    *)
-      printf '%s' "$json" | jq -r "$@" 2>/dev/null
-      return
-      ;;
-  esac
-  rows=$(printf '%s' "$json" | jq -r "$@" 2>/dev/null && printf X) || return
-  rows=${rows%X}
-  printf '%s' "${rows//$'\r'$'\n'/$'\n'}"
+  fm_jq_rows "$@"
 }
 
 # fm_backend_herdr_win32_pane_bash: the Windows spelling of THIS Git Bash's own

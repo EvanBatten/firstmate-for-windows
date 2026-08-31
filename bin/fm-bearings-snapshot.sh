@@ -69,6 +69,12 @@ FLEET="$SCRIPT_DIR/fm-fleet-snapshot.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# Shared multi-row `jq -r` reader (bin/fm-jq-lib.sh). The PR-scan repository set
+# is built from two array-iterating reads whose records go back into a shell
+# loop, which is exactly what that library owns.
+# shellcheck source=bin/fm-jq-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-jq-lib.sh"
 
 # Bounds (overridable for tests / large fleets).
 FM_BEARINGS_LANDED=${FM_BEARINGS_LANDED:-6}
@@ -217,7 +223,7 @@ if [ "$INCLUDE_PRS" = 1 ]; then
       s=$(repo_slug "$u"); [ -n "$s" ] || continue
       case " $repos " in *" $s "*) : ;; *) repos="$repos $s" ;; esac
     done <<EOF
-$(printf '%s' "$SNAP" | jq -r '.tasks[].pr.url // empty')
+$(fm_jq_rows "$SNAP" '.tasks[].pr.url // empty')
 EOF
     while IFS= read -r wt; do
       [ -n "$wt" ] || continue
@@ -226,7 +232,7 @@ EOF
       s=$(repo_slug "$u"); [ -n "$s" ] || continue
       case " $repos " in *" $s "*) : ;; *) repos="$repos $s" ;; esac
     done <<EOF
-$(printf '%s' "$SNAP" | jq -r '.tasks[] | select(.kind != "secondmate") | .paths.worktree.path // empty')
+$(fm_jq_rows "$SNAP" '.tasks[] | select(.kind != "secondmate") | .paths.worktree.path // empty')
 EOF
 
     for repo in $repos; do PR_REPOS_TOTAL=$((PR_REPOS_TOTAL + 1)); done

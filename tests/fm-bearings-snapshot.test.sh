@@ -1159,6 +1159,133 @@ test_per_repository_pr_cap_is_disclosed() {
   pass "per-repository open-PR caps are disclosed with an expansion knob"
 }
 
+# Install a `jq` that models a NATIVE jq.exe's text-mode stdout into an existing
+# fakebin: every record it writes ends CR LF. A host whose jq already writes that
+# way needs no fake - the real binary IS the article being modeled - so nothing
+# is installed there and the cases below run against it.
+#
+# Scoped to `-r` answers of more than one line on purpose. Those are the reads
+# whose records go back into a shell loop, and they are where the platform's CR
+# is observable on ANY host. A single-line answer is captured through command
+# substitution, which on a real Windows host eats the whole trailing CR LF, so
+# widening one here would model a Windows SHELL behavior a POSIX host does not
+# have, and would corrupt every scalar read in the canonical snapshot this same
+# fake also runs under. It widens with bash's own `read` rather than awk or sed
+# because the MinGW gawk on the port machine opens stdin in text mode and eats
+# the very byte this fake exists to produce.
+make_text_mode_jq() {  # <fakebin>
+  local fakebin=$1 real bytes
+  real=$(command -v jq)
+  # `x` plus its terminator: 2 bytes under a POSIX jq, 3 under a text-mode one.
+  bytes=$(printf '%s' '{}' | "$real" -r '"x"' | wc -c | tr -d ' ')
+  [ "$bytes" = 3 ] && return 0
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -u\n'
+    printf 'real=%q\n' "$real"
+    cat <<'SH'
+raw=0
+for a in "$@"; do [ "$a" = -r ] && { raw=1; break; }; done
+[ "$raw" = 1 ] || exec "$real" "$@"
+out=$("$real" "$@") || exit $?
+[ -n "$out" ] || exit 0
+if [ "$(printf '%s\n' "$out" | wc -l)" -gt 1 ]; then
+  printf '%s\n' "$out" | while IFS= read -r line; do printf '%s\r\n' "$line"; done
+else
+  printf '%s\n' "$out"
+fi
+SH
+  } > "$fakebin/jq"
+  chmod +x "$fakebin/jq"
+}
+
+# Two in-flight tasks whose worktrees are real repositories with DISTINCT GitHub
+# origins, so the PR-scan repository set has more than one member and the record
+# terminator between them is observable.
+write_two_repo_worktree_fixture() {  # <home>
+  local home=$1 pair id slug
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] alpha-task - Work in the first repository (repo: one) (kind: ship) (since 2026-07-11)
+- [ ] beta-task - Work in the second repository (repo: two) (kind: ship) (since 2026-07-11)
+EOF
+  for pair in alpha-task:one beta-task:two; do
+    id=${pair%%:*}; slug=${pair##*:}
+    fm_git_init_commit "$home/projects/$id-wt"
+    git -C "$home/projects/$id-wt" remote add origin "https://github.com/acme/$slug.git"
+    fm_write_meta "$home/state/$id.meta" \
+      "window=firstmate:fm-$id" \
+      "worktree=$home/projects/$id-wt" \
+      "project=$slug" \
+      "harness=claude" \
+      "kind=ship" \
+      "mode=no-mistakes"
+  done
+}
+
+# The same two tasks, but the repositories come from recorded PR URLs and the
+# worktrees deliberately do not exist, so only the pr.url read feeds the set.
+write_two_recorded_pr_fixture() {  # <home>
+  local home=$1 pair id slug
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] three-task - Recorded against the third repository (repo: three) (kind: ship) (since 2026-07-11)
+- [ ] four-task - Recorded against the fourth repository (repo: four) (kind: ship) (since 2026-07-11)
+EOF
+  for pair in three-task:three four-task:four; do
+    id=${pair%%:*}; slug=${pair##*:}
+    fm_write_meta "$home/state/$id.meta" \
+      "window=firstmate:fm-$id" \
+      "worktree=$home/projects/$id-wt" \
+      "project=$slug" \
+      "harness=claude" \
+      "kind=ship" \
+      "mode=no-mistakes" \
+      "pr=https://github.com/acme/$slug"
+  done
+}
+
+# A native jq ends every record CR LF and command substitution eats only the last
+# one, so the first of two worktree paths used to arrive as `/path/one<CR>` -
+# which is not a directory - and that task's repository silently left the scan.
+# With N tasks in flight only the last task's repository was ever queried.
+#
+# Forced onto the Windows branch so the case stages the defect on every host and
+# not only on the one that ships a native jq.
+test_pr_scan_keeps_every_repository_under_a_text_mode_jq() {
+  local home fakebin json
+  home=$(make_home pr-scan-crlf); write_two_repo_worktree_fixture "$home"
+  fakebin=$(make_fakebin "$home"); make_text_mode_jq "$fakebin"; : > "$home/net.log"
+  json=$(OSTYPE=msys run "$home" "$fakebin" --include-prs --json)
+  assert_grep '--repo acme/one --state' "$home/net.log" \
+    "the first task's repository dropped out of the PR scan under a text-mode jq: $(cat "$home/net.log")"
+  assert_grep '--repo acme/two --state' "$home/net.log" \
+    "the last task's repository must still be scanned: $(cat "$home/net.log")"
+  printf '%s' "$json" | jq -e '.prs | startswith("checked (2 repos")' >/dev/null \
+    || fail "the PR scan did not report both worktree repositories: $json"
+  pass "every worktree repository survives the PR scan under a text-mode jq"
+}
+
+# The same read one loop earlier, over recorded PR URLs. Here the stray CR does
+# not drop the repository, it corrupts its slug: `gh pr list --repo acme/three<CR>`
+# is a query for a repository that does not exist. The fixture records repository
+# URLs rather than pull-request URLs because repo_slug's `/pull/...` strip happens
+# to eat a trailing CR along with the pull path, which masks this site for the
+# common URL shape.
+test_pr_scan_keeps_every_recorded_pr_repository_under_a_text_mode_jq() {
+  local home fakebin json
+  home=$(make_home pr-url-crlf); write_two_recorded_pr_fixture "$home"
+  fakebin=$(make_fakebin "$home"); make_text_mode_jq "$fakebin"; : > "$home/net.log"
+  json=$(OSTYPE=msys run "$home" "$fakebin" --include-prs --json)
+  assert_grep '--repo acme/three --state' "$home/net.log" \
+    "the first recorded PR repository reached gh with a stray CR in its slug: $(cat "$home/net.log")"
+  assert_grep '--repo acme/four --state' "$home/net.log" \
+    "the last recorded PR repository must still be scanned: $(cat "$home/net.log")"
+  printf '%s' "$json" | jq -e '.prs | startswith("checked (2 repos")' >/dev/null \
+    || fail "the PR scan did not report both recorded repositories: $json"
+  pass "every recorded-PR repository reaches gh with an exact slug under a text-mode jq"
+}
+
 install_failing_jq() {  # <fakebin> <model|toon>
   local fakebin=$1 phase=$2 real
   real=$(command -v jq)
@@ -1987,4 +2114,6 @@ test_section_caps_and_expansion_flags
 test_collapsed_captain_call_deferral_and_landed
 test_pr_repository_cap_and_expansion
 test_per_repository_pr_cap_is_disclosed
+test_pr_scan_keeps_every_repository_under_a_text_mode_jq
+test_pr_scan_keeps_every_recorded_pr_repository_under_a_text_mode_jq
 test_projection_and_toon_fail_closed
