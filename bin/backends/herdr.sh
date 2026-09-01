@@ -462,7 +462,7 @@ fm_backend_herdr_cli_win32() {  # <session> <herdr-subcommand-and-args...>
 
 # fm_backend_herdr_jq_rows: this adapter's name for the shared multi-row
 # `jq -r` reader. bin/fm-jq-lib.sh owns the behavior and the reasoning; the
-# name stays here so its thirteen call sites read as adapter calls.
+# name stays here so its seventeen call sites read as adapter calls.
 fm_backend_herdr_jq_rows() {  # <json> <jq-argument>...
   fm_jq_rows "$@"
 }
@@ -2050,12 +2050,15 @@ fm_backend_herdr_container_ensure() {  # <cwd-for-a-fresh-workspace> [<launcher-
 fm_backend_herdr_pane_presence_state() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out code pid
   out=$(fm_backend_herdr_cli "$session" pane get "$pane_id" 2>&1)
-  code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  # Both reads go through the CR-stripping owner because both are COMPARED, not
+  # printed: a text-mode jq's trailing CR makes `pane_not_found` and the pane id
+  # match nothing, so a husk reads as `unknown` and the caller refuses forever.
+  code=$(fm_backend_herdr_jq_rows "$out" '.error.code // empty')
   if [ -n "$code" ]; then
     [ "$code" = "pane_not_found" ] && printf 'dead' || printf 'unknown'
     return 0
   fi
-  pid=$(printf '%s' "$out" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)
+  pid=$(fm_backend_herdr_jq_rows "$out" '.result.pane.pane_id // empty')
   [ "$pid" = "$pane_id" ] && printf 'present' || printf 'unknown'
 }
 
@@ -2124,12 +2127,13 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     return 0
   fi
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
-  code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
+  # Compared, not printed - see fm_backend_herdr_pane_presence_state above.
+  code=$(fm_backend_herdr_jq_rows "$out" '.error.code // empty')
   if [ -n "$code" ]; then
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
     return 0
   fi
-  status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
+  status=$(fm_backend_herdr_jq_rows "$out" '.result.agent.agent_status // empty')
   case "$status" in
     working|idle|done|blocked) printf 'live' ;;
     *) printf 'unknown' ;;

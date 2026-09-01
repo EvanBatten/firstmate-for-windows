@@ -588,6 +588,87 @@ SH
   pass "fm-lint.sh default path catches a self-broken ci.yml"
 }
 
+test_windows_branch_in_ci_and_required_workflows() {
+  local tmp out err rc skip_line ok_line
+  skip_line='skip: python3 with yaml not found for the workflow trigger check'
+  ok_line='windows: present in ci.yml push, ci.yml pull_request, no-mistakes-required.yml pull_request'
+  # The workflow paths travel as argv: the heredoc is quoted so the shell leaves
+  # the python alone, which also means $ROOT would never be expanded inside it.
+  # A missing python3 is a skip, the same way a missing yaml module is; a
+  # traceback of any other kind is a failure, never a skip.
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "skip: python3 not found for the workflow trigger check"
+    return 0
+  fi
+  tmp=$(fm_test_tmproot fm-lint-wf-windows)
+  # Both states the python can reach announce themselves on stdout, and stderr
+  # is kept in its own file so nothing an interpreter writes there can be
+  # mistaken for either: a DeprecationWarning ahead of the skip line no longer
+  # hides the skip, and only the positive marker passes the case, so an
+  # interpreter that dies before parsing a single workflow fails loudly instead
+  # of reporting an assertion that never ran.
+  #
+  # The substitution closes after the terminator: a heredoc opened on the same
+  # line as `$(...)` closes never reaches the command, which then runs an empty
+  # script and exits 0, and the case passes without testing anything.
+  rc=0
+  out=$(python3 - "$ROOT/.github/workflows/ci.yml" "$ROOT/.github/workflows/no-mistakes-required.yml" 2>"$tmp/stderr" << 'PYEOF'
+import sys
+
+try:
+  import yaml
+except ImportError:
+  print('skip: python3 with yaml not found for the workflow trigger check')
+  sys.exit(0)
+
+with open(sys.argv[1]) as f:
+  ci = yaml.safe_load(f)
+with open(sys.argv[2]) as f:
+  nm = yaml.safe_load(f)
+
+# PyYAML reads the bare key `on` as the boolean True, so look under both.
+ci_trigger = ci.get('on') or ci.get(True) or {}
+nm_trigger = nm.get('on') or nm.get(True) or {}
+
+ci_push = (ci_trigger.get('push') or {}).get('branches') or []
+ci_pr = (ci_trigger.get('pull_request') or {}).get('branches') or []
+nm_pr = (nm_trigger.get('pull_request') or {}).get('branches') or []
+
+errors = []
+if 'windows' not in ci_push:
+  errors.append('ci.yml push.branches missing windows')
+if 'windows' not in ci_pr:
+  errors.append('ci.yml pull_request.branches missing windows')
+if 'windows' not in nm_pr:
+  errors.append('no-mistakes-required.yml pull_request.branches missing windows')
+
+if errors:
+  for e in errors:
+    print(e)
+  sys.exit(1)
+
+print('windows: present in ci.yml push, ci.yml pull_request, no-mistakes-required.yml pull_request')
+PYEOF
+) || rc=$?
+  err=$(cat "$tmp/stderr" 2>/dev/null) || err=
+
+  case $'\n'"$out"$'\n' in
+    *$'\n'"$skip_line"$'\n'*)
+      echo "$skip_line"
+      return 0
+      ;;
+  esac
+  case $'\n'"$out"$'\n' in
+    *$'\n'"$ok_line"$'\n'*) ;;
+    *)
+      fail "workflow branch filters: no verdict line, exit $rc"$'\n'"stdout: $out"$'\n'"stderr: $err"
+      ;;
+  esac
+  [ "$rc" -eq 0 ] ||
+    fail "workflow branch filters: exit $rc"$'\n'"stdout: $out"$'\n'"stderr: $err"
+  pass "both ci.yml and no-mistakes-required.yml have windows in branch filters"
+}
+
 test_pins_an_explicit_version
 test_current_workflows_pass
 test_col0_heredoc_fails_with_clear_error
@@ -605,3 +686,4 @@ test_installer_prefers_sha256sum_over_shasum
 test_installer_verifies_a_checksum_under_a_backslash_temp_root
 test_installer_rejects_unsupported_platform
 test_fm_lint_default_path_catches_broken_ci_yml
+test_windows_branch_in_ci_and_required_workflows

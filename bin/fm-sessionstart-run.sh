@@ -28,6 +28,10 @@
 #   clear, compact          `--reemit` digest only when this lock owner recorded
 #                           a completed full startup; otherwise a full digest,
 #                           so a startup killed mid-sweep is finished first
+# An MSYS userland whose ancestry names no harness sends the sources above to
+# the nudge wrapper too, because such a hook process cannot prove which session
+# it is (see the branch below).
+#
 #   resume, reload, fork    delegate to the nudge wrapper. Prior context is
 #                           restored on these, so re-running is redundant when
 #                           this process still holds the lock (the nudge stays
@@ -127,11 +131,48 @@ if [ -z "$SOURCE" ] && [ ! -t 0 ]; then
   ')
 fi
 
+# The run tier's premise is that this process can prove which session it belongs
+# to. On an MSYS userland it usually cannot: MSYS has no POSIX exec, so a hook
+# registration that reaches a script through `exec` - which is how most of them
+# are written, and what bash does anyway to a `-c` script's final command -
+# leaves this process with a dead Win32 parent and an MSYS ppid of 1.
+# bin/fm-lock.sh then finds no harness in the ancestry, every digest run from a
+# hook ends in the read-only banner, and the agent has to run
+# bin/fm-session-start.sh from its own shell regardless
+# (docs/windows/measurement.md C4b, findings row 22). Asking for that run up
+# front is the nudge tier, so hand the whole open to it rather than spending a
+# full digest on a helm this process can never take.
+#
+# The severed ancestry is what makes the digest futile, so the ancestry - not
+# the userland - is the gate. Not every registration severs it: the Codex entry
+# pipes its payload into this script, and bash forks a pipeline element instead
+# of exec-optimizing it, so that transport keeps a live parent chain the hybrid
+# walk crosses to the native harness. There the digest CAN take the lock, and a
+# clear or compact open must still get its `--reemit` - the nudge would go
+# silent on exactly the session that just lost its context. Called rather than
+# exec'd for the same reason the branch exists: exec is what severs the ancestry
+# the nudge's own ownership check reads. POSIX never enters here.
+#
+# Only the sources that would otherwise spend a digest ask this question. That
+# walk costs about a second on MSYS (bin/fm-proc-lib.sh), and resume, reload and
+# fork reach the same nudge whatever it answers, so asking there would buy a
+# session open nothing but the delay - and the nudge repeats the walk itself.
+msys_severed_ancestry_delegates() {
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *) return 0 ;;
+  esac
+  fm_harness_ancestry_pid >/dev/null 2>&1 && return 0
+  "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
+  exit 0
+}
+
 case "$SOURCE" in
   resume|reload|fork)
     exec "$SCRIPT_DIR/fm-sessionstart-nudge.sh"
     ;;
   clear|compact)
+    msys_severed_ancestry_delegates
     if session_start_completed; then
       "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SOURCE" || true
     else
@@ -139,6 +180,7 @@ case "$SOURCE" in
     fi
     ;;
   *)
+    msys_severed_ancestry_delegates
     "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
     ;;
 esac

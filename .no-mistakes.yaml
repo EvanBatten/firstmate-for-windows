@@ -39,6 +39,25 @@ commands:
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.
+#
+# The Test agent runs on the contributor's box, and this fork's box is a
+# Windows one where a process spawn costs about ten times what it does on
+# Linux (docs/windows/measurement.md finding 27). The instructions keep the
+# targeted run inside the gate's silence budget there and change nothing on a
+# POSIX host, where the same suites finish in minutes.
 test:
   evidence:
     store_in_repo: true
+  instructions: |
+    Run the suites the change touches one at a time, never concurrently, and
+    prefix each with MSYS=winsymlinks:nativestrict on a Git Bash host.
+    On a Git Bash host (uname prints MINGW or MSYS) a whole suite can take
+    twenty minutes: prove a new or changed case with a one-case copy of its
+    suite (keep every helper, drop the other invocations), keep any single
+    command under five minutes, print a line after each command, and run a
+    long suite only through a log file you poll in the foreground.
+    Never end a turn while a background job is still running; the agent
+    session ends with its final message and the job dies with it.
+    docs/windows/measurement.md classifies the suites that are red on Windows
+    for platform reasons; a red that matches its verdict table is not a
+    regression, and the ledger's first failing assertion is the comparison.

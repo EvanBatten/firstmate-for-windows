@@ -1,28 +1,32 @@
 #!/usr/bin/env bash
-# fm-jq-lib.sh - the single owner of multi-row `jq -r` reads.
+# fm-jq-lib.sh - the single owner of `jq -r` reads whose answer can carry a
+# newline that is not its last byte.
 #
 # Sourced, never executed. No dependencies beyond jq itself, so any caller can
 # source it standalone.
 #
 #   fm_jq_rows <json> <jq-argument>...
-#       Reads a MULTI-ROW `jq -r` answer out of one JSON document. Byte-identical
-#       to the `printf '%s' "$json" | jq -r "$@" 2>/dev/null` its call sites ran
-#       before - same filter, same stdout, same exit status - except on a Windows
-#       userland, where the record terminator's CR is removed.
+#       Reads such an answer out of one JSON document, whether it arrives as many
+#       rows or as one multi-line value. Byte-identical to the
+#       `printf '%s' "$json" | jq -r "$@" 2>/dev/null` its call sites ran before -
+#       same filter, same stdout, same exit status - except on a Windows
+#       userland, where every CR text mode inserted ahead of a newline is removed.
 #
 # jq there is a native binary that opens stdout in TEXT mode, so it ends every
 # record `\r\n` (measured on both builds present on the port machine, mingw-w64
 # jq-1.6 and WinGet jq-1.8.2, so it is the platform and not a package; no mount
 # option or shell flag suppresses it).
 #
-# Only multi-row reads need this, which is why this is a funnel for those rather
-# than for every jq call: command substitution drops the FINAL CRLF, so a
-# single-value read is already exact on Windows and pays nothing. A multi-row
-# read keeps the CR on every record but the last, and those records are ids that
-# go straight back to a tool - `herdr tab close "w1:t2<CR>"` is not a tab id,
-# `gh pr list --repo "acme/one<CR>"` is not a repository - or paths a shell then
-# tests, where `[ -d "/tmp/a<CR>" ]` is false and the row silently disappears, or
-# an operator-facing refusal that renders as `w1<CR> w7`.
+# Only an answer holding an interior newline needs this, which is why this is a
+# funnel for those rather than for every jq call: command substitution drops the
+# FINAL CRLF, so a single-line value is already exact on Windows and pays
+# nothing. A multi-row read keeps the CR on every record but the last, and those
+# records are ids that go straight back to a tool - `herdr tab close "w1:t2<CR>"`
+# is not a tab id, `gh pr list --repo "acme/one<CR>"` is not a repository - or
+# paths a shell then tests, where `[ -d "/tmp/a<CR>" ]` is false and the row
+# silently disappears, or an operator-facing refusal that renders as `w1<CR> w7`.
+# One multi-line VALUE is the same defect inside a single string: `.text` read
+# from a cmux surface arrives with a CR ending every captured line but the last.
 #
 # Keyed on the userland rather than on jq being a native binary because unlike
 # argument conversion this branch cannot change a correct answer: it is the exact

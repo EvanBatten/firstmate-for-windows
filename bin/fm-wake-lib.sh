@@ -20,6 +20,30 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # the platform (Git Bash/MSYS) that already pays the highest fork price. The leaf
 # library above has already paid for that one fork, so reuse its answer.
 _FM_UNAME=$FM_PROC_UNAME
+# Same argument for CLK_TCK, which only fm_pid_identity's non-Linux /proc branch
+# needs: it is 1000 on this MSYS userland and 100 on Linux, so it is read and
+# never assumed. Linux keeps raw ticks and macOS has no /proc, so neither forks.
+# Probing on first use instead would not survive: every caller reads
+# fm_pid_identity through command substitution, so the cached answer dies with
+# that subshell and getconf is forked again on every 0.2s confirm and 0.5s
+# attach poll. One fork per process start, on MSYS alone, is the cheaper side.
+# The probe stays callable afterwards because this gate reads the /proc override
+# at SOURCE time while fm_pid_identity reads it at CALL time: a caller that
+# exports the override after sourcing this file would otherwise be left with an
+# empty answer for the rest of the process, and every identity comparison is an
+# equality, so an empty answer is a permanent mismatch rather than a slow path.
+_FM_CLK_TCK=
+_fm_clk_tck_probe() {
+  local ticks
+  ticks=$(getconf CLK_TCK 2>/dev/null || true)
+  case "$ticks" in
+    ''|*[!0-9]*|0) return 1 ;;
+  esac
+  _FM_CLK_TCK=$ticks
+}
+if [ "$_FM_UNAME" != Linux ] && [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/uptime" ]; then
+  _fm_clk_tck_probe || true
+fi
 mkdir -p "$STATE"
 
 # Most wake-library consumers need only queue and lock primitives, including
@@ -35,6 +59,139 @@ fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
 }
 
+# Every helper below passes its answer back in a global rather than printing it,
+# because command substitution forks and these run inside the same 0.2s confirm
+# and 0.5s attach polls the CLK_TCK note above is about.
+
+# _fm_decimal_ms <value>: sets _FM_DECIMAL_MS to a decimal number of seconds,
+# expressed in whole milliseconds, or returns 1. Both separators are accepted
+# because bash renders EPOCHREALTIME with the LOCALE's decimal point, which is a
+# comma under e.g. de_DE, while /proc/uptime is always written with a period.
+_FM_DECIMAL_MS=
+_fm_decimal_ms() {
+  local value=$1 sec frac
+  _FM_DECIMAL_MS=
+  sec=${value%%[.,]*}
+  case "$sec" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  case "$value" in
+    *[.,]*) frac=${value#*[.,]} ;;
+    *) frac=0 ;;
+  esac
+  case "$frac" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  # Exactly three fraction digits: /proc/uptime's centiseconds are padded and
+  # EPOCHREALTIME's microseconds are truncated, so both land on milliseconds.
+  while [ "${#frac}" -lt 3 ]; do frac=${frac}0; done
+  frac=${frac:0:3}
+  _FM_DECIMAL_MS=$(( sec * 1000 + 10#$frac ))
+}
+
+# _fm_proc_uptime_ms <proc_root>: sets _FM_PROC_UPTIME_MS to how long the
+# machine has been up, in milliseconds, or returns 1. This clock is monotonic -
+# no wall-clock step moves it - which is the whole reason the branch below
+# reaches for it instead of /proc/stat's btime.
+_FM_PROC_UPTIME_MS=
+_fm_proc_uptime_ms() {
+  local up=
+  _FM_PROC_UPTIME_MS=
+  [ -r "$1/uptime" ] || return 1
+  { read -r up _ < "$1/uptime"; } 2>/dev/null || true
+  [ -n "$up" ] || return 1
+  _fm_decimal_ms "$up" || return 1
+  _FM_PROC_UPTIME_MS=$_FM_DECIMAL_MS
+}
+
+# _fm_proc_now_ms: sets _FM_PROC_NOW_MS to the wall clock in milliseconds, or
+# returns 1. EPOCHREALTIME is a bash builtin variable, so the common path costs
+# no process at all; `date +%s%N` covers a bash too old to have it.
+#
+# That answer must carry BOTH seconds and nanoseconds, so a `date` without %N is
+# refused twice over: it either prints a literal N, which the digit test rejects,
+# or a bare epoch, which the length test rejects. Accepting a bare epoch would be
+# the silent failure - dividing ten digits by a million yields a small number that
+# is perfectly stable, so every identity still compares equal and nothing looks
+# wrong, while the origin has stopped tracking the clock and the step invariance
+# below is gone. Returning 1 keeps the raw field 22 under the proc-starttime key
+# instead, which is honest about being step-sensitive.
+#
+# FM_PROC_NOW_OVERRIDE is the fixture seam beside FM_PROC_ROOT_OVERRIDE -
+# milliseconds, so a test can step the clock deterministically - and is read at
+# call time like that one.
+_FM_PROC_NOW_MS=
+_fm_proc_now_ms() {
+  local now
+  _FM_PROC_NOW_MS=
+  now=${FM_PROC_NOW_OVERRIDE:-}
+  if [ -n "$now" ]; then
+    case "$now" in
+      *[!0-9]*) return 1 ;;
+    esac
+    _FM_PROC_NOW_MS=$now
+    return 0
+  fi
+  now=${EPOCHREALTIME:-}
+  if [ -n "$now" ]; then
+    _fm_decimal_ms "$now" || return 1
+    _FM_PROC_NOW_MS=$_FM_DECIMAL_MS
+    return 0
+  fi
+  now=$(date +%s%N 2>/dev/null) || return 1
+  case "$now" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "${#now}" -ge 16 ] || return 1
+  _FM_PROC_NOW_MS=$(( now / 1000000 ))
+}
+
+# _fm_proc_createtime <proc_root> <starttime-ticks>: sets _FM_PROC_CREATETIME to
+# the whole second in which the process was created, or returns 1 so the caller
+# can fall back to the raw field 22 it replaces.
+#
+# MSYS has no boot timestamp of its own. It derives the origin as `now - uptime`
+# at every read and anchors /proc/<pid>/stat field 22 to that derived origin, so
+# a clock step of D raises the origin by D and lowers field 22 by exactly D
+# (docs/windows/measurement.md row 25). Re-adding the origin at FULL precision
+# cancels the step exactly, whatever its size, because uptime does not move.
+# /proc/stat's own btime cannot serve as that origin: it is truncated to whole
+# seconds while field 22 carries milliseconds, so their sum still shifts by a
+# second on a FRACTIONAL step - the ordinary shape of an NTP correction.
+#
+# The single floor is applied to the summed milliseconds, so the only residual
+# is read jitter: /proc/uptime publishes centiseconds, and the two clocks are
+# sampled a moment apart, so the sum lands up to roughly 15 ms high. That error
+# is persistent PER PROCESS rather than random per read. Which side of a whole
+# second the sum falls on is decided by where the process's true creation
+# instant sits, so a process created within about 15 ms of a second boundary
+# straddles it: two readers can record that one process a second apart, and they
+# keep doing so for its whole life rather than once. Its every health check is
+# then a coin toss - a live watcher treated as dead and re-armed until the next
+# arm re-records the identity. That jitter stays a false mismatch, never a false
+# match. Removing it entirely needs either a tolerance at the equality sites
+# that compare these strings or Win32's own creation time, which carries the
+# sub-second digits /proc never publishes.
+#
+# The whole second the key records costs something separate from that jitter,
+# and in the other direction: MSYS reports CLK_TCK as 1000, so the raw field 22
+# this replaced distinguished creation instants a millisecond apart, while this
+# key cannot tell apart two processes created inside the same second. The window
+# in which a REUSED pid compares equal to the recorded identity therefore widens
+# from about a millisecond to a second. cmdline-hex is what keeps that rare: the
+# reuse must also relaunch a byte-identical command line, which for a watcher
+# means a watcher for the same home, so the process a stale lock then matches is
+# itself the live watcher the lock is meant to name.
+_FM_PROC_CREATETIME=
+_fm_proc_createtime() {
+  local proc_root=$1 ticks=$2
+  _FM_PROC_CREATETIME=
+  _fm_proc_uptime_ms "$proc_root" || return 1
+  _fm_proc_now_ms || return 1
+  [ -n "$_FM_CLK_TCK" ] || _fm_clk_tck_probe || return 1
+  _FM_PROC_CREATETIME=$(( (_FM_PROC_NOW_MS - _FM_PROC_UPTIME_MS + ticks * 1000 / _FM_CLK_TCK) / 1000 ))
+}
+
 fm_pid_identity() {
   local pid=$1 out proc_root stat_line starttime cmdline_hex identity_key
   local -a stat_fields
@@ -42,10 +199,12 @@ fm_pid_identity() {
     ''|*[!0-9]*) return 1 ;;
   esac
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  # Prefer a Linux-compatible /proc when present: stat field 22 (starttime, clock ticks since boot) is
-  # immune to the wall-clock steps that re-render the ps lstart fallback's date
-  # (observed as WSL2 btime drift) and would evict a live watcher; combining the
-  # full NUL-separated cmdline keeps PID reuse a mismatch even on a tick collision.
+  # Prefer a Linux-compatible /proc when present: it survives the wall-clock steps
+  # that re-render the ps lstart fallback's date (observed as WSL2 btime drift) and
+  # would evict a live watcher, and combining the full NUL-separated cmdline keeps
+  # PID reuse a mismatch even on a start-time collision. What is read out of it
+  # differs by dialect - see the branch below - because only on Linux is stat field
+  # 22 (starttime, clock ticks since boot) a step-invariant number on its own.
   # Git Bash/MSYS exposes these compatible files but its Cygwin ps rejects the
   # portable fallback's -o fields, so capability detection must not key on uname.
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
@@ -57,10 +216,30 @@ fm_pid_identity() {
     case "$starttime" in
       ''|*[!0-9]*) return 1 ;;
     esac
+    identity_key=linux-starttime
+    if [ "$_FM_UNAME" != Linux ]; then
+      # Only Linux counts field 22 from an origin fixed at boot, so only Linux
+      # can use the raw field: see _fm_proc_createtime for what the other
+      # dialect records instead and why. When the clock, uptime or CLK_TCK
+      # cannot be read, the raw field is still the answer, under the
+      # proc-starttime key this dialect carried before the creation time
+      # existed. The ps fallback below cannot be the safety net for that state:
+      # MSYS is the only platform this branch exists for and its Cygwin ps
+      # rejects the -o fields, so reaching it would report no identity at all -
+      # and every caller compares identities for EQUALITY, so such a host would
+      # fail every comparison for the rest of its life and treat a live watcher
+      # as dead on every turn. The cost is that proc-starttime moves with a
+      # wall-clock step, which is exactly what proc-createtime buys, so it is a
+      # degraded answer taken only when the creation origin is unreadable.
+      if _fm_proc_createtime "$proc_root" "$starttime"; then
+        identity_key=proc-createtime
+        starttime=$_FM_PROC_CREATETIME
+      else
+        identity_key=proc-starttime
+      fi
+    fi
     cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
     [ -n "$cmdline_hex" ] || return 1
-    identity_key=proc-starttime
-    [ "$_FM_UNAME" != Linux ] || identity_key=linux-starttime
     printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
     return 0
   fi

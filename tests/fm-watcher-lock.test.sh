@@ -1023,6 +1023,8 @@ SH
   pass "fm_pid_identity is locale-invariant across LC_ALL/LC_TIME"
 }
 
+FAKE_PROC_CMDLINE_HEX=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700
+
 write_fake_proc_identity() {
   local proc_root=$1 pid=$2 starttime=$3
   mkdir -p "$proc_root/$pid"
@@ -1030,35 +1032,249 @@ write_fake_proc_identity() {
   printf 'bash\0/path with spaces/fm-watch.sh\0--flag\0' > "$proc_root/$pid/cmdline"
 }
 
-test_proc_pid_identity_ignores_wall_clock_and_detects_pid_reuse() {
-  local dir state proc_root pid identity_key before after_time_jump after_pid_reuse
-  dir=$(make_case proc-pid-identity)
+# write_fake_proc_stat <proc_root> <btime>
+# The system-wide file. Its btime is written once at boot on Linux and derived
+# as `now - uptime` at every read on MSYS (measurement.md row 25). Neither
+# dialect may read it for an identity: it is truncated to whole seconds while
+# field 22 carries milliseconds, so a btime-anchored sum still moves a second on
+# a FRACTIONAL clock step. It is written here so the fake /proc stays a faithful
+# model of the machine, and so the fractional case below is the counterexample
+# to that arithmetic rather than a fixture that merely omits it.
+write_fake_proc_stat() {
+  local proc_root=$1 btime=$2
+  mkdir -p "$proc_root"
+  {
+    printf 'cpu 957196696 0 891910304 12956040558\n'
+    printf 'cpu0 28768125 0 36727421 859826281\n'
+    printf 'btime %s\n' "$btime"
+    printf 'processes 0\n'
+  } > "$proc_root/stat"
+}
+
+# write_fake_proc_uptime <proc_root> <uptime-ms>
+# The monotonic clock the MSYS dialect anchors to. Real /proc/uptime publishes
+# centiseconds, so the fixture rounds to them too - that quantization is the one
+# residual the identity carries and a finer fixture would hide it.
+write_fake_proc_uptime() {
+  local proc_root=$1 ms=$2
+  mkdir -p "$proc_root"
+  printf '%s.%02d 1.00\n' "$(( ms / 1000 ))" "$(( ms % 1000 / 10 ))" > "$proc_root/uptime"
+}
+
+# fake_uname <fakebin> <answer>
+# fm_pid_identity picks its /proc dialect off `uname -s`, which bin/fm-proc-lib.sh
+# resolves once at source time, so a PATH stub runs BOTH dialects from any host
+# rather than leaving each one assertable on only one machine.
+fake_uname() {
+  local fakebin=$1 answer=$2
+  mkdir -p "$fakebin"
+  cat > "$fakebin/uname" <<SH
+#!/usr/bin/env bash
+printf '%s\n' '$answer'
+SH
+  chmod +x "$fakebin/uname"
+}
+
+# proc_identity <fakebin> <proc_root> <state> <pid> [now-ms]
+# The wall clock is a fixture input too, through the seam beside
+# FM_PROC_ROOT_OVERRIDE, so a step is a value this suite writes rather than a
+# machine state it would have to wait for or provoke.
+proc_identity() {
+  PATH="$1:$PATH" FM_PROC_ROOT_OVERRIDE="$2" FM_STATE_OVERRIDE="$3" \
+    FM_PROC_NOW_OVERRIDE="${5:-}" \
+    bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$4"
+}
+
+test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse() {
+  local dir state proc_root fakebin pid before after_time_jump after_pid_reuse
+  dir=$(make_case linux-proc-pid-identity)
   state="$dir/state"
   proc_root="$dir/proc"
+  fakebin="$dir/uname-linux"
   pid=4242
-  identity_key=proc-starttime
-  [ "$(uname)" != Linux ] || identity_key=linux-starttime
-  mkdir -p "$proc_root"
-  printf 'btime 1784094040\n' > "$proc_root/stat"
+  fake_uname "$fakebin" Linux
+  write_fake_proc_stat "$proc_root" 1784094040
   write_fake_proc_identity "$proc_root" "$pid" 987654
 
-  before=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+  before=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
     || fail "could not read initial fake Linux process identity"
-  printf 'btime 1784094016\n' > "$proc_root/stat"
-  after_time_jump=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+  write_fake_proc_stat "$proc_root" 1784094016
+  after_time_jump=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
     || fail "could not re-read fake Linux process identity after btime change"
 
   [ "$after_time_jump" = "$before" ] \
-    || fail "/proc process identity changed with btime (before '$before', after '$after_time_jump')"
-  [ "$before" = "$identity_key=987654 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700" ] \
-    || fail "/proc process identity did not combine parsed starttime field 22 with the full cmdline ('$before')"
-  pass "/proc process identity ignores simulated btime changes"
+    || fail "Linux process identity changed with btime (before '$before', after '$after_time_jump')"
+  [ "$before" = "linux-starttime=987654 cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "Linux process identity did not combine parsed starttime field 22 with the full cmdline ('$before')"
+  pass "Linux process identity is field 22 alone and ignores btime"
 
   write_fake_proc_identity "$proc_root" "$pid" 987655
-  after_pid_reuse=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
-    || fail "could not read reused fake /proc pid identity"
-  [ "$after_pid_reuse" != "$before" ] || fail "/proc process identity missed changed starttime for reused pid"
-  pass "/proc process identity detects pid reuse"
+  after_pid_reuse=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "could not read reused fake Linux pid identity"
+  [ "$after_pid_reuse" != "$before" ] || fail "Linux process identity missed changed starttime for reused pid"
+  pass "Linux process identity detects pid reuse"
+}
+
+# MSYS derives its boot origin as `now - uptime` at every read and anchors field
+# 22 to that derived origin, so a step of D raises the origin by D and lowers
+# field 22 by exactly D. Uptime itself is monotonic, so the fixture holds it
+# still and moves the wall clock, which is what a real step does.
+#
+# ticks_for <ms> renders a millisecond offset in the host's own clock ticks, so
+# both a CLK_TCK of 1000 (this MSYS userland) and of 100 (Linux) are described
+# rather than one of them assumed.
+MSYS_FIXTURE_UPTIME_MS=1000000
+MSYS_FIXTURE_BOOT_MS=1784094040000
+MSYS_FIXTURE_START_MS=987054
+
+ticks_for() {  # <ms>
+  printf '%s\n' "$(( $1 * MSYS_FIXTURE_CLK_TCK / 1000 ))"
+}
+
+# Write the whole fake machine at one wall-clock instant: the monotonic uptime,
+# the truncated btime a reader would see, and field 22 as MSYS would render it.
+write_fake_msys_machine() {  # <proc_root> <pid> <boot-ms> <creation-ms>
+  local proc_root=$1 pid=$2 boot_ms=$3 creation_ms=$4
+  write_fake_proc_uptime "$proc_root" "$MSYS_FIXTURE_UPTIME_MS"
+  write_fake_proc_stat "$proc_root" "$(( boot_ms / 1000 ))"
+  write_fake_proc_identity "$proc_root" "$pid" "$(ticks_for "$(( creation_ms - boot_ms ))")"
+}
+
+test_msys_proc_pid_identity_survives_a_clock_step() {
+  local dir state proc_root fakebin pid creation_ms now_ms expected
+  local before after_step after_fractional_step after_pid_reuse
+  dir=$(make_case msys-proc-pid-identity)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys"
+  pid=4242
+  MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
+  case "$MSYS_FIXTURE_CLK_TCK" in
+    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$MSYS_FIXTURE_CLK_TCK')" ;;
+  esac
+  creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_START_MS ))
+  now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
+  expected="proc-createtime=$(( creation_ms / 1000 )) cmdline-hex=$FAKE_PROC_CMDLINE_HEX"
+
+  before=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" "$now_ms") \
+    || fail "could not read initial fake MSYS process identity"
+  [ "$before" = "$expected" ] \
+    || fail "MSYS process identity is not the absolute creation time (got '$before', want '$expected')"
+
+  write_fake_msys_machine "$proc_root" "$pid" "$(( MSYS_FIXTURE_BOOT_MS + 3000 ))" "$creation_ms"
+  after_step=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" "$(( now_ms + 3000 ))") \
+    || fail "could not re-read fake MSYS process identity after a clock step"
+  [ "$after_step" = "$before" ] \
+    || fail "MSYS process identity changed across a 3s clock step (before '$before', after '$after_step')"
+
+  # A real NTP correction is fractional (the measured one was 1.041s, row 25),
+  # and this is the phase where a btime-anchored sum breaks: btime rises by one
+  # truncated second while field 22 falls by two, so that reading would answer
+  # one second early here and evict a live watcher. The full-precision origin
+  # has no such seam.
+  write_fake_msys_machine "$proc_root" "$pid" "$(( MSYS_FIXTURE_BOOT_MS + 1250 ))" "$creation_ms"
+  after_fractional_step=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" "$(( now_ms + 1250 ))") \
+    || fail "could not re-read fake MSYS process identity after a fractional clock step"
+  [ "$after_fractional_step" = "$before" ] \
+    || fail "MSYS process identity changed across a 1.25s clock step (before '$before', after '$after_fractional_step')"
+  pass "MSYS process identity survives a whole-second and a fractional wall-clock step"
+
+  # Second granularity is what that invariance costs, so a reused pid is told
+  # apart once it starts in a later second; cmdline-hex covers the rest.
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$(( creation_ms + 1000 ))"
+  after_pid_reuse=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" "$now_ms") \
+    || fail "could not read reused fake MSYS pid identity"
+  [ "$after_pid_reuse" != "$before" ] \
+    || fail "MSYS process identity missed a later creation time for a reused pid"
+  pass "MSYS process identity detects pid reuse"
+}
+
+# A non-Linux /proc that cannot supply the origin - no readable uptime, no
+# CLK_TCK on a curated PATH, no usable clock - must still answer, with the raw
+# field 22 under the proc-starttime key this dialect carried before the creation
+# time existed. The portable ps fallback cannot be that answer on the only
+# platform this branch exists for: Cygwin ps rejects `-o lstart= -o command=`,
+# so the stub below fails exactly the way the real one does on this host. Every
+# caller compares identities for equality, so no identity at all is not a slow
+# path: it is fm_watcher_lock_matches_pid answering "no" for the rest of the
+# host's life, fm_watcher_healthy permanently false, and a live watcher re-armed
+# every turn.
+test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable() {
+  local dir state proc_root fakebin pid identity again
+  dir=$(make_case msys-proc-identity-fallback)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-nouptime"
+  pid=4242
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+printf 'ps: unknown option -- o\n' >&2
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+  write_fake_proc_stat "$proc_root" 1784094040
+  write_fake_proc_identity "$proc_root" "$pid" 987054
+
+  identity=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "a non-Linux /proc with no uptime reported no identity at all"
+  [ "$identity" = "proc-starttime=987054 cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "a non-Linux /proc with no uptime did not keep the raw field 22 ('$identity')"
+  again=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid") \
+    || fail "a second read of the same fake process reported no identity"
+  [ "$again" = "$identity" ] \
+    || fail "two reads of one unreadable-origin process disagreed ('$identity' then '$again')"
+  pass "MSYS process identity keeps the raw starttime when the creation origin is unreadable"
+}
+
+# The wall clock is read from bash's EPOCHREALTIME, and `date +%s%N` covers a
+# bash too old to publish it. A `date` that silently drops %N answers with a
+# bare epoch, and taking that as nanoseconds divides the origin by a million:
+# the value is stable, so every identity still compares equal and nothing
+# reports an error, while the origin has stopped tracking the clock and a step
+# once again evicts a live watcher. The identity must refuse such an answer and
+# keep the raw field 22 instead, so this stages exactly that `date` with the
+# whole rest of the machine readable.
+test_msys_proc_pid_identity_rejects_a_nanosecondless_date() {
+  local dir state proc_root fakebin pid identity
+  dir=$(make_case msys-proc-identity-seconds-only-date)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-secondsdate"
+  pid=4242
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  cat > "$fakebin/date" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 1784095040
+SH
+  chmod +x "$fakebin/date"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+printf 'ps: unknown option -- o\n' >&2
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+  MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
+  case "$MSYS_FIXTURE_CLK_TCK" in
+    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$MSYS_FIXTURE_CLK_TCK')" ;;
+  esac
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" \
+    "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_START_MS ))"
+
+  # EPOCHREALTIME is unset in the reading shell so the `date` branch is the one
+  # under test; without the seam the override would answer before either.
+  identity=$(PATH="$fakebin:$PATH" FM_PROC_ROOT_OVERRIDE="$proc_root" \
+    FM_STATE_OVERRIDE="$state" \
+    bash -c 'unset EPOCHREALTIME; . "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+    || fail "a seconds-only date reported no identity at all"
+  case "$identity" in
+    proc-createtime=*) fail "a seconds-only date was accepted as a creation origin ('$identity')" ;;
+  esac
+  [ "$identity" = "proc-starttime=$(ticks_for "$MSYS_FIXTURE_START_MS") cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "a seconds-only date did not keep the raw field 22 ('$identity')"
+  pass "MSYS process identity refuses a date that answers without nanoseconds"
 }
 
 test_stale_watch_reclaim_publishes_before_clear() {
@@ -1118,7 +1334,7 @@ test_msys_pid_identity_uses_proc() {
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
   case "$identity" in
-    proc-starttime=*" cmdline-hex="*) ;;
+    proc-createtime=*" cmdline-hex="*) ;;
     *) fail "MSYS process identity did not use compatible /proc fields ('$identity')" ;;
   esac
   pass "MSYS process identity uses compatible /proc fields"
@@ -1126,7 +1342,10 @@ test_msys_pid_identity_uses_proc() {
 
 test_singleton_start
 test_pid_identity_is_locale_invariant
-test_proc_pid_identity_ignores_wall_clock_and_detects_pid_reuse
+test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
+test_msys_proc_pid_identity_survives_a_clock_step
+test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable
+test_msys_proc_pid_identity_rejects_a_nanosecondless_date
 test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed
 test_stale_watch_reclaim_publishes_before_clear
