@@ -943,8 +943,10 @@ const waitFor = async (predicate, message) => {
   throw new Error(message);
 };
 const alive = (pid) => {
-  try { process.kill(Number(pid), 0); } catch { return false; }
-  // Advisory only: MSYS ps rejects -o and has no zombie state, so kill(0) already answered there, matching fm_test_stat's MSYS branch in tests/lib.sh.
+  // The pids handed in are MSYS pids from the bash side while Node on Windows resolves Win32 pids, so bin/fm-proc-lib.sh's fm_pid_alive owns liveness in both spaces.
+  const owner = spawnSync("bash",
+    ["-c", '. "$1/bin/fm-proc-lib.sh" && fm_pid_alive "$2"', "_", process.env.ROOT, String(pid)]);
+  if (owner.status !== 0) return false;
   const status = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
   if (status.error || status.status !== 0) return true;
   return !status.stdout.trim().startsWith("Z");
