@@ -271,7 +271,9 @@ test_recorded_process_identity_cleanup_is_exact() {
   [ "$target_record" = "$target_pid" ] && [ "$control_record" = "$control_pid" ] \
     || fail "recorded process identity changed before cleanup"
   live_command=$(fm_test_comm "$target_record" 2>/dev/null | tr -d '[:space:]')
-  case "$live_command" in sleep) ;; *) fail "recorded target pid no longer belongs to the expected child" ;; esac
+  # Linux answers the bare name and an MSYS /proc answers the executable path,
+  # so match the basename: the question is only whether it is still the sleep.
+  case "${live_command##*/}" in sleep) ;; *) fail "recorded target pid no longer belongs to the expected child (comm='$live_command')" ;; esac
   kill -TERM "$target_record"
   wait "$target_record" 2>/dev/null || true
   kill -0 "$target_record" 2>/dev/null && fail "exact target pid survived cleanup"
