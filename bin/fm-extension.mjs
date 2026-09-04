@@ -933,6 +933,8 @@ async function capturedProcessOutput(command, args, maxBytes = 8192) {
   return Buffer.concat(chunks).toString("utf8").trim();
 }
 
+// The shell owner of every identity comparison is fm_pid_identity_equal in
+// bin/fm-wake-lib.sh; this function is that owner's documented exclusion.
 async function pidIdentity(pid) {
   if (process.platform === "linux") {
     const stat = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => fail("process-identity-uncertain", "cannot inspect extension process identity"));

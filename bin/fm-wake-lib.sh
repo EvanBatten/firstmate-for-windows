@@ -334,6 +334,13 @@ fm_pid_identity() {
 # strings for it. Every other dialect IS exact and stays compared byte for
 # byte.
 #
+# The one exclusion is bin/fm-extension.mjs, which computes and byte-compares
+# its own identities. On Linux and macOS every dialect it can meet is exact,
+# so its comparison agrees with this one; on Windows it runs under native
+# node, cannot read the MSYS /proc, and reports process-identity-uncertain
+# rather than a verdict. Folding it into this owner needs a native-node-to-MSYS
+# bridge and is a follow-up.
+#
 # 100 ms is a bound, not headroom. One reader's error is at most the 10 ms
 # /proc/uptime centisecond truncation plus 1 ms of tick truncation plus half
 # the 10 ms spread budget its wall-clock reads are held to, so two readers of
