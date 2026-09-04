@@ -944,8 +944,10 @@ const waitFor = async (predicate, message) => {
 };
 const alive = (pid) => {
   try { process.kill(Number(pid), 0); } catch { return false; }
+  // Advisory only: MSYS ps rejects -o and has no zombie state, so kill(0) already answered there, matching fm_test_stat's MSYS branch in tests/lib.sh.
   const status = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
-  return status.status === 0 && !status.stdout.trim().startsWith("Z");
+  if (status.error || status.status !== 0) return true;
+  return !status.stdout.trim().startsWith("Z");
 };
 const ctx = (sessionId) => ({
   sessionManager: {

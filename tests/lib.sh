@@ -298,6 +298,10 @@ SH
 # scope. It sources bin/fm-proc-lib.sh by absolute path instead
 # (`. "$ROOT/bin/fm-proc-lib.sh"`, $ROOT being exported above) and calls
 # fm_proc_ppid/fm_proc_pgid directly.
+#
+# A Node fixture (tests/fm-sessionstart-nudge.test.sh's alive()) cannot call
+# these either, so it asks process.kill(pid, 0) and treats `ps -o stat=` as
+# advisory, for the same reason fm_test_stat's MSYS branch gives below.
 
 # fm_test_ppid <pid>: the parent pid, the same answer `ps -o ppid=` gives.
 fm_test_ppid() {
