@@ -270,7 +270,7 @@ test_recorded_process_identity_cleanup_is_exact() {
   control_record=$(cat "$dir/control.pid")
   [ "$target_record" = "$target_pid" ] && [ "$control_record" = "$control_pid" ] \
     || fail "recorded process identity changed before cleanup"
-  live_command=$(ps -p "$target_record" -o comm= 2>/dev/null | tr -d '[:space:]')
+  live_command=$(fm_test_comm "$target_record" 2>/dev/null | tr -d '[:space:]')
   case "$live_command" in sleep) ;; *) fail "recorded target pid no longer belongs to the expected child" ;; esac
   kill -TERM "$target_record"
   wait "$target_record" 2>/dev/null || true

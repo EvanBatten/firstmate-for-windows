@@ -37,9 +37,9 @@ track() { TRACKED_PIDS+=("$1"); }
 
 alive() { kill -0 "$1" 2>/dev/null; }
 
-pgid_of() { ps -p "$1" -o pgid= 2>/dev/null | tr -d '[:space:]'; }
+pgid_of() { fm_test_pgid "$1" 2>/dev/null; }
 
-ppid_of() { ps -p "$1" -o ppid= 2>/dev/null | tr -d '[:space:]'; }
+ppid_of() { fm_test_ppid "$1" 2>/dev/null; }
 
 # Wait up to <seconds> for <pid> to exit; 0 when it did.
 wait_gone() { # <pid> <seconds>

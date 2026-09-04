@@ -289,7 +289,7 @@ SH
 # --- process identity (ps -o replacement) ------------------------------------
 #
 # MSYS `ps` rejects `-o` outright, so a fixture that used to spell
-# `ps -o ppid=/pgid=/stat= -p <pid>` calls these instead. On macOS and Linux
+# `ps -o ppid=/pgid=/comm=/command=/stat= -p <pid>` calls these instead. On macOS and Linux
 # each one runs that literal `ps -o` command, so those platforms see no
 # behavior change at all - only bin/fm-proc-lib.sh's MSYS branch is new.
 #
@@ -307,6 +307,17 @@ fm_test_ppid() {
 # fm_test_pgid <pid>: the process group id, the same answer `ps -o pgid=` gives.
 fm_test_pgid() {
   fm_proc_pgid "$1"
+}
+
+# fm_test_comm <pid>: the command name, the same answer `ps -o comm=` gives.
+fm_test_comm() {
+  fm_proc_comm "$1"
+}
+
+# fm_test_args <pid>: the full argument string, the same answer `ps -o command=`
+# gives on macOS and Linux (`args=` and `command=` are the same column there).
+fm_test_args() {
+  fm_proc_args "$1"
 }
 
 # fm_test_stat <pid>: the same answer `ps -o stat=` gives. Every caller of this

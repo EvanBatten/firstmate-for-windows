@@ -497,7 +497,7 @@ EOF
     run_stage "$home" "$root" start --locked 1 --harvest-pid $$
   generation_one=$(sed -n 's/^generation=//p' "$home/state/.startup-network.status")
 
-  next_owner=$(/bin/ps -o ppid= -p $$ | tr -d ' ')
+  next_owner=$(fm_test_ppid $$)
   printf '%s\n' "$next_owner" > "$home/state/.lock"
   FM_FAKE_HARNESS_PID_OVERRIDE="$next_owner" FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_SLEEP=1 \
     run_stage "$home" "$root" start --locked 1 --harvest-pid $$
@@ -523,7 +523,7 @@ EOF
   done
   [ -s "$log" ] || fail "the mutating sweep never started"
 
-  next_owner=$(/bin/ps -o ppid= -p $$ | tr -d ' ')
+  next_owner=$(fm_test_ppid $$)
   started=$(date +%s)
   rc=0
   out=$(PATH="$root/bin:$PATH" FM_FAKE_HARNESS_PID="$next_owner" \

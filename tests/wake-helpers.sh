@@ -295,7 +295,7 @@ wait_for_exit() {
 is_live_non_zombie() {
   local pid=$1 stat
   kill -0 "$pid" 2>/dev/null || return 1
-  stat=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+  stat=$(fm_test_stat "$pid" 2>/dev/null || true)
   case "$stat" in
     Z*) return 1 ;;
   esac
