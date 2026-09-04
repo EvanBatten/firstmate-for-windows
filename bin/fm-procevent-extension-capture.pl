@@ -48,6 +48,10 @@ if (@ARGV && $ARGV[0] eq 'handoff') {
   }
   my @claim_lines = split(/\n/, $claim_bytes, -1);
   die "invalid claim\n" unless pop(@claim_lines) eq '' && (@claim_lines == 7 || @claim_lines == 12);
+  # The claim identity is the record the shell owner already verified the live
+  # process against, through fm_pid_identity_equal, before this handoff, so
+  # this is an integrity check that the claim file still holds that record and
+  # not a second identity comparison.
   die "claim changed\n" unless $claim_lines[0] eq $claim_home && $claim_lines[1] eq $claim_pid
     && $claim_lines[2] eq $claim_token && $claim_lines[3] eq $claim_identity && $claim_lines[6] eq 'active';
   if (@claim_lines == 12) {

@@ -493,6 +493,7 @@ fm_procevent_claim_acquire_locked() {
     [ "$status" -ne 0 ] || mv -f -- "$tmp" "$claim" || status=1
     if [ "$status" -eq 0 ]; then
       FM_PROCEVENT_CLAIM_TOKEN=$token
+      FM_PROCEVENT_CLAIM_IDENTITY=$identity
       FM_PROCEVENT_CLAIM_REG_IDENTITY=$reg_identity
     fi
   fi
