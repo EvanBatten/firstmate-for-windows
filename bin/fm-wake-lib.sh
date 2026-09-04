@@ -159,37 +159,42 @@ _fm_proc_now_ms() {
 # seconds while field 22 carries milliseconds, so their sum still shifts by a
 # second on a FRACTIONAL step - the ordinary shape of an NTP correction.
 #
-# The single floor is applied to the summed milliseconds, so the only residual
-# is read jitter: /proc/uptime publishes centiseconds, and the two clocks are
-# sampled a moment apart, so the sum lands up to roughly 15 ms high. That error
-# is persistent PER PROCESS rather than random per read. Which side of a whole
-# second the sum falls on is decided by where the process's true creation
-# instant sits, so a process created within about 15 ms of a second boundary
-# straddles it: two readers can record that one process a second apart, and they
-# keep doing so for its whole life rather than once. Its every health check is
-# then a coin toss - a live watcher treated as dead and re-armed until the next
-# arm re-records the identity. That jitter stays a false mismatch, never a false
-# match. Removing it entirely needs either a tolerance at the equality sites
-# that compare these strings or Win32's own creation time, which carries the
-# sub-second digits /proc never publishes.
+# The sum is kept at full millisecond precision - it is NOT floored to a whole
+# second - so the only error it carries is read jitter, and that jitter stays
+# small enough for fm_pid_identity_equal's tolerance to absorb. /proc/uptime
+# publishes centiseconds and the two clocks are sampled a moment apart, and both
+# of those push the sum HIGH by up to roughly 15 ms; tick truncation pushes it
+# low by at most 1 ms. That error is persistent PER PROCESS rather than random
+# per read, because it is fixed by where the process's true creation instant
+# sits relative to the reader's own two clock reads, so two readers can disagree
+# by that much about one process for its whole life. It is why no consumer may
+# compare these strings with `=`: fm_pid_identity_equal directly below is the
+# single owner of that comparison, and the reason it exists.
 #
-# The whole second the key records costs something separate from that jitter,
-# and in the other direction: MSYS reports CLK_TCK as 1000, so the raw field 22
-# this replaced distinguished creation instants a millisecond apart, while this
-# key cannot tell apart two processes created inside the same second. The window
-# in which a REUSED pid compares equal to the recorded identity therefore widens
-# from about a millisecond to a second. cmdline-hex is what keeps that rare: the
-# reuse must also relaunch a byte-identical command line, which for a watcher
-# means a watcher for the same home, so the process a stale lock then matches is
-# itself the live watcher the lock is meant to name.
-_FM_PROC_CREATETIME=
-_fm_proc_createtime() {
+# Recording milliseconds rather than the whole second this key used to carry
+# (issue #17) also keeps the pid-reuse window narrow. MSYS reports CLK_TCK as
+# 1000, so the raw field 22 this replaced distinguished creation instants about
+# a millisecond apart; the whole-second form widened the window in which a
+# REUSED pid compared equal to a recorded identity to a full second. In
+# milliseconds that window is the comparator's tolerance either side of the
+# original's creation instant, so 200 ms. cmdline-hex narrows it further still:
+# the reuse must also relaunch a byte-identical command line, which for a
+# watcher means a watcher for the same home, so the process a stale lock then
+# matches is itself the live watcher the lock is meant to name.
+#
+# The key is `proc-createtime-ms`, and the whole-second `proc-createtime` key it
+# replaces is retired outright with no compatibility shim. A lock recorded by
+# the previous build therefore mismatches exactly once, at upgrade, and is
+# reclaimed and re-armed - the same one-time cost the move from `proc-starttime`
+# to `proc-createtime` already paid.
+_FM_PROC_CREATETIME_MS=
+_fm_proc_createtime_ms() {
   local proc_root=$1 ticks=$2
-  _FM_PROC_CREATETIME=
+  _FM_PROC_CREATETIME_MS=
   _fm_proc_uptime_ms "$proc_root" || return 1
   _fm_proc_now_ms || return 1
   [ -n "$_FM_CLK_TCK" ] || _fm_clk_tck_probe || return 1
-  _FM_PROC_CREATETIME=$(( (_FM_PROC_NOW_MS - _FM_PROC_UPTIME_MS + ticks * 1000 / _FM_CLK_TCK) / 1000 ))
+  _FM_PROC_CREATETIME_MS=$(( _FM_PROC_NOW_MS - _FM_PROC_UPTIME_MS + ticks * 1000 / _FM_CLK_TCK ))
 }
 
 fm_pid_identity() {
@@ -219,7 +224,7 @@ fm_pid_identity() {
     identity_key=linux-starttime
     if [ "$_FM_UNAME" != Linux ]; then
       # Only Linux counts field 22 from an origin fixed at boot, so only Linux
-      # can use the raw field: see _fm_proc_createtime for what the other
+      # can use the raw field: see _fm_proc_createtime_ms for what the other
       # dialect records instead and why. When the clock, uptime or CLK_TCK
       # cannot be read, the raw field is still the answer, under the
       # proc-starttime key this dialect carried before the creation time
@@ -229,11 +234,14 @@ fm_pid_identity() {
       # and every caller compares identities for EQUALITY, so such a host would
       # fail every comparison for the rest of its life and treat a live watcher
       # as dead on every turn. The cost is that proc-starttime moves with a
-      # wall-clock step, which is exactly what proc-createtime buys, so it is a
-      # degraded answer taken only when the creation origin is unreadable.
-      if _fm_proc_createtime "$proc_root" "$starttime"; then
-        identity_key=proc-createtime
-        starttime=$_FM_PROC_CREATETIME
+      # wall-clock step, which is exactly what proc-createtime-ms buys, so it is
+      # a degraded answer taken only when the creation origin is unreadable, and
+      # fm_pid_identity_equal compares it byte-exactly for the same reason: it
+      # is a raw tick count, not a clock reading, so it carries no jitter for a
+      # tolerance to absorb and a difference in it is a real difference.
+      if _fm_proc_createtime_ms "$proc_root" "$starttime"; then
+        identity_key=proc-createtime-ms
+        starttime=$_FM_PROC_CREATETIME_MS
       else
         identity_key=proc-starttime
       fi
@@ -249,6 +257,58 @@ fm_pid_identity() {
   out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+}
+
+# The single owner of every comparison of two fm_pid_identity strings. Nothing
+# in this repo may compare them with `=` or `!=` directly, because one of the
+# dialects above is not exact: `proc-createtime-ms` is a clock reading carrying
+# up to about 15 ms of per-reader jitter (see _fm_proc_createtime_ms), so a
+# recorder and a checker reading the same live process can legitimately write
+# two different strings for it. Every other dialect IS exact and stays compared
+# byte for byte.
+#
+# 100 ms, rather than 15: the measured residual is at most about 15 ms - the
+# /proc/uptime centisecond truncation plus the gap between the uptime read and
+# the EPOCHREALTIME read, both of which push the sum high, against at most 1 ms
+# of tick truncation the other way - and the rest is headroom for a reader that
+# gets preempted between its own two clock reads. It is a constant and not an
+# environment knob, deliberately: the tolerance is a property of the measured
+# clock, and its tests build the strings they compare rather than turning it
+# down.
+#
+# What the tolerance costs is stated with the key it guards: a REUSED pid that
+# also relaunches a byte-identical command line compares equal within 100 ms
+# either side of the original's creation instant, against a full second under
+# the whole-second key this replaces and about a millisecond under the raw field
+# 22 before that. Milliseconds plus this tolerance is therefore strictly tighter
+# than what it replaces while also ending the false mismatches.
+#
+# Bash arithmetic and parameter expansion only, no external process: this runs
+# inside the 0.2s confirm and 0.5s attach polls.
+FM_PID_IDENTITY_TOLERANCE_MS=100
+fm_pid_identity_equal() {  # <current> <recorded>
+  local current=$1 recorded=$2 current_rest recorded_rest current_ms recorded_ms delta
+  [ -n "$current" ] && [ -n "$recorded" ] || return 1
+  [ "$current" != "$recorded" ] || return 0
+  # Only the tolerant dialect may differ at all, and only in its value.
+  [ "${current%%=*}" = proc-createtime-ms ] || return 1
+  [ "${recorded%%=*}" = proc-createtime-ms ] || return 1
+  current_rest=${current#*=}
+  recorded_rest=${recorded#*=}
+  current_ms=${current_rest%% *}
+  recorded_ms=${recorded_rest%% *}
+  case "$current_ms" in ''|*[!0-9]*) return 1 ;; esac
+  case "$recorded_ms" in ''|*[!0-9]*) return 1 ;; esac
+  # A value with no space after it leaves the rest unchanged, which then fails
+  # the cmdline-hex prefix below, so a truncated string is never accepted.
+  current_rest=${current_rest#* }
+  recorded_rest=${recorded_rest#* }
+  [ "$current_rest" = "$recorded_rest" ] || return 1
+  case "$current_rest" in cmdline-hex=*) ;; *) return 1 ;; esac
+  case "${current_rest#cmdline-hex=}" in ''|*[!0-9a-f]*) return 1 ;; esac
+  delta=$(( 10#$current_ms - 10#$recorded_ms ))
+  [ "$delta" -ge 0 ] || delta=$(( -delta ))
+  [ "$delta" -le "$FM_PID_IDENTITY_TOLERANCE_MS" ]
 }
 
 fm_path_mtime() {
@@ -290,7 +350,7 @@ fm_watcher_lock_matches_pid() {
   [ "$lock_path" = "$watch_path" ] || return 1
   [ -n "$lock_identity" ] || return 1
   current_identity=$(fm_pid_identity "$pid") || return 1
-  [ "$current_identity" = "$lock_identity" ] || return 1
+  fm_pid_identity_equal "$current_identity" "$lock_identity" || return 1
   FM_WATCHER_MATCHED_IDENTITY=$lock_identity
 }
 
@@ -1299,7 +1359,7 @@ fm_autoarm_claim_open() {  # <state-dir> [grace]
   [ -n "$FM_AUTOARM_IDENTITY" ] || return 1
   current=$(fm_pid_identity "$FM_AUTOARM_OWNER" 2>/dev/null) || return 1
   [ -n "$current" ] || return 1
-  [ "$current" = "$FM_AUTOARM_IDENTITY" ] || return 1
+  fm_pid_identity_equal "$current" "$FM_AUTOARM_IDENTITY" || return 1
   if [ "$(fm_path_age "$epoch")" -ge "$grace" ] \
     && [ "$(fm_path_age "$state/.last-watcher-beat")" -ge "$grace" ]; then
     return 1
@@ -1448,7 +1508,7 @@ fm_autoarm_claim_abandoned() {  # <state-dir> [grace]
   esac
   recorded=$(cat "$lock/pid-identity" 2>/dev/null || true)
   if [ -n "$recorded" ] && current=$(fm_pid_identity "$pid" 2>/dev/null) \
-    && [ -n "$current" ] && [ "$current" != "$recorded" ]; then
+    && [ -n "$current" ] && ! fm_pid_identity_equal "$current" "$recorded"; then
     return 0
   fi
   owner=$(_fm_autoarm_epoch_field "$epoch" owner_pid) || return 1
@@ -1498,7 +1558,7 @@ fm_autoarm_release_abandoned() {  # <state-dir> [grace]
   recorded=$(cat "$lock/pid-identity" 2>/dev/null || true)
   if [ -n "$recorded" ] && fm_pid_alive "$lock_pid" \
     && current=$(fm_pid_identity "$lock_pid" 2>/dev/null) \
-    && [ -n "$current" ] && [ "$current" = "$recorded" ]; then
+    && [ -n "$current" ] && fm_pid_identity_equal "$current" "$recorded"; then
     # A live pid still answering to the recorded identity IS the genuine
     # legacy owner (proven stuck or blocked after a terminal write): retire it
     # before removing its lock, because old-build code cannot re-check

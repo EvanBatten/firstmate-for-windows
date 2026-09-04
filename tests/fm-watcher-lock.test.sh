@@ -1131,6 +1131,39 @@ ticks_for() {  # <ms>
   printf '%s\n' "$(( $1 * MSYS_FIXTURE_CLK_TCK / 1000 ))"
 }
 
+# A process whose creation instant sits a few milliseconds short of a whole
+# second is the shape issue #17 is about. The origin is `now - uptime`, and
+# those two clocks are read a moment apart, so two readers of ONE live process
+# legitimately compute creation times a few milliseconds apart - for that
+# process's whole life, since the error is fixed by where its true creation
+# instant sits rather than redrawn per read. Under the whole-second key the two
+# readings landed in different seconds, and every health check of that watcher
+# was then a coin toss. The strings still differ here, which is the measured
+# jitter and not something the fixture should hide; fm_pid_identity_equal is
+# what makes them name one process again.
+MSYS_FIXTURE_STRADDLE_START_MS=986993
+MSYS_FIXTURE_READ_JITTER_MS=15
+
+# Resolve the host's clock ticks into MSYS_FIXTURE_CLK_TCK. Every MSYS-dialect
+# case needs it, and none may assume it: it is 1000 on this MSYS userland and
+# 100 on Linux.
+msys_fixture_clk_tck() {
+  MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
+  case "$MSYS_FIXTURE_CLK_TCK" in
+    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$MSYS_FIXTURE_CLK_TCK')" ;;
+  esac
+}
+
+# createtime_ms_for <boot-ms> <creation-ms>: the milliseconds a reader will
+# actually compute for that process at that boot. It is not simply
+# <creation-ms>: field 22 is written in the host's own clock ticks, so a host
+# with a CLK_TCK of 100 cannot express the fixture's millisecond offset and the
+# reader gets back a value up to 10 ms early. The whole-second key hid that
+# truncation; a millisecond key states it.
+createtime_ms_for() {
+  printf '%s\n' "$(( $1 + $(ticks_for "$(( $2 - $1 ))") * 1000 / MSYS_FIXTURE_CLK_TCK ))"
+}
+
 # Write the whole fake machine at one wall-clock instant: the monotonic uptime,
 # the truncated btime a reader would see, and field 22 as MSYS would render it.
 write_fake_msys_machine() {  # <proc_root> <pid> <boot-ms> <creation-ms>
@@ -1148,15 +1181,12 @@ test_msys_proc_pid_identity_survives_a_clock_step() {
   proc_root="$dir/proc"
   fakebin="$dir/uname-msys"
   pid=4242
-  MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
-  case "$MSYS_FIXTURE_CLK_TCK" in
-    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$MSYS_FIXTURE_CLK_TCK')" ;;
-  esac
+  msys_fixture_clk_tck
   creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_START_MS ))
   now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
   fake_uname "$fakebin" MINGW64_NT-10.0-26200
   write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
-  expected="proc-createtime=$(( creation_ms / 1000 )) cmdline-hex=$FAKE_PROC_CMDLINE_HEX"
+  expected="proc-createtime-ms=$(createtime_ms_for "$MSYS_FIXTURE_BOOT_MS" "$creation_ms") cmdline-hex=$FAKE_PROC_CMDLINE_HEX"
 
   before=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" "$now_ms") \
     || fail "could not read initial fake MSYS process identity"
@@ -1256,10 +1286,7 @@ printf 'ps: unknown option -- o\n' >&2
 exit 1
 SH
   chmod +x "$fakebin/ps"
-  MSYS_FIXTURE_CLK_TCK=$(getconf CLK_TCK 2>/dev/null) || MSYS_FIXTURE_CLK_TCK=
-  case "$MSYS_FIXTURE_CLK_TCK" in
-    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$MSYS_FIXTURE_CLK_TCK')" ;;
-  esac
+  msys_fixture_clk_tck
   write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" \
     "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_START_MS ))"
 
@@ -1270,11 +1297,327 @@ SH
     bash -c 'unset EPOCHREALTIME; . "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
     || fail "a seconds-only date reported no identity at all"
   case "$identity" in
-    proc-createtime=*) fail "a seconds-only date was accepted as a creation origin ('$identity')" ;;
+    proc-createtime-ms=*) fail "a seconds-only date was accepted as a creation origin ('$identity')" ;;
   esac
   [ "$identity" = "proc-starttime=$(ticks_for "$MSYS_FIXTURE_START_MS") cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
     || fail "a seconds-only date did not keep the raw field 22 ('$identity')"
   pass "MSYS process identity refuses a date that answers without nanoseconds"
+}
+
+# identity_equal <state> <current> <recorded>: the comparator every consumer of
+# fm_pid_identity now routes through, exercised through the same public
+# interface they use.
+identity_equal() {
+  local state=$1
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity_equal "$2" "$3"' _ "$LIB" "$2" "$3"
+}
+
+assert_identity_equal() {  # <state> <label> <current> <recorded>
+  identity_equal "$1" "$3" "$4" && return 0
+  fail "$2: two strings that name one process were rejected ('$3' against '$4')"
+}
+
+assert_identity_differs() {  # <state> <label> <current> <recorded>
+  identity_equal "$1" "$3" "$4" || return 0
+  fail "$2: two strings that name different processes were accepted ('$3' against '$4')"
+}
+
+test_msys_proc_pid_identity_straddling_a_second_is_one_process() {
+  local dir state proc_root fakebin pid creation_ms now_ms early late early_ms late_ms
+  dir=$(make_case msys-proc-identity-straddle)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-straddle"
+  pid=4242
+  msys_fixture_clk_tck
+  creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))
+  now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
+
+  early=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" "$now_ms") \
+    || fail "could not read the straddling process from the earlier reader"
+  late=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" \
+    "$(( now_ms + MSYS_FIXTURE_READ_JITTER_MS ))") \
+    || fail "could not read the straddling process from the later reader"
+  [ "$early" != "$late" ] \
+    || fail "the fixture no longer reproduces read jitter, so this case proves nothing ('$early')"
+  case "$early$late" in
+    proc-createtime-ms=*proc-createtime-ms=*) ;;
+    *) fail "the straddling reads are not the millisecond creation-time dialect ('$early' and '$late')" ;;
+  esac
+  early_ms=${early#proc-createtime-ms=}
+  early_ms=${early_ms%% *}
+  late_ms=${late#proc-createtime-ms=}
+  late_ms=${late_ms%% *}
+  [ $(( early_ms / 1000 )) -ne $(( late_ms / 1000 )) ] \
+    || fail "the two readings did not straddle a whole second ($early_ms and $late_ms), so this case proves nothing"
+  pass "two readers of one straddling process record it milliseconds apart across a second boundary"
+
+  identity_equal "$state" "$early" "$late" \
+    || fail "the later reader rejected the earlier reader's record of the same live process ('$early' against '$late')"
+  identity_equal "$state" "$late" "$early" \
+    || fail "the earlier reader rejected the later reader's record of the same live process ('$late' against '$early')"
+  pass "a straddling process still compares as one process in both directions"
+}
+
+# The tolerance exists for exactly one dialect and one field. Everything else -
+# a different command line, a reused pid, a step-sensitive raw tick count, the
+# retired whole-second key, a malformed string - stays byte-exact, because for
+# those a difference is a real difference rather than measured clock jitter.
+test_pid_identity_equal_is_tolerant_only_where_the_clock_is() {
+  local dir state hex other_hex base
+  dir=$(make_case pid-identity-equal)
+  state="$dir/state"
+  mkdir -p "$state"
+  hex=$FAKE_PROC_CMDLINE_HEX
+  other_hex="${hex%??}61"
+  base=1784095027054
+
+  assert_identity_equal "$state" "identical" \
+    "proc-createtime-ms=$base cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_equal "$state" "at the tolerance, late" \
+    "proc-createtime-ms=$(( base + 100 )) cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_equal "$state" "at the tolerance, early" \
+    "proc-createtime-ms=$(( base - 100 )) cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "one past the tolerance, late" \
+    "proc-createtime-ms=$(( base + 101 )) cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "one past the tolerance, early" \
+    "proc-createtime-ms=$(( base - 101 )) cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  pass "the identity comparator absorbs read jitter up to its stated tolerance and no further"
+
+  assert_identity_differs "$state" "pid reuse a second later" \
+    "proc-createtime-ms=$(( base + 1000 )) cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "same instant, different command line" \
+    "proc-createtime-ms=$base cmdline-hex=$other_hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  pass "the identity comparator still tells a reused pid and a different command line apart"
+
+  assert_identity_equal "$state" "identical linux-starttime" \
+    "linux-starttime=987654 cmdline-hex=$hex" "linux-starttime=987654 cmdline-hex=$hex"
+  assert_identity_differs "$state" "linux-starttime one tick apart" \
+    "linux-starttime=987655 cmdline-hex=$hex" "linux-starttime=987654 cmdline-hex=$hex"
+  assert_identity_equal "$state" "identical proc-starttime" \
+    "proc-starttime=987054 cmdline-hex=$hex" "proc-starttime=987054 cmdline-hex=$hex"
+  assert_identity_differs "$state" "proc-starttime one tick apart" \
+    "proc-starttime=987055 cmdline-hex=$hex" "proc-starttime=987054 cmdline-hex=$hex"
+  assert_identity_equal "$state" "identical ps lstart" \
+    "Mon Jan  5 12:00:00 2026 /bin/bash /path/fm-watch.sh" \
+    "Mon Jan  5 12:00:00 2026 /bin/bash /path/fm-watch.sh"
+  assert_identity_differs "$state" "ps lstart one second apart" \
+    "Mon Jan  5 12:00:01 2026 /bin/bash /path/fm-watch.sh" \
+    "Mon Jan  5 12:00:00 2026 /bin/bash /path/fm-watch.sh"
+  pass "the identity comparator keeps every exact dialect byte-exact"
+
+  # The retired whole-second key has no compatibility shim: a lock written by
+  # the previous build mismatches once, at upgrade, and is reclaimed - the same
+  # one-time cost the move to proc-createtime already paid.
+  assert_identity_differs "$state" "millisecond key against the retired second key" \
+    "proc-createtime-ms=$base cmdline-hex=$hex" "proc-createtime=$(( base / 1000 )) cmdline-hex=$hex"
+  assert_identity_differs "$state" "mixed keys at the same instant" \
+    "proc-createtime-ms=$base cmdline-hex=$hex" "linux-starttime=$base cmdline-hex=$hex"
+  pass "the identity comparator never compares two different keys as one process"
+
+  assert_identity_differs "$state" "empty current" "" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "empty recorded" "proc-createtime-ms=$base cmdline-hex=$hex" ""
+  assert_identity_differs "$state" "both empty" "" ""
+  assert_identity_differs "$state" "no command line on the current side" \
+    "proc-createtime-ms=$base" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "no value on the current side" \
+    "proc-createtime-ms= cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "non-numeric value" \
+    "proc-createtime-ms=later cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  assert_identity_differs "$state" "truncated key" \
+    "proc-createtime-m=$base cmdline-hex=$hex" "proc-createtime-ms=$base cmdline-hex=$hex"
+  pass "the identity comparator rejects an empty or malformed reading rather than guessing"
+}
+
+# Stage the one thing the defect costs a running fleet: the watcher recorded its
+# own identity into its lock, and the arm, guard and turn-end read the same live
+# process a moment later and computed it a hair differently. Below, the recorder
+# and the checker are two FM_PROC_NOW_OVERRIDE values 15 ms apart across a
+# second boundary, over a genuinely live pid so liveness is real and only the
+# identity comparison is under test.
+watcher_lock_matches() {  # <fakebin> <proc_root> <state> <home> <pid> <now-ms>
+  PATH="$1:$PATH" FM_PROC_ROOT_OVERRIDE="$2" FM_STATE_OVERRIDE="$3" \
+    FM_PROC_NOW_OVERRIDE="$6" FM_HOME="$4" \
+    bash -c '. "$1"; fm_watcher_lock_matches_pid "$2" "$3" "$4" "$5"' \
+    _ "$LIB" "$3" "$WATCH" "$5" "$4"
+}
+
+watcher_is_healthy() {  # <fakebin> <proc_root> <state> <home> <now-ms>
+  PATH="$1:$PATH" FM_PROC_ROOT_OVERRIDE="$2" FM_STATE_OVERRIDE="$3" \
+    FM_PROC_NOW_OVERRIDE="$5" FM_HOME="$4" \
+    bash -c '. "$1"; fm_watcher_healthy "$2" "$3" 300 "$4"' \
+    _ "$LIB" "$3" "$WATCH" "$4"
+}
+
+test_watcher_recorded_by_a_straddling_reader_stays_healthy() {
+  local dir state proc_root fakebin lockdir live recorder_now checker_now recorded
+  dir=$(make_case watcher-healthy-straddle)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-healthy"
+  lockdir="$state/.watch.lock"
+  msys_fixture_clk_tck
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  sleep 300 &
+  live=$!
+  write_fake_msys_machine "$proc_root" "$live" "$MSYS_FIXTURE_BOOT_MS" \
+    "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))"
+  recorder_now=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  checker_now=$(( recorder_now + MSYS_FIXTURE_READ_JITTER_MS ))
+  recorded=$(proc_identity "$fakebin" "$proc_root" "$state" "$live" "$recorder_now") \
+    || fail "the watcher could not record its own identity"
+  mkdir -p "$lockdir"
+  printf '%s\n' "$live" > "$lockdir/pid"
+  printf '%s\n' "$dir" > "$lockdir/fm-home"
+  printf '%s\n' "$WATCH" > "$lockdir/watcher-path"
+  printf '%s\n' "$recorded" > "$lockdir/pid-identity"
+  : > "$state/.last-watcher-beat"
+
+  watcher_lock_matches "$fakebin" "$proc_root" "$state" "$dir" "$live" "$checker_now" \
+    || { kill "$live" 2>/dev/null; wait "$live" 2>/dev/null; \
+         fail "a live watcher whose lock was recorded 15 ms earlier did not match its own lock"; }
+  watcher_is_healthy "$fakebin" "$proc_root" "$state" "$dir" "$checker_now" \
+    || { kill "$live" 2>/dev/null; wait "$live" 2>/dev/null; \
+         fail "a live watcher whose lock was recorded 15 ms earlier was reported unhealthy"; }
+
+  # The same gate must still reject a genuinely different process, or the case
+  # would pass with the identity check disabled entirely.
+  printf '%s\n' "proc-createtime-ms=1 cmdline-hex=$FAKE_PROC_CMDLINE_HEX" > "$lockdir/pid-identity"
+  if watcher_is_healthy "$fakebin" "$proc_root" "$state" "$dir" "$checker_now"; then
+    kill "$live" 2>/dev/null || true
+    wait "$live" 2>/dev/null || true
+    fail "a lock recorded for an unrelated creation instant was reported healthy"
+  fi
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "a watcher recorded by a straddling reader stays healthy and a foreign one still does not"
+}
+
+autoarm_claim_abandoned() {  # <fakebin> <proc_root> <state> <now-ms>
+  PATH="$1:$PATH" FM_PROC_ROOT_OVERRIDE="$2" FM_STATE_OVERRIDE="$3" \
+    FM_PROC_NOW_OVERRIDE="$4" \
+    bash -c '. "$1"; fm_autoarm_claim_abandoned "$2" 300' _ "$LIB" "$3"
+}
+
+autoarm_release_abandoned() {  # <fakebin> <proc_root> <state> <now-ms>
+  PATH="$1:$PATH" FM_PROC_ROOT_OVERRIDE="$2" FM_STATE_OVERRIDE="$3" \
+    FM_PROC_NOW_OVERRIDE="$4" \
+    bash -c '. "$1"; fm_autoarm_release_abandoned "$2" 300' _ "$LIB" "$3"
+}
+
+# <state> <pid> <identity> <outcome>: the lock-holding legacy claim shape, with
+# a ledger entry aged past any freshness window.
+write_legacy_autoarm_claim() {
+  local state=$1 pid=$2 identity=$3 outcome=$4 lock
+  lock="$state/.claude-autoarm.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$pid" > "$lock/pid"
+  printf '%s\n' autoarm > "$lock/role"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+  printf 'epoch=464 owner_pid=%s outcome=%s updated_at=1\n' "$pid" "$outcome" \
+    > "$state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$state/.claude-autoarm-epoch"
+}
+
+# The first consumer the issue names: an identity mismatch is read as positive
+# proof of abandonment BEFORE the owner, outcome and grace checks, so a live
+# owner born in the straddle window had its claim reclaimed and the home
+# re-armed on the first mismatching check.
+test_autoarm_does_not_abandon_a_live_owner_recorded_by_a_straddling_reader() {
+  local dir state proc_root fakebin live recorder_now checker_now recorded
+  dir=$(make_case autoarm-straddle-live)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-autoarm"
+  msys_fixture_clk_tck
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  mkdir -p "$state"
+  sleep 300 &
+  live=$!
+  write_fake_msys_machine "$proc_root" "$live" "$MSYS_FIXTURE_BOOT_MS" \
+    "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))"
+  recorder_now=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  checker_now=$(( recorder_now + MSYS_FIXTURE_READ_JITTER_MS ))
+  recorded=$(proc_identity "$fakebin" "$proc_root" "$state" "$live" "$recorder_now") \
+    || { kill "$live" 2>/dev/null; wait "$live" 2>/dev/null; \
+         fail "the claim could not record its owner identity"; }
+  # outcome=arming with a fresh beacon is a claim still deciding: nothing here
+  # is abandonment except, formerly, the straddled identity read.
+  write_legacy_autoarm_claim "$state" "$live" "$recorded" arming
+  : > "$state/.last-watcher-beat"
+
+  if autoarm_claim_abandoned "$fakebin" "$proc_root" "$state" "$checker_now"; then
+    kill "$live" 2>/dev/null || true
+    wait "$live" 2>/dev/null || true
+    fail "a live owner whose identity was recorded 15 ms earlier was declared abandoned"
+  fi
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  pass "a live auto-arm owner recorded by a straddling reader is not declared abandoned"
+}
+
+# The second consumer, and the one with the sharp edge: a proven-abandoned
+# legacy owner is signalled ONLY when its recorded identity verifies, so a
+# straddled read used to leave a live old-build owner running under a lock that
+# had already been reclaimed. A differing command line must still refuse.
+test_autoarm_release_verifies_a_straddled_identity_before_signalling() {
+  local dir state proc_root fakebin live recorder_now checker_now recorded i survivor
+  dir=$(make_case autoarm-straddle-release)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-release"
+  msys_fixture_clk_tck
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  mkdir -p "$state"
+  sleep 300 &
+  live=$!
+  write_fake_msys_machine "$proc_root" "$live" "$MSYS_FIXTURE_BOOT_MS" \
+    "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))"
+  recorder_now=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  checker_now=$(( recorder_now + MSYS_FIXTURE_READ_JITTER_MS ))
+  recorded=$(proc_identity "$fakebin" "$proc_root" "$state" "$live" "$recorder_now") \
+    || { kill "$live" 2>/dev/null; wait "$live" 2>/dev/null; \
+         fail "the claim could not record its owner identity"; }
+  write_legacy_autoarm_claim "$state" "$live" "$recorded" rewake
+
+  autoarm_release_abandoned "$fakebin" "$proc_root" "$state" "$checker_now" \
+    || { kill "$live" 2>/dev/null; wait "$live" 2>/dev/null; \
+         fail "the proven-abandoned legacy claim was not reclaimed"; }
+  i=0
+  while [ "$i" -lt 40 ] && kill -0 "$live" 2>/dev/null; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  if kill -0 "$live" 2>/dev/null; then
+    kill "$live" 2>/dev/null || true
+    wait "$live" 2>/dev/null || true
+    fail "a live legacy owner recorded 15 ms earlier was left running under a reclaimed lock"
+  fi
+  wait "$live" 2>/dev/null || true
+  [ ! -e "$state/.claude-autoarm.lock" ] \
+    || fail "the reclaim left the legacy owner lock behind"
+  pass "a proven-abandoned live legacy owner recorded by a straddling reader is retired with TERM"
+
+  # Same straddle, different command line: unverifiable, so never signalled.
+  sleep 300 &
+  survivor=$!
+  write_fake_msys_machine "$proc_root" "$survivor" "$MSYS_FIXTURE_BOOT_MS" \
+    "$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))"
+  recorded=$(proc_identity "$fakebin" "$proc_root" "$state" "$survivor" "$recorder_now") \
+    || { kill "$survivor" 2>/dev/null; wait "$survivor" 2>/dev/null; \
+         fail "the second claim could not record its owner identity"; }
+  write_legacy_autoarm_claim "$state" "$survivor" "${recorded%??}61" rewake
+
+  autoarm_release_abandoned "$fakebin" "$proc_root" "$state" "$checker_now" \
+    || { kill "$survivor" 2>/dev/null; wait "$survivor" 2>/dev/null; \
+         fail "the claim with an unverifiable identity was not reclaimed"; }
+  kill -0 "$survivor" 2>/dev/null \
+    || fail "a pid whose recorded command line does not verify was signalled anyway"
+  kill "$survivor" 2>/dev/null || true
+  wait "$survivor" 2>/dev/null || true
+  pass "a reclaim still refuses to signal a pid whose recorded command line does not verify"
 }
 
 test_stale_watch_reclaim_publishes_before_clear() {
@@ -1334,7 +1677,7 @@ test_msys_pid_identity_uses_proc() {
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
   case "$identity" in
-    proc-createtime=*" cmdline-hex="*) ;;
+    proc-createtime-ms=*" cmdline-hex="*) ;;
     *) fail "MSYS process identity did not use compatible /proc fields ('$identity')" ;;
   esac
   pass "MSYS process identity uses compatible /proc fields"
@@ -1346,6 +1689,11 @@ test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
 test_msys_proc_pid_identity_survives_a_clock_step
 test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable
 test_msys_proc_pid_identity_rejects_a_nanosecondless_date
+test_msys_proc_pid_identity_straddling_a_second_is_one_process
+test_pid_identity_equal_is_tolerant_only_where_the_clock_is
+test_watcher_recorded_by_a_straddling_reader_stays_healthy
+test_autoarm_does_not_abandon_a_live_owner_recorded_by_a_straddling_reader
+test_autoarm_release_verifies_a_straddled_identity_before_signalling
 test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed
 test_stale_watch_reclaim_publishes_before_clear

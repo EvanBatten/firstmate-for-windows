@@ -86,7 +86,7 @@ daemon_pid_matches() {
   identity=$(cat "$owner/pid-identity" 2>/dev/null || true)
   if [ -n "$identity" ]; then
     current=$(fm_pid_identity "$pid") || return 1
-    [ "$current" = "$identity" ]
+    fm_pid_identity_equal "$current" "$identity"
     return
   fi
   command=$(ps -p "$pid" -o command= 2>/dev/null || true)

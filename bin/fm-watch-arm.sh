@@ -291,7 +291,8 @@ close_unobserved_cycle() {
   reason=
   if [ -f "$WATCH_DELIVERY_LOG" ]; then
     while IFS=$'\t' read -r record_pid record_identity record_reason; do
-      if [ "$record_pid" = "$cycle_watcher_pid" ] && [ "$record_identity" = "$clean_identity" ]; then
+      if [ "$record_pid" = "$cycle_watcher_pid" ] \
+        && fm_pid_identity_equal "$record_identity" "$clean_identity"; then
         reason=$record_reason
       fi
     done < "$WATCH_DELIVERY_LOG"
@@ -313,7 +314,8 @@ attach_and_wait() {
   local attached_pid=$1
   while :; do
     if healthy_watcher; then
-      if [ "$HEALTHY_PID" != "$attached_pid" ] || [ "$HEALTHY_IDENTITY" != "$cycle_watcher_identity" ]; then
+      if [ "$HEALTHY_PID" != "$attached_pid" ] \
+        || ! fm_pid_identity_equal "$HEALTHY_IDENTITY" "$cycle_watcher_identity"; then
         cycle_log_append unknown unknown lock-replaced "attached:$HEALTHY_PID"
         attached_pid=$HEALTHY_PID
         cycle_begin "$attached_pid" attached "$HEALTHY_IDENTITY"

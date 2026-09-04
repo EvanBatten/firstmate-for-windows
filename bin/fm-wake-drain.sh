@@ -78,7 +78,7 @@ branch_grant_live_locked() {
   case "$pid" in ''|*[!0-9]*|1) return 1 ;; esac
   case "$generation" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
-  [ -n "$current" ] && [ "$current" = "$identity" ]
+  [ -n "$current" ] && fm_pid_identity_equal "$current" "$identity"
 }
 
 reclaim_stale_branch_grant_locked() {
