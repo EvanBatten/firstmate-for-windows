@@ -10,6 +10,9 @@ if [ "${FM_PI_LIVE_E2E:-0}" != 1 ]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The one owner of "what process is this": MSYS ps has no -o at all.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$ROOT/bin/fm-proc-lib.sh"
 unset NO_MISTAKES_GATE
 
 fail() {
@@ -73,7 +76,7 @@ wait_for_exact_line() {
 
 lab_pid_is_safe() {
   local pid=$1 command
-  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  command=$(fm_proc_args "$pid" 2>/dev/null || true)
   case "$command" in
     *"$LAB"*) return 0 ;;
     *) return 1 ;;
@@ -87,7 +90,7 @@ cleanup() {
   arm_pid=
   if [ -n "$pid_file" ]; then
     watcher_pid=$(sed -n '1p' "$pid_file" 2>/dev/null || true)
-    arm_pid=$(ps -p "$watcher_pid" -o ppid= 2>/dev/null | tr -d ' ' || true)
+    arm_pid=$(fm_proc_ppid "$watcher_pid" 2>/dev/null || true)
   fi
   "$TMUX" -L "$SOCKET" kill-server 2>/dev/null || true
   sleep 0.1
@@ -333,7 +336,7 @@ arm_tool_result_count=$(printf '%s\n' "$pane" | grep -Ec 'watcher: (started|unch
 pid_file=$(find "$HOME_DIR/state" -maxdepth 3 -type f -name pid | head -1)
 [ -n "$pid_file" ] || fail "re-armed watcher pid was not recorded"
 watcher_pid=$(sed -n '1p' "$pid_file")
-arm_pid=$(ps -p "$watcher_pid" -o ppid= | tr -d ' ')
+arm_pid=$(fm_proc_ppid "$watcher_pid")
 [ -n "$arm_pid" ] || fail "re-armed watcher parent was not live"
 
 "$TMUX" -L "$SOCKET" send-keys -t "$SESSION" -l '/quit'

@@ -280,7 +280,8 @@ rc=$?
 case " $* " in
   *" --file "*" --to "*)
     if [ "$rc" -eq 0 ] && [ "${1:-}" = mv ]; then
-      handoff_pid=$(ps -o ppid= -p "$PPID" | tr -d '[:space:]')
+      . "$ROOT/bin/fm-proc-lib.sh"
+      handoff_pid=$(fm_proc_ppid "$PPID")
       kill -KILL "$handoff_pid"
       sleep 1
     fi
@@ -352,7 +353,8 @@ EOF
 case " $* " in
   *" --file "*" --to "*)
     if [ "${1:-}" = mv ]; then
-      handoff_pid=$(ps -o ppid= -p "$PPID" | tr -d '[:space:]')
+      . "$ROOT/bin/fm-proc-lib.sh"
+      handoff_pid=$(fm_proc_ppid "$PPID")
       kill -KILL "$handoff_pid"
       sleep 1
     fi

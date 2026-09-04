@@ -9,6 +9,9 @@ if [ "${FM_GROK_LIVE_E2E:-0}" != 1 ]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The one owner of "what process is this": MSYS ps has no -o at all.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$ROOT/bin/fm-proc-lib.sh"
 
 fail() {
   printf 'not ok - %s\n' "$1" >&2
@@ -43,7 +46,7 @@ wait_for_text() {
 
 lab_pid_is_safe() {
   local pid=$1 command
-  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  command=$(fm_proc_args "$pid" 2>/dev/null || true)
   case "$command" in
     *"$LAB"*) return 0 ;;
     *) return 1 ;;
@@ -53,7 +56,7 @@ lab_pid_is_safe() {
 cleanup() {
   local watcher_pid arm_pid
   watcher_pid=$(cat "$HOME_DIR/state/.watch.lock/pid" 2>/dev/null || true)
-  arm_pid=$(ps -p "$watcher_pid" -o ppid= 2>/dev/null | tr -d ' ' || true)
+  arm_pid=$(fm_proc_ppid "$watcher_pid" 2>/dev/null || true)
   "$TMUX" -L "$SOCKET" kill-server 2>/dev/null || true
   sleep 0.1
   if [ -n "$watcher_pid" ] && lab_pid_is_safe "$watcher_pid"; then

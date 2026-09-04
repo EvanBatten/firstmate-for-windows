@@ -141,7 +141,8 @@ interrupt_spawn_during_start() {  # <case-dir> <before|after>
 #!/usr/bin/env bash
 if [ "\${1:-}" = start ] && [ ! -f "$case_dir/start-interrupted" ]; then
   : > "$case_dir/start-interrupted"
-  spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+  . "$ROOT/bin/fm-proc-lib.sh"
+  spawn_pid=\$(fm_proc_ppid "\$PPID")
   case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
   if [ "$timing" = before ]; then
     kill -TERM "\$spawn_pid"
@@ -213,7 +214,8 @@ interrupt_teardown_during_treehouse_return() {  # <case-dir>
 #!/usr/bin/env bash
 if [ "\${1:-}" = return ] && [ ! -f "$case_dir/teardown-interrupted" ]; then
   : > "$case_dir/teardown-interrupted"
-  teardown_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+  . "$ROOT/bin/fm-proc-lib.sh"
+  teardown_pid=\$(fm_proc_ppid "\$PPID")
   case "\$teardown_pid" in ''|*[!0-9]*) exit 1 ;; esac
   kill -TERM "\$teardown_pid"
   kill -TERM "\$\$"
@@ -240,7 +242,8 @@ case "\${1:-}" in
   capture-pane)
     if [ ! -f "$case_dir/kimi-interrupted" ]; then
       : > "$case_dir/kimi-interrupted"
-      spawn_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
+      . "$ROOT/bin/fm-proc-lib.sh"
+      spawn_pid=\$(fm_proc_ppid "\$PPID")
       case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
       kill -TERM "\$spawn_pid"
     fi
