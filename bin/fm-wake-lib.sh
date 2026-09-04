@@ -119,13 +119,27 @@ _fm_proc_uptime_ms() {
 #
 # FM_PROC_NOW_OVERRIDE is the fixture seam beside FM_PROC_ROOT_OVERRIDE -
 # milliseconds, so a test can step the clock deterministically - and is read at
-# call time like that one.
+# call time like that one. It is one value or a whitespace-separated sequence
+# of them: each read consumes the next value in order and the last one repeats,
+# so a single value answers every read exactly as before, while a sequence can
+# hand each of the wall-clock reads _fm_proc_createtime_ms makes around its
+# uptime read an instant of its own.
 _FM_PROC_NOW_MS=
+_FM_PROC_NOW_OVERRIDE_READS=0
 _fm_proc_now_ms() {
   local now
+  local -a samples
   _FM_PROC_NOW_MS=
   now=${FM_PROC_NOW_OVERRIDE:-}
   if [ -n "$now" ]; then
+    read -r -a samples <<< "$now"
+    [ "${#samples[@]}" -gt 0 ] || return 1
+    if [ "$_FM_PROC_NOW_OVERRIDE_READS" -lt "${#samples[@]}" ]; then
+      now=${samples[_FM_PROC_NOW_OVERRIDE_READS]}
+    else
+      now=${samples[${#samples[@]} - 1]}
+    fi
+    _FM_PROC_NOW_OVERRIDE_READS=$(( _FM_PROC_NOW_OVERRIDE_READS + 1 ))
     case "$now" in
       *[!0-9]*) return 1 ;;
     esac
@@ -160,16 +174,36 @@ _fm_proc_now_ms() {
 # second on a FRACTIONAL step - the ordinary shape of an NTP correction.
 #
 # The sum is kept at full millisecond precision - it is NOT floored to a whole
-# second - so the only error it carries is read jitter, and that jitter stays
-# small enough for fm_pid_identity_equal's tolerance to absorb. /proc/uptime
-# publishes centiseconds and the two clocks are sampled a moment apart, and both
-# of those push the sum HIGH by up to roughly 15 ms; tick truncation pushes it
-# low by at most 1 ms. That error is persistent PER PROCESS rather than random
-# per read, because it is fixed by where the process's true creation instant
-# sits relative to the reader's own two clock reads, so two readers can disagree
-# by that much about one process for its whole life. It is why no consumer may
-# compare these strings with `=`: fm_pid_identity_equal directly below is the
-# single owner of that comparison, and the reason it exists.
+# second - so the only error it carries is read jitter, and that jitter is
+# BOUNDED, so that fm_pid_identity_equal's tolerance absorbs it by construction
+# rather than by margin. /proc/uptime publishes centiseconds, which pushes the
+# sum high by up to 10 ms, and tick truncation pushes it low by at most 1 ms.
+# The third term is the gap between sampling the two clocks, and it is held to
+# a budget: the wall clock is read before AND after the one uptime read, all
+# bash builtins with no process between them, and the uptime is paired with the
+# midpoint of those two reads, so a spread of S between them puts the pairing
+# at most S/2 from the instant the uptime was actually taken, whichever side of
+# it the reader lost the CPU on. A sample whose spread exceeds
+# _FM_PROC_CREATETIME_SPREAD_BUDGET_MS is retried, up to
+# _FM_PROC_CREATETIME_READ_ATTEMPTS samples in all, and the first sample within
+# budget is the answer. One reader is therefore off by at most 10 + 1 + 5 ms,
+# and two readers of one process differ by at most about 32 ms.
+#
+# When every sample is over budget the one with the smallest spread is kept -
+# best effort, still under this key, never the raw field, because the raw field
+# moves with every clock step while this is at worst one identity another
+# reader may fail to match until the next arm records it afresh. Four
+# consecutive stalls of more than 10 ms inside a window of a few bash builtins
+# is the documented residual. A bash too old for EPOCHREALTIME forks `date` for
+# each wall-clock read, so on such a bash the budget is missed routinely and
+# the smallest-spread sample is what this dialect records.
+#
+# Under the retired whole-second key this jitter is what put a process born
+# near a second boundary in different seconds for different readers for its
+# whole life; in milliseconds it is only ever a difference the comparator must
+# absorb, and the bound above is what makes its tolerance enough. It is why no
+# consumer may compare these strings with `=`: fm_pid_identity_equal directly
+# below is the single owner of that comparison, and the reason it exists.
 #
 # Recording milliseconds rather than the whole second this key used to carry
 # (issue #17) also keeps the pid-reuse window narrow. MSYS reports CLK_TCK as
@@ -187,14 +221,31 @@ _fm_proc_now_ms() {
 # the previous build therefore mismatches exactly once, at upgrade, and is
 # reclaimed and re-armed - the same one-time cost the move from `proc-starttime`
 # to `proc-createtime` already paid.
+_FM_PROC_CREATETIME_SPREAD_BUDGET_MS=10
+_FM_PROC_CREATETIME_READ_ATTEMPTS=4
 _FM_PROC_CREATETIME_MS=
 _fm_proc_createtime_ms() {
-  local proc_root=$1 ticks=$2
+  local proc_root=$1 ticks=$2 attempt before after spread origin best_spread best_origin
   _FM_PROC_CREATETIME_MS=
-  _fm_proc_uptime_ms "$proc_root" || return 1
-  _fm_proc_now_ms || return 1
+  best_spread=
+  best_origin=
   [ -n "$_FM_CLK_TCK" ] || _fm_clk_tck_probe || return 1
-  _FM_PROC_CREATETIME_MS=$(( _FM_PROC_NOW_MS - _FM_PROC_UPTIME_MS + ticks * 1000 / _FM_CLK_TCK ))
+  for (( attempt = 0; attempt < _FM_PROC_CREATETIME_READ_ATTEMPTS; attempt++ )); do
+    _fm_proc_now_ms || return 1
+    before=$_FM_PROC_NOW_MS
+    _fm_proc_uptime_ms "$proc_root" || return 1
+    _fm_proc_now_ms || return 1
+    after=$_FM_PROC_NOW_MS
+    spread=$(( after - before ))
+    origin=$(( before + spread / 2 - _FM_PROC_UPTIME_MS ))
+    [ "$spread" -ge 0 ] || spread=$(( -spread ))
+    if [ -z "$best_spread" ] || [ "$spread" -lt "$best_spread" ]; then
+      best_spread=$spread
+      best_origin=$origin
+    fi
+    [ "$spread" -gt "$_FM_PROC_CREATETIME_SPREAD_BUDGET_MS" ] || break
+  done
+  _FM_PROC_CREATETIME_MS=$(( best_origin + ticks * 1000 / _FM_CLK_TCK ))
 }
 
 fm_pid_identity() {
@@ -262,16 +313,19 @@ fm_pid_identity() {
 # The single owner of every comparison of two fm_pid_identity strings. Nothing
 # in this repo may compare them with `=` or `!=` directly, because one of the
 # dialects above is not exact: `proc-createtime-ms` is a clock reading carrying
-# up to about 15 ms of per-reader jitter (see _fm_proc_createtime_ms), so a
-# recorder and a checker reading the same live process can legitimately write
-# two different strings for it. Every other dialect IS exact and stays compared
-# byte for byte.
+# a bounded per-read jitter (see _fm_proc_createtime_ms), so a recorder and a
+# checker reading the same live process can legitimately write two different
+# strings for it. Every other dialect IS exact and stays compared byte for
+# byte.
 #
-# 100 ms, rather than 15: the measured residual is at most about 15 ms - the
-# /proc/uptime centisecond truncation plus the gap between the uptime read and
-# the EPOCHREALTIME read, both of which push the sum high, against at most 1 ms
-# of tick truncation the other way - and the rest is headroom for a reader that
-# gets preempted between its own two clock reads. It is a constant and not an
+# 100 ms is a bound, not headroom. One reader's error is at most the 10 ms
+# /proc/uptime centisecond truncation plus 1 ms of tick truncation plus half
+# the 10 ms spread budget its wall-clock reads are held to, so two readers of
+# one process differ by at most about 32 ms, and 100 holds with margin whenever
+# any of a reader's samples lands within budget. The residual is a reader whose
+# every sample stalled for more than 10 ms - four consecutive stalls inside a
+# window of a few bash builtins - which records its least-stalled sample, best
+# effort, and is self-healing at the next arm. It is a constant and not an
 # environment knob, deliberately: the tolerance is a property of the measured
 # clock, and its tests build the strings they compare rather than turning it
 # down.

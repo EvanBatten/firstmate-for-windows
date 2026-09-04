@@ -1361,6 +1361,120 @@ test_msys_proc_pid_identity_straddling_a_second_is_one_process() {
   pass "a straddling process still compares as one process in both directions"
 }
 
+# The reader brackets its one uptime read with a wall-clock read on either side
+# and pairs the uptime with their midpoint, and FM_PROC_NOW_OVERRIDE hands those
+# reads a sequence of instants in order, so a reader that lost the CPU between
+# its reads is a value this suite writes rather than a scheduler state it would
+# have to provoke. The fixture's uptime file is static and describes the instant
+# now_ms, so a pair centred on now_ms is a clean read of the true machine and a
+# pair that ends there after a wide spread is a reader that stalled just before
+# its uptime read.
+#
+# One reader may be off by the 10 ms uptime centisecond, 1 ms of tick
+# truncation and half the 10 ms spread budget; that sum is the bound the
+# comparator's tolerance is built on, and every clean read must land inside it.
+MSYS_FIXTURE_READ_BOUND_MS=16
+
+# msys_createtime_ms <label> <identity>: sets MSYS_CREATETIME_MS to the
+# milliseconds an identity records, failing the case when the identity is any
+# other dialect - a stalled reader must still answer under this key.
+msys_createtime_ms() {
+  case "$2" in
+    "proc-createtime-ms="*" cmdline-hex=$FAKE_PROC_CMDLINE_HEX") ;;
+    *) fail "$1: not a millisecond creation-time identity ('$2')" ;;
+  esac
+  MSYS_CREATETIME_MS=${2#proc-createtime-ms=}
+  MSYS_CREATETIME_MS=${MSYS_CREATETIME_MS%% *}
+}
+
+assert_within_read_bound() {  # <label> <recorded-ms> <creation-ms>
+  local delta
+  delta=$(( $2 - $3 ))
+  [ "$delta" -ge 0 ] || delta=$(( -delta ))
+  [ "$delta" -le "$MSYS_FIXTURE_READ_BOUND_MS" ] \
+    || fail "$1: recorded $2 is $delta ms from the true creation instant $3, past the $MSYS_FIXTURE_READ_BOUND_MS ms bound"
+}
+
+test_msys_proc_pid_identity_retries_a_stalled_sample() {
+  local dir state proc_root fakebin pid creation_ms now_ms expected identity
+  dir=$(make_case msys-proc-identity-stalled-sample)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-stalled"
+  pid=4242
+  msys_fixture_clk_tck
+  creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))
+  now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
+  expected=$(createtime_ms_for "$MSYS_FIXTURE_BOOT_MS" "$creation_ms")
+
+  # The reader read the wall clock, lost the CPU for 90 ms, then read uptime
+  # and the wall clock back to back; its second sample has no spread at all.
+  identity=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" \
+    "$(( now_ms - 90 )) $now_ms $now_ms $now_ms") \
+    || fail "could not read the process through a stalled first sample"
+  msys_createtime_ms "stalled then clean" "$identity"
+  [ "$MSYS_CREATETIME_MS" = "$expected" ] \
+    || fail "a reader stalled 90 ms inside its first sample did not record its clean second sample (got $MSYS_CREATETIME_MS, want $expected)"
+  assert_within_read_bound "stalled then clean" "$MSYS_CREATETIME_MS" "$creation_ms"
+  pass "a reader stalled inside its first sample records its clean second sample"
+}
+
+test_msys_proc_pid_identity_keeps_the_least_stalled_sample() {
+  local dir state proc_root fakebin pid creation_ms now_ms expected identity
+  dir=$(make_case msys-proc-identity-all-stalled)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-all-stalled"
+  pid=4242
+  msys_fixture_clk_tck
+  creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))
+  now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
+  expected=$(createtime_ms_for "$MSYS_FIXTURE_BOOT_MS" "$creation_ms")
+
+  # Four samples, every one past the 10 ms budget, the narrowest neither first
+  # nor last: spreads of 90, 60, 30 and 45 ms, each ending at the uptime
+  # instant. The 30 ms sample's midpoint sits 15 ms early. A fifth sample would
+  # be clean, which is how this also proves the reader stops at four.
+  identity=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" \
+    "$(( now_ms - 90 )) $now_ms $(( now_ms - 60 )) $now_ms $(( now_ms - 30 )) $now_ms $(( now_ms - 45 )) $now_ms") \
+    || fail "a reader whose every sample stalled reported no identity at all"
+  msys_createtime_ms "every sample stalled" "$identity"
+  [ "$MSYS_CREATETIME_MS" = "$(( expected - 15 ))" ] \
+    || fail "a reader whose every sample stalled did not record the least-stalled sample's midpoint (got $MSYS_CREATETIME_MS, want $(( expected - 15 )))"
+  pass "a reader whose every sample stalled records the least-stalled sample under the millisecond key"
+}
+
+test_msys_proc_pid_identity_pairs_uptime_with_the_midpoint_of_its_clock_reads() {
+  local dir state proc_root fakebin pid creation_ms now_ms expected identity
+  dir=$(make_case msys-proc-identity-midpoint)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-midpoint"
+  pid=4242
+  msys_fixture_clk_tck
+  creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_STRADDLE_START_MS ))
+  now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
+  expected=$(createtime_ms_for "$MSYS_FIXTURE_BOOT_MS" "$creation_ms")
+
+  # One clean sample 6 ms wide and centred on the uptime instant: the midpoint
+  # is the true machine, the earlier read alone would answer 3 ms early and the
+  # later read alone 3 ms late.
+  identity=$(proc_identity "$fakebin" "$proc_root" "$state" "$pid" \
+    "$(( now_ms - 3 )) $(( now_ms + 3 ))") \
+    || fail "could not read the process from a clean sample with a small spread"
+  msys_createtime_ms "midpoint" "$identity"
+  [ "$MSYS_CREATETIME_MS" = "$expected" ] \
+    || fail "a clean sample was not paired at the midpoint of its clock reads (got $MSYS_CREATETIME_MS, want $expected; the later read alone gives $(( expected + 3 )))"
+  assert_within_read_bound "midpoint" "$MSYS_CREATETIME_MS" "$creation_ms"
+  pass "a clean sample pairs uptime with the midpoint of its two clock reads"
+}
+
 # The tolerance exists for exactly one dialect and one field. Everything else -
 # a different command line, a reused pid, a step-sensitive raw tick count, the
 # retired whole-second key, a malformed string - stays byte-exact, because for
@@ -1690,6 +1804,9 @@ test_msys_proc_pid_identity_survives_a_clock_step
 test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable
 test_msys_proc_pid_identity_rejects_a_nanosecondless_date
 test_msys_proc_pid_identity_straddling_a_second_is_one_process
+test_msys_proc_pid_identity_retries_a_stalled_sample
+test_msys_proc_pid_identity_keeps_the_least_stalled_sample
+test_msys_proc_pid_identity_pairs_uptime_with_the_midpoint_of_its_clock_reads
 test_pid_identity_equal_is_tolerant_only_where_the_clock_is
 test_watcher_recorded_by_a_straddling_reader_stays_healthy
 test_autoarm_does_not_abandon_a_live_owner_recorded_by_a_straddling_reader
