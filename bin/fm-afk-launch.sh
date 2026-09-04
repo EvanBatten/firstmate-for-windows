@@ -95,7 +95,7 @@ fm_afk_launch_lock_owned() {
   pid=$(cat "$FM_AFK_LAUNCH_LOCK/pid" 2>/dev/null) || return 1
   expected=$(cat "$FM_AFK_LAUNCH_LOCK/pid-identity" 2>/dev/null) || return 1
   actual=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
-  [ -n "$expected" ] && [ "$actual" = "$expected" ]
+  [ -n "$expected" ] && fm_pid_identity_equal "$actual" "$expected"
 }
 
 fm_afk_launch_lock_acquire() {
@@ -602,7 +602,7 @@ fm_afk_launch_stop() {
       fm_afk_launch_log "could not confirm away-mode daemon exit; preserving lifecycle state"
       return 1
     }
-    if [ "$current_identity" = "$pid_identity" ]; then
+    if fm_pid_identity_equal "$current_identity" "$pid_identity"; then
       fm_afk_launch_log "away-mode daemon did not exit after SIGTERM; preserving lifecycle state"
       return 1
     fi

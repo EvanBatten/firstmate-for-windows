@@ -555,8 +555,10 @@ backlog_row_state() {
 make_path_without_lsof() {  # <case-dir>
   local case_dir=$1 path_dir="$1/path-without-lsof" cmd resolved
   mkdir -p "$path_dir"
+  # The tool surface teardown needs with only lsof withheld; od is here because the shared
+  # process identity in bin/fm-wake-lib.sh hex-encodes a process's command line with it.
   for cmd in awk bash basename cat chmod cp cut date dirname env find git grep head hostname id ln \
-    mkdir mktemp mv perl ps readlink realpath rm sed sh sleep sort stat tail timeout tr uname wc xargs; do
+    mkdir mktemp mv od perl ps readlink realpath rm sed sh sleep sort stat tail timeout tr uname wc xargs; do
     resolved=$(command -v "$cmd" 2>/dev/null) || continue
     case "$resolved" in /*) ln -sf "$resolved" "$path_dir/$cmd" ;; esac
   done
@@ -2384,6 +2386,134 @@ SH
   pass "a reused pid with a different start time is never force-killed"
 }
 
+# --- shared process identity ---------------------------------------------------
+# Teardown used to parse /proc field 22 itself and compare it byte for byte.
+# It now reads bin/fm-wake-lib.sh's fm_pid_identity and compares with
+# fm_pid_identity_equal, which changes what a reap can prove in two ways worth
+# pinning here: the command line participates, so a reused pid that starts at
+# the same tick is no longer signalled; and on the Git Bash dialect the recorded
+# creation time is a clock reading carrying a few milliseconds of read jitter,
+# which the comparator absorbs and a byte-exact compare did not.
+#
+# The dialect comes off `uname -s`, which bin/fm-proc-lib.sh resolves once at
+# source time, so a PATH stub runs the Git Bash dialect from any host rather
+# than leaving it assertable only on Windows. The wall clock is pinned through
+# FM_PROC_NOW_OVERRIDE because the fake /proc's uptime is a static file: on a
+# real machine uptime advances with the clock, and without the pin the derived
+# origin would drift by the reap's own one-second grace.
+TEARDOWN_FIXTURE_BOOT_MS=1784094040000
+TEARDOWN_FIXTURE_UPTIME_MS=1000000
+TEARDOWN_FIXTURE_CREATION_OFFSET_MS=986993
+# /proc/uptime publishes centiseconds, so the smallest real disagreement
+# between two readers of it is one centisecond; two is a comfortably ordinary
+# one and still well inside the comparator's stated tolerance.
+TEARDOWN_FIXTURE_JITTER_MS=20
+
+write_fake_uptime() {  # <proc-root> <uptime-ms>
+  mkdir -p "$1"
+  printf '%s.%02d 1.00\n' "$(( $2 / 1000 ))" "$(( $2 % 1000 / 10 ))" > "$1/uptime"
+}
+
+write_fake_cmdline() {  # <proc-root> <pid> <argv0>
+  mkdir -p "$1/$2"
+  printf '%s\0--task\0x1\0' "$3" > "$1/$2/cmdline"
+}
+
+# <case-dir> <pid> -> the fake /proc root, with that pid created at the
+# fixture's straddling instant expressed in the host's own clock ticks.
+write_fake_proc_for_pid() {
+  local case_dir=$1 pid=$2 proc_root clk_tck ticks
+  proc_root="$case_dir/proc"
+  clk_tck=$(getconf CLK_TCK 2>/dev/null) || clk_tck=
+  case "$clk_tck" in
+    ''|*[!0-9]*|0) fail "getconf CLK_TCK gave no usable value ('$clk_tck')" ;;
+  esac
+  ticks=$(( TEARDOWN_FIXTURE_CREATION_OFFSET_MS * clk_tck / 1000 ))
+  write_fake_uptime "$proc_root" "$TEARDOWN_FIXTURE_UPTIME_MS"
+  mkdir -p "$proc_root/$pid"
+  printf '%s (leaked task) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 %s 20 21 22\n' \
+    "$pid" "$ticks" > "$proc_root/$pid/stat"
+  write_fake_cmdline "$proc_root" "$pid" perl
+  printf '%s\n' "$proc_root"
+}
+
+# The one process that runs between teardown's identity capture and its
+# re-compare is the lsof scan, so the scan is also where this fixture perturbs
+# the fake machine. It reports the pid while it is alive and for a bounded
+# number of scans, so a process teardown declines to signal ends the reap
+# cleanly instead of being re-captured under its new identity on a later pass.
+write_identity_lsof_stub() {  # <case-dir> <pid> <perturbation>
+  local case_dir=$1 pid=$2 perturb=$3
+  cat > "$case_dir/fakebin/lsof" <<EOF
+#!/usr/bin/env bash
+count=0
+[ ! -f '$case_dir/lsof-count' ] || count=\$(cat '$case_dir/lsof-count')
+count=\$((count + 1))
+printf '%s\n' "\$count" > '$case_dir/lsof-count'
+if [ "\$count" -ge 2 ]; then
+$perturb
+fi
+[ "\$count" -le 3 ] || exit 0
+kill -0 '$pid' 2>/dev/null || exit 0
+printf 'p%s\nfcwd\nn%s\n' '$pid' '$case_dir/wt'
+EOF
+  chmod +x "$case_dir/fakebin/lsof"
+}
+
+run_teardown_with_fake_proc() {  # <case-dir> <proc-root>
+  FM_PROC_ROOT_OVERRIDE="$2" \
+  FM_PROC_NOW_OVERRIDE="$(( TEARDOWN_FIXTURE_BOOT_MS + TEARDOWN_FIXTURE_UPTIME_MS ))" \
+    run_teardown "$1"
+}
+
+# One leg: <name> <perturbation> <expected-survival 0|1> <message>.
+reap_identity_leg() {
+  local name=$1 perturb=$2 expect_survives=$3 message=$4
+  local case_dir proc_root pid rc survived=0
+  case_dir=$(make_case "$name")
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  cat > "$case_dir/fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' MINGW64_NT-10.0-26200
+SH
+  chmod +x "$case_dir/fakebin/uname"
+
+  perl -e 'sleep 300' &
+  pid=$!
+  disown
+  proc_root=$(write_fake_proc_for_pid "$case_dir" "$pid")
+  write_identity_lsof_stub "$case_dir" "$pid" "$perturb"
+
+  rc=0
+  run_teardown_with_fake_proc "$case_dir" "$proc_root" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  sleep 0.2
+  if kill -0 "$pid" 2>/dev/null; then
+    survived=1
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$rc" "$name: teardown should complete"
+  [ "$survived" -eq "$expect_survives" ] || fail "$name: $message"
+}
+
+test_teardown_reaps_through_the_shared_process_identity() {
+  reap_identity_leg teardown-identity-stable ':' 0 \
+    "a leaked process whose identity never moved was not reaped"
+  pass "teardown reaps a leaked process whose shared identity matches"
+
+  reap_identity_leg teardown-identity-jitter \
+    "printf '%s.%02d 1.00\\n' \"\$(( ($TEARDOWN_FIXTURE_UPTIME_MS - $TEARDOWN_FIXTURE_JITTER_MS) / 1000 ))\" \"\$(( ($TEARDOWN_FIXTURE_UPTIME_MS - $TEARDOWN_FIXTURE_JITTER_MS) % 1000 / 10 ))\" > '$TMP_ROOT/teardown-identity-jitter/proc/uptime'" \
+    0 "a leaked process re-read a centisecond later was treated as a different process and left running"
+  pass "teardown still reaps a leaked process across the creation time's read jitter"
+
+  reap_identity_leg teardown-identity-cmdline \
+    "printf 'ruby\\0--task\\0x1\\0' > \"\$(ls -d '$TMP_ROOT/teardown-identity-cmdline/proc'/[0-9]*)/cmdline\"" \
+    1 "a pid running a different command line than the one recorded was signalled anyway"
+  pass "teardown never signals a pid whose recorded command line no longer matches"
+}
+
 test_exec_changed_process_is_still_reaped() {
   local case_dir rc pid marker done_flag survived=0
   case_dir=$(make_case exec-changed-process)
@@ -2658,6 +2788,7 @@ test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
+test_teardown_reaps_through_the_shared_process_identity
 test_exec_changed_process_is_still_reaped
 test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries

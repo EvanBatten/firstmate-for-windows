@@ -100,9 +100,8 @@ Four things came out of that which the subsystem-by-subsystem measurement had no
 There is a fifth, measured rather than guessed at and since fixed on the fork: `fm_pid_identity` uses `/proc/<pid>/stat` field 22 with a comment saying that field is immune to wall-clock steps.
 It is on Linux; here `/proc/stat`'s `btime` is `now - uptime` recomputed at every read and field 22 is anchored to it, so a clock correction moves the identity of every pid at once and a live lock-holding watcher reads as dead.
 `CLK_TCK` on this userland is 1000, not 100, so the sensitivity is a millisecond and an ordinary NTP resync is enough - a closed lid is not required.
-The remedy is to record the absolute creation time, but not as the obvious `btime + field22/CLK_TCK`: `btime` is truncated to whole seconds while field 22 carries milliseconds, so their sum still moves by a second on a FRACTIONAL step, which is the ordinary shape of an NTP correction.
-What the fork records instead, on a non-Linux `/proc` and under its own `proc-createtime` key, is that same origin at full precision - `now - uptime + field22/CLK_TCK`, floored once, `now` from bash's `EPOCHREALTIME` and `uptime` monotonic - while Linux keeps the raw field unchanged.
-A fake `/proc` stepped by 3 s and by a fractional 1.25 s yields one identity; row 25 of the ledger carries the measurement and the residual that `/proc/uptime`'s centisecond granularity leaves behind.
+The fork records an absolute creation time in milliseconds on a non-Linux `/proc` instead, leaves Linux's raw field untouched, and routes every identity comparison through one tolerant comparator, because the derived origin is a clock reading and two readers of one live process disagree slightly about it.
+The `fm_pid_identity` and `fm_pid_identity_equal` headers in `bin/fm-wake-lib.sh` own that contract, and row 25 of the ledger carries the measurement and its history.
 
 ## What these PRs do not fix
 
@@ -140,8 +139,8 @@ Each is a candidate for its own small PR if it is wanted.
   The ancestry rather than the userland is the gate, and resume, reload and fork delegate to the nudge without paying the roughly one-second hybrid walk whose answer they would ignore.
   Ledger row 22.
 - **The step-exact process identity**, which is the fifth finding above.
-  Listed here as well because it is on the fork and in none of the seven branches: `now - uptime + field22/CLK_TCK`, floored once, under its own `proc-createtime` key, on a non-Linux `/proc` only, with a documented per-process residual and a fall back to the raw field 22 under the old `proc-starttime` key when the clock, uptime or `CLK_TCK` is unreadable, since Cygwin `ps` cannot answer the portable fallback at all.
-  Ledger row 25.
+  Listed here as well because it is on the fork and in none of the seven branches: a non-Linux `/proc` records an absolute creation time in milliseconds instead of a raw tick count, and every equality site compares through one tolerant comparator rather than a string equality.
+  The `fm_pid_identity` and `fm_pid_identity_equal` headers in `bin/fm-wake-lib.sh` own the contract; ledger row 25.
 - **CI triggers on the fork's default branch.**
   `.github/workflows/ci.yml` and `no-mistakes-required.yml` name `main` only, so on a fork whose default branch is `windows` neither has ever run: no lint, no test shard and no required check on anything pushed here.
   Both now name `windows` as well, asserted by parsing the workflow YAML rather than by matching its text, and skipping honestly where a YAML parser is absent.

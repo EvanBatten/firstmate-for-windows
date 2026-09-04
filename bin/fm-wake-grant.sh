@@ -42,7 +42,7 @@ owner_matches() {
   [ -z "$expected_pid" ] || [ "$pid" = "$expected_pid" ] || return 1
   [ -z "$expected_generation" ] || [ "$generation" = "$expected_generation" ] || return 1
   current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
-  [ -n "$current" ] && [ "$current" = "$identity" ]
+  [ -n "$current" ] && fm_pid_identity_equal "$current" "$identity"
 }
 
 case "${1:-}" in
@@ -59,7 +59,7 @@ case "${1:-}" in
     chmod 0600 "$TMP" || exit 1
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     LOCK_HELD=true
-    [ "$(fm_pid_identity "$pid" 2>/dev/null || true)" = "$identity" ] || exit 1
+    fm_pid_identity_equal "$(fm_pid_identity "$pid" 2>/dev/null || true)" "$identity" || exit 1
     rm -f -- "$BRANCH_ROWS" || exit 1
     _fm_atomic_replace "$TMP" "$BRANCH_OWNER" || exit 1
     TMP=

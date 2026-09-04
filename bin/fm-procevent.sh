@@ -219,7 +219,7 @@ cleanup_extension_registration_invocations_locked() {  # <source-id>
 # sidecar, not the current adapter name alone, supplies every expected binding
 # field, so replacing a binding cannot reinterpret old evidence.
 extension_result_command() {  # <adapter> <operation> <result-file>
-  local adapter=$1 operation=$2 result=$3 owner_state reservation='' owner claim_path handoff_status
+  local adapter=$1 operation=$2 result=$3 owner_state reservation='' owner claim_path live_identity handoff_status
   fm_procevent_result_extension_load "$result"
   owner_state=$?
   [ "$owner_state" -eq 0 ] || return 1
@@ -240,12 +240,22 @@ extension_result_command() {  # <adapter> <operation> <result-file>
     owner=${FM_LOCK_OWNER_DIR:-}
     [ -n "$owner" ] || { extension_lifecycle_lock_release; return 1; }
     claim_path=$(fm_procevent_claim_path "$CLAIM_ID") || { extension_lifecycle_lock_release; return 1; }
+    if ! live_identity=$(fm_pid_identity "$CLAIM_PID" 2>/dev/null); then
+      printf 'cannot hand off the captured result; the claim owner identity is unreadable: %s\n' "$CLAIM_ID" >&2
+      extension_lifecycle_lock_release
+      return 1
+    fi
+    if ! fm_pid_identity_equal "$live_identity" "$CLAIM_IDENTITY"; then
+      printf 'cannot hand off the captured result; the claim owner no longer matches its claim: %s\n' "$CLAIM_ID" >&2
+      extension_lifecycle_lock_release
+      return 1
+    fi
     FM_EXTENSION_RETIREMENT_MODE=process-event \
       FM_EXTENSION_LIFECYCLE_LOCK="$EXTENSION_LIFECYCLE_LOCK" \
       FM_EXTENSION_LIFECYCLE_OWNER="$owner" \
       perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" handoff \
         8 6 "$claim_path" "$CLAIM_HOME" "$CLAIM_ID" "$CLAIM_TOKEN" "$CLAIM_PID" \
-        "$(fm_pid_identity "$CLAIM_PID")" "$FM_PROCEVENT_RESULT_EXTENSION_BINDING_DIGEST" "$reservation" \
+        "$CLAIM_IDENTITY" "$FM_PROCEVENT_RESULT_EXTENSION_BINDING_DIGEST" "$reservation" \
         "$operation" "$result" "$EXTENSION_HOST" -- "${command[@]:1}"
     handoff_status=$?
     extension_lifecycle_lock_release
@@ -659,6 +669,7 @@ cmd_start() {
   CLAIM_HOME=$FM_HOME
   CLAIM_PID=$$
   CLAIM_TOKEN=$FM_PROCEVENT_CLAIM_TOKEN
+  CLAIM_IDENTITY=$FM_PROCEVENT_CLAIM_IDENTITY
   CLAIM_REG_IDENTITY=$FM_PROCEVENT_CLAIM_REG_IDENTITY
   STAGED_OUTPUT=
   release_start_claim() {
@@ -719,7 +730,7 @@ cmd_start() {
       9 8 6 "$id" "$adapter" "$FM_PROCEVENT_EXTENSION_ID" \
       "$FM_PROCEVENT_EXTENSION_VERSION" "$FM_PROCEVENT_EXTENSION_CAPABILITY_VERSION" \
       "$FM_PROCEVENT_EXTENSION_PACKAGE_DIGEST" "$FM_PROCEVENT_EXTENSION_BINDING_DIGEST" \
-      "$CLAIM_TOKEN" "$runner" "$out" "$$" "$(fm_pid_identity "$$")" "$MAX_OUTPUT_BYTES" -- "${ARGV[@]}") \
+      "$CLAIM_TOKEN" "$runner" "$out" "$$" "$CLAIM_IDENTITY" "$MAX_OUTPUT_BYTES" -- "${ARGV[@]}") \
       || die "cannot safely stage the extension result"
     IFS=$'\t' read -r capture_state durable rc truncated reservation_terminal reservation_silent <<EOF
 $capture_state
