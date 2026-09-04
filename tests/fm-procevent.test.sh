@@ -193,7 +193,7 @@ pe "$HPG" start direct-src > "$TMP_ROOT/direct-start.out" &
 direct_runner=$!
 wait_for "$FM_PROCEVENT_CLAIM_ROOT/direct-src.claim" || fail "direct start never claimed its source"
 direct_leader=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/direct-src.claim")
-direct_group=$(ps -o pgid= -p "$direct_leader" 2>/dev/null | tr -d '[:space:]')
+direct_group=$(fm_test_pgid "$direct_leader" 2>/dev/null | tr -d '[:space:]')
 [ "$direct_group" = "$direct_leader" ] \
   || fail "direct start claimed before leading its process group: pid=$direct_leader pgid=$direct_group"
 : > "$DIRECT_TRIGGER"

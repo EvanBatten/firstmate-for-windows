@@ -419,9 +419,10 @@ make_primary_home() {  # <dir>
   # owner, exactly as a real session does at session start.
   cat > "$dir/session.sh" <<'SH'
 #!/usr/bin/env bash
+. "$ROOT/bin/fm-proc-lib.sh"
 if [ "${FM_FIXTURE_ORPHAN_HERE:-0}" = 1 ]; then
   i=0
-  while [ "$i" -lt 200 ] && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
+  while [ "$i" -lt 200 ] && [ "$(fm_proc_ppid $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
     sleep 0.05
     i=$((i + 1))
   done
@@ -433,8 +434,9 @@ printf '%s\n' "$?" > "$FM_HOME/state/hook.rc"
 SH
   cat > "$dir/daemon.sh" <<'SH'
 #!/usr/bin/env bash
+. "$ROOT/bin/fm-proc-lib.sh"
 i=0
-while [ "$i" -lt 200 ] && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
+while [ "$i" -lt 200 ] && [ "$(fm_proc_ppid $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
   sleep 0.05
   i=$((i + 1))
 done
