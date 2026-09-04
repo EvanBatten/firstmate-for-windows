@@ -1,0 +1,7 @@
+cursor lookalike case at BASE fixture (traced): rc=0 in 3s
+result line:
+ok - fm_cursor_process_matches: cursor's real shapes identify; real node/agent lookalikes do not
+real-process comm lookups (fm_test_comm / ps -o comm=) and the negative checks they fed:
++ fm_cursor_process_matches /tmp/fm-cursor-harness.Gec4Xn/tree1/bin/cursor-agent '' ''
++ out=
++ out=

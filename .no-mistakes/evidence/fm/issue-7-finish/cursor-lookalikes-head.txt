@@ -1,0 +1,10 @@
+cursor lookalike case at HEAD (traced with bash -x): rc=0
+result line:
+ok - fm_cursor_process_matches: cursor's real shapes identify; real node/agent lookalikes do not
+real-process comm lookups and the negative checks they fed (base showed out= empty twice and no negative call):
+++ fm_test_comm 51118
++ out='/c/Program Files/nodejs/node'
++ fm_cursor_process_matches '/c/Program Files/nodejs/node' '' '/c/Program Files/nodejs/node'
+++ fm_test_comm 51117
++ out=/usr/bin/sh
++ fm_cursor_process_matches /usr/bin/sh '' /usr/bin/sh

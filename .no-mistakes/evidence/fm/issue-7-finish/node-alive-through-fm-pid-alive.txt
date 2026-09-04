@@ -1,0 +1,7 @@
+bash started sleep, MSYS pid=47030, winpid=68648
+--- while the sleep is live ---
+node process.kill(47030, 0) -> ESRCH
+alive(47030) -> true
+--- after killing the sleep ---
+node process.kill(47030, 0) -> ESRCH
+alive(47030) -> false

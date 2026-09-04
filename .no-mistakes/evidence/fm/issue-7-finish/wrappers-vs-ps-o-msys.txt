@@ -1,0 +1,22 @@
+host: MINGW64_NT-10.0-26200 | FM_PROC_OS=msys | ROOT exported: 1
+started sleep pid=46943 (bash $$=46915)
+--- literal ps -o on this host ---
+ps -o ppid=    -p 46943 -> rc=1: ps: unknown option -- o
+Try `ps --help' for more information.
+ps -o pgid=    -p 46943 -> rc=1: ps: unknown option -- o
+Try `ps --help' for more information.
+ps -o comm=    -p 46943 -> rc=1: ps: unknown option -- o
+Try `ps --help' for more information.
+ps -o command= -p 46943 -> rc=1: ps: unknown option -- o
+Try `ps --help' for more information.
+ps -o stat=    -p 46943 -> rc=1: ps: unknown option -- o
+Try `ps --help' for more information.
+--- tests/lib.sh wrappers, same pid ---
+fm_test_ppid  -> 46915 (expected 46915)
+fm_test_pgid  -> 46897
+fm_test_comm  -> /usr/bin/sleep
+fm_test_args  -> sleep 60
+fm_test_stat  -> R
+--- after kill ---
+fm_test_stat  -> "" (empty means gone)
+fm_test_ppid  -> "" rc=1

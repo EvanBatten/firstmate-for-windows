@@ -1,0 +1,1 @@
+ok - process cleanup: creation-time PID identity removes only the exact child and preserves the control child

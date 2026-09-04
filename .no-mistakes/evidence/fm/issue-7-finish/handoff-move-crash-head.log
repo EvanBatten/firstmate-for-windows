@@ -1,0 +1,3 @@
+tests/zz-onecase-handoff-head.test.sh: line 263: 49828 Killed                  FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design crash-item > "$TMP_ROOT/move-crash.out" 2>&1
+ok - a post-move crash preserves wake intent for an idempotent retry
+ALL TESTS PASSED
