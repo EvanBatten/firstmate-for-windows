@@ -2230,7 +2230,7 @@ Issue #7 closed the family afterwards: every per-pid `ps -o` read now goes throu
 Staging the interruption for real exposed the next red in `tests/fm-backlog-handoff.test.sh`: `test_pre_move_crash_does_not_wake_until_move_lands` now gets past its crash fixture on Windows and stops at `unrelated handoff changed the prepared batch's source item`, which is green on Linux and is a separate finding about what a killed handoff leaves behind here, not a fixture problem.
 The spellings that remain are the fixtures that implement a fake `ps` for product callers and either delegate `-o` queries to `/bin/ps` or answer canned `stat` and `comm` lines, such as `tests/fm-session-start.test.sh`, `tests/fm-startup-network.test.sh`, the death lab in `tests/fm-backend-herdr.test.sh` and `tests/fm-herdr-session-cleanup.test.sh`, plus `tests/fm-proc-lib.test.sh`, which fakes `ps` by design and asserts the exact invocation, the `ps -o lstart=` capability probe in `tests/fm-watcher-lock.test.sh`, which exists to skip where unsupported, and the `ps -axo ppid=,comm=` table scan in `tests/fm-backend-herdr-focus-flash-e2e.test.sh`.
 That scan asks whether a pane shell has a `sleep` child, a whole-table question the per-pid wrappers cannot express, and it runs only where a real `herdr` is installed, so it stays as it is.
-The same suite prints `warning: in the working copy of 'README.md', LF will be replaced by CRLF` from the repositories it initializes, because the fixture inherits this machine's global `core.autocrlf=true`; it is noise, not a failure.
+`tests/fm-backlog-atomicity.test.sh` also prints `warning: in the working copy of 'README.md', LF will be replaced by CRLF` from the repositories it initializes, because the fixture inherits this machine's global `core.autocrlf=true`; it is noise, not a failure.
 
 ### The live home after the merge
 
@@ -2317,7 +2317,7 @@ Stacked on `fm/issue-sweep-1` and re-verified there after a rebase onto `windows
 The four sessionstart-nudge cases were proven in isolation rather than in a suite run, three green and the live-harness re-emit case red on this box at the 120 s digest bound.
 This means every red left on the stack is one the ledger already names, and every new case this box can run to completion is green.
 
-Three more got partway and are parked on their branches with the progress written on the issue: #4's `bin/fm-private-lib.sh` (8/8 on its own suite, three sites wired, the full suites not run), #7's `ps -o` helpers in `tests/lib.sh` (seven files converted, the reproduction green, the full suites not run), and #12's operator-PATH composer (written, nothing run).
+Three more got partway and are parked on their branches with the progress written on the issue: #4's `bin/fm-private-lib.sh` (8/8 on its own suite, three sites wired, the full suites not run), #7's `ps -o` helpers in `tests/lib.sh` (seven files converted, the reproduction green, the full suites not run; finished afterwards, recorded under the upstream fixture that could not stage its interruption), and #12's operator-PATH composer (written, nothing run).
 #3, #6, #8, #9 and #10 were never started.
 
 The workers surfaced eight more defects on the way.
