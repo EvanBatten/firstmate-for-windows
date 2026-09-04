@@ -44,8 +44,8 @@ export ROOT
 
 # The one owner of "what process is this" (ppid, pgid, comm, args, liveness)
 # across macOS, Linux and MSYS, where `ps -o` does not exist at all
-# (docs/windows/measurement.md row 2). Sourced here so fm_test_ppid, fm_test_pgid
-# and fm_test_stat below can wrap it.
+# (docs/windows/measurement.md row 2). Sourced here so the fm_test_* wrappers
+# below can wrap it.
 # shellcheck source=bin/fm-proc-lib.sh
 . "$ROOT/bin/fm-proc-lib.sh"
 
