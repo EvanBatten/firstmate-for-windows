@@ -974,6 +974,7 @@ And it found the herdr-lab cancellation bug described above, by measuring bash's
 Three smaller findings became changes: four other test files copy `bin/fm-sessionstart-nudge.sh` into a fixture without its new library dependency (`fm-calm-pi-extension`, `fm-cursor-primary`, `fm-opencode-primary-live-e2e`, `fm-pi-primary-live-e2e` - two of them execute the nudge path); the `/proc/<pid>/pgid` comment claimed the file carries no trailing newline, which is true of `exename` beside it but not of `pgid`, `ppid` or `winpid` here; and the Windows lane's `timeout-minutes: 60` is now the binding constraint rather than the per-script bound.
 
 Two are recorded rather than fixed: `tests/fm-procevent.test.sh:196` and `tests/fm-home-summary-refresh.test.sh:266,271` read `ps -o pgid=` directly in TEST code and become the next red the moment row 21's D6 relaxation lands, and an empty `/proc/<pid>/pgid` file has no fixture (the `''` arm of the guard survives mutation, though every caller tolerates empty output).
+Issue #7 later moved every such fixture onto `tests/lib.sh`'s process-identity wrappers over `bin/fm-proc-lib.sh`.
 
 ### Not fixed here
 
@@ -2225,6 +2226,8 @@ With that the suite reaches 19 cases here, one past slice 11, and stops at `rest
 MSYS `ps` answers `ps: unknown option -- o` (row 2), `spawn_pid` is empty, and the fake exits 1 before any signal is sent, so the spawn was never interrupted and its exit 0 is honest.
 Classified as a fixture red of row 2's family, measured; ten test files still spell `ps -o` (`tests/fm-backend.test.sh`, `fm-backlog-handoff`, `fm-home-summary-refresh`, `fm-procevent`, `fm-procevent-when`, `fm-session-lock-ancestry`, among them), which is the shape a `tests/lib.sh` helper over `bin/fm-proc-lib.sh` would take.
 Not fixed here: it is upstream's fixture, one week old, and the merge is not the place to widen the port.
+Issue #7 closed the family afterwards: every fixture that asks `ps -o` for a fact now goes through `tests/lib.sh`'s process-identity wrappers (`fm_test_ppid`, `fm_test_pgid`, `fm_test_comm`, `fm_test_args`, `fm_test_stat`) or, for a standalone fakebin script, sources `bin/fm-proc-lib.sh` by absolute path and calls `fm_proc_*` directly, so on macOS and Linux each site still runs the literal `ps -o` it replaced.
+The spellings that remain are the fake `ps` fixtures that delegate `-o` queries to `/bin/ps` on behalf of POSIX product callers (`tests/fm-session-start.test.sh`, `tests/fm-startup-network.test.sh`), `tests/fm-proc-lib.test.sh`, which fakes `ps` by design and asserts the exact invocation, and the `ps -o lstart=` capability probe in `tests/fm-watcher-lock.test.sh`, which exists to skip where unsupported.
 The same suite prints `warning: in the working copy of 'README.md', LF will be replaced by CRLF` from the repositories it initializes, because the fixture inherits this machine's global `core.autocrlf=true`; it is noise, not a failure.
 
 ### The live home after the merge
