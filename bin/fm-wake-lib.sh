@@ -160,9 +160,16 @@ _fm_proc_now_ms() {
   _FM_PROC_NOW_MS=$(( now / 1000000 ))
 }
 
-# _fm_proc_createtime <proc_root> <starttime-ticks>: sets _FM_PROC_CREATETIME to
-# the whole second in which the process was created, or returns 1 so the caller
-# can fall back to the raw field 22 it replaces.
+# _fm_proc_now_is_builtin: true when _fm_proc_now_ms answers without a process,
+# from the override or from EPOCHREALTIME. Only such a clock is worth reading
+# twice around the uptime read: see _fm_proc_createtime_ms.
+_fm_proc_now_is_builtin() {
+  [ -n "${FM_PROC_NOW_OVERRIDE:-}" ] || [ -n "${EPOCHREALTIME:-}" ]
+}
+
+# _fm_proc_createtime_ms <proc_root> <starttime-ticks>: sets
+# _FM_PROC_CREATETIME_MS to the millisecond in which the process was created,
+# or returns 1 so the caller can fall back to the raw field 22 it replaces.
 #
 # MSYS has no boot timestamp of its own. It derives the origin as `now - uptime`
 # at every read and anchors /proc/<pid>/stat field 22 to that derived origin, so
@@ -194,9 +201,12 @@ _fm_proc_now_ms() {
 # moves with every clock step while this is at worst one identity another
 # reader may fail to match until the next arm records it afresh. Four
 # consecutive stalls of more than 10 ms inside a window of a few bash builtins
-# is the documented residual. A bash too old for EPOCHREALTIME forks `date` for
-# each wall-clock read, so on such a bash the budget is missed routinely and
-# the smallest-spread sample is what this dialect records.
+# is the documented residual. The budget and the retries apply only when the
+# clock is a builtin: a bash too old for EPOCHREALTIME forks `date` for every
+# wall-clock read, and a forked pair's spread would measure the fork rather
+# than the scheduler, so such a host takes one unbracketed sample - uptime,
+# then the clock - at the one-fork cost it always paid, and keeps the pre-fix
+# read residual: the gap between its two reads on top of the truncations.
 #
 # Under the retired whole-second key this jitter is what put a process born
 # near a second boundary in different seconds for different readers for its
@@ -230,6 +240,12 @@ _fm_proc_createtime_ms() {
   best_spread=
   best_origin=
   [ -n "$_FM_CLK_TCK" ] || _fm_clk_tck_probe || return 1
+  if ! _fm_proc_now_is_builtin; then
+    _fm_proc_uptime_ms "$proc_root" || return 1
+    _fm_proc_now_ms || return 1
+    _FM_PROC_CREATETIME_MS=$(( _FM_PROC_NOW_MS - _FM_PROC_UPTIME_MS + ticks * 1000 / _FM_CLK_TCK ))
+    return 0
+  fi
   for (( attempt = 0; attempt < _FM_PROC_CREATETIME_READ_ATTEMPTS; attempt++ )); do
     _fm_proc_now_ms || return 1
     before=$_FM_PROC_NOW_MS
@@ -325,7 +341,9 @@ fm_pid_identity() {
 # any of a reader's samples lands within budget. The residual is a reader whose
 # every sample stalled for more than 10 ms - four consecutive stalls inside a
 # window of a few bash builtins - which records its least-stalled sample, best
-# effort, and is self-healing at the next arm. It is a constant and not an
+# effort, and is self-healing at the next arm. A bash without EPOCHREALTIME
+# takes one forked sample instead and keeps the pre-fix residual, so there the
+# 100 is margin over about 15 ms rather than a bound. It is a constant and not an
 # environment knob, deliberately: the tolerance is a property of the measured
 # clock, and its tests build the strings they compare rather than turning it
 # down.

@@ -1304,6 +1304,44 @@ SH
   pass "MSYS process identity refuses a date that answers without nanoseconds"
 }
 
+# A bash too old for EPOCHREALTIME forks `date` for every wall-clock read, and
+# a forked pair's spread would measure the fork rather than the scheduler, so
+# such a host takes one unbracketed sample at the one-fork cost it always paid
+# and keeps the pre-fix read residual. This stages that bash with a `date` that
+# answers with nanoseconds and counts how many times it was asked.
+test_msys_proc_pid_identity_takes_one_forked_sample_without_epochrealtime() {
+  local dir state proc_root fakebin pid creation_ms now_ms expected identity date_log calls
+  dir=$(make_case msys-proc-identity-forked-date)
+  state="$dir/state"
+  proc_root="$dir/proc"
+  fakebin="$dir/uname-msys-forkeddate"
+  date_log="$dir/date-calls"
+  pid=4242
+  msys_fixture_clk_tck
+  creation_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_START_MS ))
+  now_ms=$(( MSYS_FIXTURE_BOOT_MS + MSYS_FIXTURE_UPTIME_MS ))
+  fake_uname "$fakebin" MINGW64_NT-10.0-26200
+  cat > "$fakebin/date" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$date_log"
+printf '%s000000\n' $now_ms
+SH
+  chmod +x "$fakebin/date"
+  write_fake_msys_machine "$proc_root" "$pid" "$MSYS_FIXTURE_BOOT_MS" "$creation_ms"
+  expected=$(createtime_ms_for "$MSYS_FIXTURE_BOOT_MS" "$creation_ms")
+
+  identity=$(PATH="$fakebin:$PATH" FM_PROC_ROOT_OVERRIDE="$proc_root" \
+    FM_STATE_OVERRIDE="$state" \
+    bash -c 'unset EPOCHREALTIME; . "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid") \
+    || fail "a forked date reported no identity at all"
+  [ "$identity" = "proc-createtime-ms=$expected cmdline-hex=$FAKE_PROC_CMDLINE_HEX" ] \
+    || fail "a forked date did not record the creation time (got '$identity', want proc-createtime-ms=$expected)"
+  calls=$(wc -l < "$date_log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "a bash without EPOCHREALTIME forked date $calls times for one identity read, not once"
+  pass "a bash without EPOCHREALTIME records the creation time from one forked date sample"
+}
+
 # identity_equal <state> <current> <recorded>: the comparator every consumer of
 # fm_pid_identity now routes through, exercised through the same public
 # interface they use.
@@ -1803,6 +1841,7 @@ test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
 test_msys_proc_pid_identity_survives_a_clock_step
 test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable
 test_msys_proc_pid_identity_rejects_a_nanosecondless_date
+test_msys_proc_pid_identity_takes_one_forked_sample_without_epochrealtime
 test_msys_proc_pid_identity_straddling_a_second_is_one_process
 test_msys_proc_pid_identity_retries_a_stalled_sample
 test_msys_proc_pid_identity_keeps_the_least_stalled_sample
