@@ -1,0 +1,6 @@
+ok - teardown reaps a leaked process whose shared identity matches
+ok - teardown still reaps a leaked process across the creation time's read jitter
+ok - teardown never signals a pid whose recorded command line no longer matches
+ok - a reused pid with a different start time is never force-killed
+ok - a process exiting during identity lookup does not block teardown
+ONE-CASE COPY COMPLETE: teardown identity cases green

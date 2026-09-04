@@ -1,0 +1,47 @@
+# tests/scratchpad-onecase.sh = tests/fm-watcher-lock.test.sh lines 1-1837 (every helper) plus these invocations:
+# --- one-case copy: identity, comparator and consumer cases only (scratch, gitignored) ---
+test_pid_identity_is_locale_invariant
+test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
+test_msys_proc_pid_identity_survives_a_clock_step
+test_msys_proc_pid_identity_keeps_the_raw_starttime_when_the_origin_is_unreadable
+test_msys_proc_pid_identity_rejects_a_nanosecondless_date
+test_msys_proc_pid_identity_takes_one_forked_sample_without_epochrealtime
+test_msys_proc_pid_identity_straddling_a_second_is_one_process
+test_msys_proc_pid_identity_retries_a_stalled_sample
+test_msys_proc_pid_identity_keeps_the_least_stalled_sample
+test_msys_proc_pid_identity_pairs_uptime_with_the_midpoint_of_its_clock_reads
+test_pid_identity_equal_is_tolerant_only_where_the_clock_is
+test_watcher_recorded_by_a_straddling_reader_stays_healthy
+test_autoarm_does_not_abandon_a_live_owner_recorded_by_a_straddling_reader
+test_autoarm_release_verifies_a_straddled_identity_before_signalling
+test_msys_pid_identity_uses_proc
+printf 'ONE-CASE COPY COMPLETE: all identity cases green\n'
+
+# tests/scratchpad-teardown-onecase.sh = tests/fm-teardown.test.sh lines 1-2737 (every helper) plus these invocations:
+# --- one-case copy: the shared process identity cases only (scratch, gitignored) ---
+test_teardown_reaps_through_the_shared_process_identity
+test_reused_pid_identity_is_not_force_killed
+test_process_exit_during_identity_lookup_does_not_refuse
+printf 'ONE-CASE COPY COMPLETE: teardown identity cases green\n'
+
+# red-before variant: same helpers, LIB pointed at the base commit 9b1deac's bin/fm-wake-lib.sh (+ fm-proc-lib, fm-classify-lib, fm-timeout-lib), each case run in a subshell:
+# --- red-before variant: each case in a subshell so every verdict is collected ---
+printf 'LIB under test: %s\n' "$LIB"
+for case_fn in \
+  test_msys_proc_pid_identity_survives_a_clock_step \
+  test_msys_proc_pid_identity_straddling_a_second_is_one_process \
+  test_msys_proc_pid_identity_retries_a_stalled_sample \
+  test_msys_proc_pid_identity_keeps_the_least_stalled_sample \
+  test_msys_proc_pid_identity_pairs_uptime_with_the_midpoint_of_its_clock_reads \
+  test_pid_identity_equal_is_tolerant_only_where_the_clock_is \
+  test_watcher_recorded_by_a_straddling_reader_stays_healthy \
+  test_autoarm_does_not_abandon_a_live_owner_recorded_by_a_straddling_reader \
+  test_autoarm_release_verifies_a_straddled_identity_before_signalling \
+  test_msys_proc_pid_identity_takes_one_forked_sample_without_epochrealtime \
+  test_msys_pid_identity_uses_proc; do
+  if ( "$case_fn" ) 2>&1; then
+    printf 'VERDICT green %s\n' "$case_fn"
+  else
+    printf 'VERDICT RED   %s\n' "$case_fn"
+  fi
+done

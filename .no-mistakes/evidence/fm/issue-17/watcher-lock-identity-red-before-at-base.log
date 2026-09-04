@@ -1,0 +1,24 @@
+LIB under test: /c/Users/ebatt/.no-mistakes/worktrees/1beea4074a2d/01M1NQ1XJ1RDKTAQW5TXY0XHN3/tests/scratchpad-base-bin/fm-wake-lib.sh
+not ok - MSYS process identity is not the absolute creation time (got 'proc-createtime=1784095027 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700', want 'proc-createtime-ms=1784095027054 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700')
+VERDICT RED   test_msys_proc_pid_identity_survives_a_clock_step
+not ok - the straddling reads are not the millisecond creation-time dialect ('proc-createtime=1784095026 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700' and 'proc-createtime=1784095027 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700')
+VERDICT RED   test_msys_proc_pid_identity_straddling_a_second_is_one_process
+not ok - stalled then clean: not a millisecond creation-time identity ('proc-starttime=986993 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700')
+VERDICT RED   test_msys_proc_pid_identity_retries_a_stalled_sample
+not ok - every sample stalled: not a millisecond creation-time identity ('proc-starttime=986993 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700')
+VERDICT RED   test_msys_proc_pid_identity_keeps_the_least_stalled_sample
+not ok - midpoint: not a millisecond creation-time identity ('proc-starttime=986993 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700')
+VERDICT RED   test_msys_proc_pid_identity_pairs_uptime_with_the_midpoint_of_its_clock_reads
+_: line 1: fm_pid_identity_equal: command not found
+not ok - identical: two strings that name one process were rejected ('proc-createtime-ms=1784095027054 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700' against 'proc-createtime-ms=1784095027054 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700')
+VERDICT RED   test_pid_identity_equal_is_tolerant_only_where_the_clock_is
+not ok - a live watcher whose lock was recorded 15 ms earlier did not match its own lock
+VERDICT RED   test_watcher_recorded_by_a_straddling_reader_stays_healthy
+not ok - a live owner whose identity was recorded 15 ms earlier was declared abandoned
+VERDICT RED   test_autoarm_does_not_abandon_a_live_owner_recorded_by_a_straddling_reader
+not ok - a live legacy owner recorded 15 ms earlier was left running under a reclaimed lock
+VERDICT RED   test_autoarm_release_verifies_a_straddled_identity_before_signalling
+not ok - a forked date did not record the creation time (got 'proc-createtime=1784095027 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700', want proc-createtime-ms=1784095027054)
+VERDICT RED   test_msys_proc_pid_identity_takes_one_forked_sample_without_epochrealtime
+not ok - MSYS process identity did not use compatible /proc fields ('proc-createtime=1788512911 cmdline-hex=736c6565700033303000')
+VERDICT RED   test_msys_pid_identity_uses_proc

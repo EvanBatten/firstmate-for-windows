@@ -1,0 +1,38 @@
+host: MINGW64_NT-10.0-26200, bash 5.2.37(1)-release, CLK_TCK 1000, EPOCHREALTIME present: yes
+uptime file: 212103.59 130131.57
+attempt 37: pid 3150 born at epoch-ms 1788513124998 (998 ms into its second) - near a boundary, keeping it
+
+--- base commit (9b1deac) library: 24 reads of pid 3150 ---
+  proc-createtime=1788513124       x18
+  proc-createtime=1788513125       x6
+distinct identities from the base library for ONE live process: 2
+
+--- HEAD library: 24 reads of pid 3150, each compared with the first through fm_pid_identity_equal ---
+  recorded: proc-createtime-ms=1788513124995
+  read  1: proc-createtime-ms=1788513125001 delta   +6 ms -> equal
+  read  2: proc-createtime-ms=1788513125001 delta   +6 ms -> equal
+  read  3: proc-createtime-ms=1788513125002 delta   +7 ms -> equal
+  read  4: proc-createtime-ms=1788513124997 delta   +2 ms -> equal
+  read  5: proc-createtime-ms=1788513124995 delta   +0 ms -> equal
+  read  6: proc-createtime-ms=1788513124994 delta   -1 ms -> equal
+  read  7: proc-createtime-ms=1788513124998 delta   +3 ms -> equal
+  read  8: proc-createtime-ms=1788513124999 delta   +4 ms -> equal
+  read  9: proc-createtime-ms=1788513124993 delta   -2 ms -> equal
+  read 10: proc-createtime-ms=1788513125001 delta   +6 ms -> equal
+  read 11: proc-createtime-ms=1788513124993 delta   -2 ms -> equal
+  read 12: proc-createtime-ms=1788513124998 delta   +3 ms -> equal
+  read 13: proc-createtime-ms=1788513124995 delta   +0 ms -> equal
+  read 14: proc-createtime-ms=1788513124999 delta   +4 ms -> equal
+  read 15: proc-createtime-ms=1788513124996 delta   +1 ms -> equal
+  read 16: proc-createtime-ms=1788513125001 delta   +6 ms -> equal
+  read 17: proc-createtime-ms=1788513125000 delta   +5 ms -> equal
+  read 18: proc-createtime-ms=1788513124994 delta   -1 ms -> equal
+  read 19: proc-createtime-ms=1788513124996 delta   +1 ms -> equal
+  read 20: proc-createtime-ms=1788513124998 delta   +3 ms -> equal
+  read 21: proc-createtime-ms=1788513124999 delta   +4 ms -> equal
+  read 22: proc-createtime-ms=1788513125000 delta   +5 ms -> equal
+  read 23: proc-createtime-ms=1788513124993 delta   -2 ms -> equal
+  read 24: proc-createtime-ms=1788513124993 delta   -2 ms -> equal
+distinct raw strings from the HEAD library: 10, spread across all reads: 9 ms (bound for two readers: about 32 ms)
+comparator mismatches for the same live process: 0 of 24
+a different live process (pid 4171, proc-createtime-ms=1788513151214) is still rejected against the record

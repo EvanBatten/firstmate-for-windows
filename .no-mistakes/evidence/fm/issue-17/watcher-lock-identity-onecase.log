@@ -1,0 +1,25 @@
+ok - real ps fallback locale check skipped where ps -o lstart= is unsupported
+ok - fm_pid_identity is locale-invariant across LC_ALL/LC_TIME
+ok - Linux process identity is field 22 alone and ignores btime
+ok - Linux process identity detects pid reuse
+ok - MSYS process identity survives a whole-second and a fractional wall-clock step
+ok - MSYS process identity detects pid reuse
+ok - MSYS process identity keeps the raw starttime when the creation origin is unreadable
+ok - MSYS process identity refuses a date that answers without nanoseconds
+ok - a bash without EPOCHREALTIME records the creation time from one forked date sample
+ok - two readers of one straddling process record it milliseconds apart across a second boundary
+ok - a straddling process still compares as one process in both directions
+ok - a reader stalled inside its first sample records its clean second sample
+ok - a reader whose every sample stalled records the least-stalled sample under the millisecond key
+ok - a clean sample pairs uptime with the midpoint of its two clock reads
+ok - the identity comparator absorbs read jitter up to its stated tolerance and no further
+ok - the identity comparator still tells a reused pid and a different command line apart
+ok - the identity comparator keeps every exact dialect byte-exact
+ok - the identity comparator never compares two different keys as one process
+ok - the identity comparator rejects an empty or malformed reading rather than guessing
+ok - a watcher recorded by a straddling reader stays healthy and a foreign one still does not
+ok - a live auto-arm owner recorded by a straddling reader is not declared abandoned
+ok - a proven-abandoned live legacy owner recorded by a straddling reader is retired with TERM
+ok - a reclaim still refuses to signal a pid whose recorded command line does not verify
+ok - MSYS process identity uses compatible /proc fields
+ONE-CASE COPY COMPLETE: all identity cases green

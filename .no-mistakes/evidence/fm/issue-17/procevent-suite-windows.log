@@ -1,0 +1,5 @@
+ok - no configured source means no generated state and no process
+ok - one blocking completion yields exactly one bounded normalized event
+not ok - the captured result is private (missing: '600')
+--- output ---
+644
