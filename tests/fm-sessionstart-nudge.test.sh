@@ -943,7 +943,7 @@ const waitFor = async (predicate, message) => {
   throw new Error(message);
 };
 const alive = (pid) => {
-  // The pids handed in are MSYS pids from the bash side while Node on Windows resolves Win32 pids, so bin/fm-proc-lib.sh's fm_pid_alive owns liveness in both spaces.
+  // The pids handed in are MSYS pids from the bash side while Node on Windows resolves Win32 pids, so fm_pid_alive from bin/fm-proc-lib.sh owns liveness in both spaces.
   const owner = spawnSync("bash",
     ["-c", '. "$1/bin/fm-proc-lib.sh" && fm_pid_alive "$2"', "_", process.env.ROOT, String(pid)]);
   if (owner.status !== 0) return false;
