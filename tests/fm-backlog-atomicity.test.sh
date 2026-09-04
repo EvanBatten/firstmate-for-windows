@@ -139,9 +139,9 @@ interrupt_spawn_during_start() {  # <case-dir> <before|after>
   real=$(command -v tasks-axi)
   cat > "$case_dir/fakebin/tasks-axi" <<SH
 #!/usr/bin/env bash
-. "$ROOT/bin/fm-proc-lib.sh"
 if [ "\${1:-}" = start ] && [ ! -f "$case_dir/start-interrupted" ]; then
   : > "$case_dir/start-interrupted"
+  . "$ROOT/bin/fm-proc-lib.sh"
   spawn_pid=\$(fm_proc_ppid "\$PPID")
   case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
   if [ "$timing" = before ]; then
@@ -212,9 +212,9 @@ interrupt_teardown_during_treehouse_return() {  # <case-dir>
   local case_dir=$1
   cat > "$case_dir/fakebin/treehouse" <<SH
 #!/usr/bin/env bash
-. "$ROOT/bin/fm-proc-lib.sh"
 if [ "\${1:-}" = return ] && [ ! -f "$case_dir/teardown-interrupted" ]; then
   : > "$case_dir/teardown-interrupted"
+  . "$ROOT/bin/fm-proc-lib.sh"
   teardown_pid=\$(fm_proc_ppid "\$PPID")
   case "\$teardown_pid" in ''|*[!0-9]*) exit 1 ;; esac
   kill -TERM "\$teardown_pid"
@@ -233,7 +233,6 @@ interrupt_kimi_readiness() {  # <case-dir>
   fm_fake_exit0 "$case_dir/fakebin" kimi
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
-. "$ROOT/bin/fm-proc-lib.sh"
 case "\$*" in
   *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
   *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
@@ -243,6 +242,7 @@ case "\${1:-}" in
   capture-pane)
     if [ ! -f "$case_dir/kimi-interrupted" ]; then
       : > "$case_dir/kimi-interrupted"
+      . "$ROOT/bin/fm-proc-lib.sh"
       spawn_pid=\$(fm_proc_ppid "\$PPID")
       case "\$spawn_pid" in ''|*[!0-9]*) exit 1 ;; esac
       kill -TERM "\$spawn_pid"

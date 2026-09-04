@@ -419,8 +419,8 @@ make_primary_home() {  # <dir>
   # owner, exactly as a real session does at session start.
   cat > "$dir/session.sh" <<'SH'
 #!/usr/bin/env bash
-. "$ROOT/bin/fm-proc-lib.sh"
 if [ "${FM_FIXTURE_ORPHAN_HERE:-0}" = 1 ]; then
+  . "$ROOT/bin/fm-proc-lib.sh"
   i=0
   while [ "$i" -lt 200 ] && [ "$(fm_proc_ppid $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
     sleep 0.05

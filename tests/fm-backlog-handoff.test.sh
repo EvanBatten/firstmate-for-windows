@@ -275,12 +275,12 @@ EOF
   real_tasks=$(command -v tasks-axi)
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
-. "$ROOT/bin/fm-proc-lib.sh"
 "$FM_REAL_TASKS_AXI" "$@"
 rc=$?
 case " $* " in
   *" --file "*" --to "*)
     if [ "$rc" -eq 0 ] && [ "${1:-}" = mv ]; then
+      . "$ROOT/bin/fm-proc-lib.sh"
       handoff_pid=$(fm_proc_ppid "$PPID")
       kill -KILL "$handoff_pid"
       sleep 1
@@ -350,10 +350,10 @@ EOF
   real_tasks=$(command -v tasks-axi)
   cat > "$fakebin/tasks-axi" <<'SH'
 #!/usr/bin/env bash
-. "$ROOT/bin/fm-proc-lib.sh"
 case " $* " in
   *" --file "*" --to "*)
     if [ "${1:-}" = mv ]; then
+      . "$ROOT/bin/fm-proc-lib.sh"
       handoff_pid=$(fm_proc_ppid "$PPID")
       kill -KILL "$handoff_pid"
       sleep 1
