@@ -85,10 +85,10 @@ test_wait_until_times_out_at_the_host_sized_deadline() {
 
 test_wait_for_exit_honors_the_scaled_deadline_not_a_tick_count() {
   local status
-  # A child that outlives the raw 0.3 s budget but not the host-sized one.
+  # A child that outlives the raw 0.3 s budget but not the host-sized 3 s one.
   sleep 0.9 &
   status=0
-  FM_TEST_TIME_SCALE=5 wait_for_exit $! 3 || status=$?
+  FM_TEST_TIME_SCALE=10 wait_for_exit $! 3 || status=$?
   [ "$status" -eq 0 ] || fail "wait_for_exit killed a child that exited inside the scaled deadline (rc=$status)"
   sleep 5 &
   status=0
@@ -97,9 +97,66 @@ test_wait_for_exit_honors_the_scaled_deadline_not_a_tick_count() {
   pass "time scale: wait_for_exit waits for a host-sized deadline and still bounds a hung child"
 }
 
+# shellcheck disable=SC2016  # the body is evaluated by the fresh shell in run_with_scale
+test_a_comma_decimal_locale_keeps_the_clock_an_integer() {
+  local rendered out now status flag
+  rendered=$(LC_ALL=de_DE.UTF-8 bash -c 'printf "%s\n" "${EPOCHREALTIME:-}"' 2>/dev/null)
+  case "$rendered" in
+    *,*) ;;
+    *)
+      pass "time scale: a comma-decimal locale keeps the clock an integer (skipped: this host cannot render de_DE.UTF-8)"
+      return 0 ;;
+  esac
+  flag="$TMP_ROOT/appears-under-de_DE"
+  ( sleep 0.3; : > "$flag" ) &
+  out=$(FM_TEST_CASE_FLAG="$flag" LC_ALL=de_DE.UTF-8 run_with_scale '' '
+    now=$(fm_test_now_ms)
+    status=0
+    fm_test_wait_until 10 test -e "$FM_TEST_CASE_FLAG" || status=$?
+    printf "%s %s\n" "$now" "$status"
+  ' 2>/dev/null | tail -1)
+  wait
+  now=${out% *}
+  status=${out##* }
+  case "$now" in
+    ''|*[!0-9]*) fail "fm_test_now_ms under de_DE.UTF-8 is not an integer: '$now'" ;;
+  esac
+  [ "$status" = 0 ] || fail "wait_until under de_DE.UTF-8 returned '$status' for a file that appeared"
+  pass "time scale: a comma-decimal locale keeps the clock an integer and its deadlines comparable"
+}
+
+# shellcheck disable=SC2016  # the body is evaluated by the fresh shell it is handed to
+test_a_whole_second_clock_takes_scale_one_and_never_ends_a_wait_early() {
+  local fakebin real_date out start elapsed
+  fakebin=$(fm_fakebin "$TMP_ROOT/bsd")
+  real_date=$(type -P date)
+  cat > "$fakebin/date" <<SH
+#!/usr/bin/env bash
+exec "$real_date" "\${@//%N/N}"
+SH
+  chmod +x "$fakebin/date"
+  start=$(fm_test_now_ms)
+  out=$(PATH="$fakebin:$PATH" env -u FM_TEST_TIME_SCALE bash -c '
+    unset EPOCHREALTIME
+    . "$1"
+    status=0
+    fm_test_wait_until 0.4 test -e "$2" || status=$?
+    printf "%s %s %s\n" "$FM_TEST_TIME_SCALE" "$FM_TEST_CLOCK_RESOLUTION_MS" "$status"
+  ' _ "$LIB" "$TMP_ROOT/never-on-a-whole-second-clock" 2>&1)
+  elapsed=$(( $(fm_test_now_ms) - start ))
+  assert_not_contains "$out" "# host time scale" "a whole-second clock reported a measured scale"
+  [ "$(printf '%s\n' "$out" | tail -1)" = "1 1000 124" ] \
+    || fail "a whole-second clock should take scale 1 unmeasured, record a 1000 ms resolution and still time out, got: $out"
+  [ "$elapsed" -ge 400 ] || fail "a 0.4 s wait on a whole-second clock ended after only ${elapsed} ms"
+  [ "$elapsed" -lt 15000 ] || fail "the padded deadline on a whole-second clock was not bounded: ${elapsed} ms"
+  pass "time scale: a whole-second clock takes scale 1 unmeasured and pads its deadlines instead of ending waits early"
+}
+
 test_measured_scale_is_a_bounded_positive_integer
 test_pinned_scale_wins_and_sizes_every_budget_shape
 test_a_bad_pin_is_refused_when_the_library_loads
 test_wait_until_returns_as_soon_as_the_condition_holds
 test_wait_until_times_out_at_the_host_sized_deadline
 test_wait_for_exit_honors_the_scaled_deadline_not_a_tick_count
+test_a_comma_decimal_locale_keeps_the_clock_an_integer
+test_a_whole_second_clock_takes_scale_one_and_never_ends_a_wait_early

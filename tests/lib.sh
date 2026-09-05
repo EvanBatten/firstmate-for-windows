@@ -410,20 +410,38 @@ assert_present() {
 FM_TEST_TIME_SCALE_REFERENCE_MS=4   # exec cost a fast Linux box stays under: scale 1 there
 FM_TEST_TIME_SCALE_MAX=40           # an overloaded host still gets bounded budgets
 
-# fm_test_now_ms: milliseconds without a spawn where bash offers a clock
-# (EPOCHREALTIME, bash 5); date +%s%N elsewhere; whole seconds from SECONDS when
-# neither exists (stock macOS bash 3.2 with BSD date).
-fm_test_now_ms() {
-  local s
+# fm_test_clock_init: pick this host's clock once as the library is sourced:
+# EPOCHREALTIME without a spawn (bash 5), date +%s%N elsewhere, and whole
+# seconds from SECONDS when neither exists (stock macOS bash 3.2 with BSD
+# date). FM_TEST_CLOCK_RESOLUTION_MS records how far one reading can trail the
+# true time, so a deadline pads for it: 1 with sub-second time, 1000 on the
+# whole-second fallback.
+fm_test_clock_init() {
+  FM_TEST_CLOCK_RESOLUTION_MS=1
   if [ -n "${EPOCHREALTIME:-}" ]; then
-    s=${EPOCHREALTIME/./}
-    printf '%s\n' "${s%???}"
+    FM_TEST_CLOCK=epochrealtime
     return 0
   fi
-  s=$(date +%s%N 2>/dev/null)
-  case "$s" in
-    ''|*[!0-9]*) printf '%s\n' "$((SECONDS * 1000))" ;;
-    *) printf '%s\n' "${s%??????}" ;;
+  case "$(date +%s%N 2>/dev/null)" in
+    ''|*[!0-9]*) FM_TEST_CLOCK=seconds; FM_TEST_CLOCK_RESOLUTION_MS=1000 ;;
+    *) FM_TEST_CLOCK=date-ns ;;
+  esac
+}
+fm_test_clock_init
+
+# fm_test_now_ms: milliseconds from the clock fm_test_clock_init picked. Bash
+# renders EPOCHREALTIME with the locale's decimal separator, so every non-digit
+# is stripped rather than one dot.
+fm_test_now_ms() {
+  local s
+  case "$FM_TEST_CLOCK" in
+    epochrealtime)
+      s=${EPOCHREALTIME//[!0-9]/}
+      printf '%s\n' "${s%???}" ;;
+    date-ns)
+      s=$(date +%s%N)
+      printf '%s\n' "${s%??????}" ;;
+    *) printf '%s\n' "$((SECONDS * 1000))" ;;
   esac
 }
 
@@ -445,13 +463,19 @@ fm_test_spawn_cost_ms() {
 }
 
 # fm_test_time_scale_init: validate a pinned FM_TEST_TIME_SCALE or measure one,
-# then export it. Runs once when this library is sourced.
+# then export it. Runs once when this library is sourced. A whole-second clock
+# cannot time twenty execs, so it takes the fast-host scale of 1 unmeasured.
 fm_test_time_scale_init() {
   local cost scale
   if [ -n "${FM_TEST_TIME_SCALE:-}" ]; then
     case "$FM_TEST_TIME_SCALE" in
       *[!0-9]*|0*) fail "FM_TEST_TIME_SCALE must be a positive integer, got '$FM_TEST_TIME_SCALE'" ;;
     esac
+    export FM_TEST_TIME_SCALE
+    return 0
+  fi
+  if [ "$FM_TEST_CLOCK_RESOLUTION_MS" -ne 1 ]; then
+    FM_TEST_TIME_SCALE=1
     export FM_TEST_TIME_SCALE
     return 0
   fi
@@ -492,14 +516,16 @@ fm_test_tenths() {
 
 # fm_test_wait_until <linux-seconds> <command> [args...]: run the command every
 # 0.1 s until it succeeds (return 0) or this host's sizing of that budget
-# elapses (return 124). The command is a function or executable with its
-# arguments, never a shell string; wrap a compound condition in a function.
-# The probe's stderr is dropped: a file that does not exist yet is the normal
-# state while waiting, not an error worth logging on every tick.
+# elapses (return 124). The deadline is padded by the clock's resolution, so a
+# whole-second clock can only lengthen a wait, never end it early. The command
+# is a function or executable with its arguments, never a shell string; wrap a
+# compound condition in a function. The probe's stderr is dropped: a file that
+# does not exist yet is the normal state while waiting, not an error worth
+# logging on every tick.
 fm_test_wait_until() {
   local budget=$1 deadline now
   shift
-  deadline=$(( $(fm_test_now_ms) + $(fm_test_budget_ms "$budget") ))
+  deadline=$(( $(fm_test_now_ms) + $(fm_test_budget_ms "$budget") + FM_TEST_CLOCK_RESOLUTION_MS ))
   while :; do
     if "$@" 2>/dev/null; then
       return 0

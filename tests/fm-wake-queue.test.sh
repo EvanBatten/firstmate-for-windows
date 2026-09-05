@@ -563,13 +563,7 @@ test_enrichment_preserves_all_unread_lines_and_status_file_failures() {
 }
 
 wait_for_file_text() {  # <file> <fixed-text>
-  local file=$1 expected=$2 i=0
-  while [ "$i" -lt 100 ]; do
-    grep -F "$expected" "$file" >/dev/null 2>&1 && return 0
-    sleep 0.05
-    i=$((i + 1))
-  done
-  return 1
+  fm_test_wait_until 5 grep -qF "$2" "$1"
 }
 
 test_slow_annotation_does_not_block_append_and_deleted_file_fails_open() {
@@ -995,7 +989,7 @@ SH
 }
 
 test_interruption_before_and_after_raw_commit() {
-  local dir state before_out after_out replay_out empty_out pid rc count i sequence generation
+  local dir state before_out after_out replay_out empty_out pid rc count sequence generation
   dir=$(make_case interruption)
   state="$dir/state"
   before_out="$dir/before.out"
@@ -1007,12 +1001,8 @@ test_interruption_before_and_after_raw_commit() {
 
   FM_STATE_OVERRIDE="$state" FM_WAKE_DRAIN_TEST_DELAY_BEFORE_COMMIT=5 "$DRAIN" > "$before_out" &
   pid=$!
-  i=0
-  while [ "$i" -lt 100 ] && [ ! -e "$state/.wake-queue.lock" ]; do
-    sleep 0.05
-    i=$((i + 1))
-  done
-  [ -e "$state/.wake-queue.lock" ] || { kill "$pid" 2>/dev/null || true; fail "pre-commit drain never entered its serialized read boundary"; }
+  fm_test_wait_until 5 test -e "$state/.wake-queue.lock" \
+    || { kill "$pid" 2>/dev/null || true; fail "pre-commit drain never entered its serialized read boundary"; }
   kill -TERM "$pid" 2>/dev/null || fail "could not interrupt drain before raw commitment"
   set +e
   wait "$pid"
