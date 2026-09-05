@@ -45,7 +45,11 @@ run_watcher_once() {
   date '+%s' > "$state/.afk"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 50
+  # 100 ticks (10s), the family's budget (see fm-watch-triage): fm-watch.sh does
+  # bounded startup work before its first poll (recovery-marker snapshot, lock
+  # acquisition), and a tighter budget reaps the process while it is still
+  # starting. A watcher that never exits still fails when the budget runs out.
+  wait_for_exit "$!" 100
 }
 
 ack_handled_wakes() {  # <state> <drain-stderr>
