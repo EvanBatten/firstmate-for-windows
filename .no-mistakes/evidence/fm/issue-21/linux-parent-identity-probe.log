@@ -1,0 +1,24 @@
+# Linux parent-identity probe for the fake cursor-agent, 2026-09-05T05:05:32Z
+host: Linux GeneralBerserk 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+os: Ubuntu 24.04.4 LTS  bash: GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
+Each body writes the fake harness's own pid into state/.lock, then runs a child that
+sources bin/fm-session-lock-lib.sh and asks fm_session_lock_owned_by_self, the predicate
+the park adapter uses; parent_comm is what ps -o comm= reports, parent_exe is /proc/<ppid>/exe.
+
+## 1. COPY of bash named cursor-agent, body WITHOUT the exit guard: bash execs the last command in place
+child=575 parent=284 parent_comm=bash parent_exe=bash lock_owned_by_self=NOT-owned
+
+## 2. COPY, body WITH `exit "$?"` (the pattern the suite now uses): the fake harness stays the parent
+child=654 parent=653 parent_comm=cursor-agent parent_exe=cursor-agent lock_owned_by_self=owned-by-self
+
+## 3. SYMLINK to bash named exactly cursor-agent, same guarded body
+  lrwxrwxrwx /var/tmp/fm-issue21-linux/probe/linkbin/cursor-agent -> /bin/bash
+child=693 parent=692 parent_comm=cursor-agent parent_exe=bash lock_owned_by_self=owned-by-self
+
+## 4. exit status propagates through the guard (copy)
+child=730 parent=729 parent_comm=cursor-agent parent_exe=cursor-agent lock_owned_by_self=owned-by-self
+rc=3  (expected 3)
+rc=1  (expected 1)
+
+## 5. a signal to the adapter child propagates through the guard as 128+signal (copy)
+rc=143  (expected 143 = 128+SIGTERM)

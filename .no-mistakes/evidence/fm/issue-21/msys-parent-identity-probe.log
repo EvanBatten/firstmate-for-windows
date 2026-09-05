@@ -1,0 +1,21 @@
+# MSYS parent-identity probe for the fake cursor-agent (a copy of bash), 2026-09-05T05:01:00Z
+host: MINGW64_NT-10.0-26200 GeneralBerserk 3.5.7-463ebcdc.x86_64 2025-03-03 17:26 UTC x86_64 Msys
+fake: /tmp/fm-issue21-probe.aV7eyA/fakebin/cursor-agent  (copied from /usr/bin/bash)
+The child is a bash script that asks bin/fm-proc-lib.sh for its parent's command name
+and runs bin/fm-cursor-lib.sh's fm_cursor_process_matches on it, as the session lock lib does.
+
+## 1. body WITHOUT the exit guard: bash execs the last command in place, so the adapter sees bash as its parent
+child=28932 parent=28872 parent_comm=bash cursor_match=rejected
+
+## 2. body WITH `exit "$?"` (the pattern the suite now uses): the fake harness stays the parent
+child=28999 parent=28995 parent_comm=cursor-agent cursor_match=accepted-as-cursor
+
+## 3. exit status propagates through the guard
+child=29079 parent=29076 parent_comm=cursor-agent cursor_match=accepted-as-cursor
+rc=3  (expected 3)
+rc=1  (expected 1)
+rc=0  (expected 0)
+
+## 4. a NATIVE symlink named cursor-agent-link instead of a copy (MSYS=winsymlinks:nativestrict; the header says a symlink is not enough on Linux)
+  lrwxrwxrwx 1 ebatt 197609 17 Sep  5 01:01 /tmp/fm-issue21-probe.aV7eyA/fakebin/cursor-agent-link -> /usr/bin/bash.exe
+child=29158 parent=29154 parent_comm=cursor-agent-link cursor_match=rejected

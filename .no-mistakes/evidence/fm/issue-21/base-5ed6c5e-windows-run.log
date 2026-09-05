@@ -1,0 +1,7 @@
+# Base commit 5ed6c5e tests/fm-cursor-primary.test.sh run on Windows Git Bash (issue #21 reproduction)
+host: MINGW64_NT-10.0-26200 GeneralBerserk 3.5.7-463ebcdc.x86_64 2025-03-03 17:26 UTC x86_64 Msys
+bash: GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)
+cc/gcc/clang on PATH: none
+start: 2026-09-05T04:59:11Z
+not ok - a C compiler is required to build the fake Cursor process
+exit=1 elapsed=1s
