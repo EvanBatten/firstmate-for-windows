@@ -1879,13 +1879,13 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-remote-doctor | `--fix left a repairable host unready: expected exit 0, got 1` | platform: toolchain | read. The doctor fixture builds its `~/.local/bin` tool set from the same assumptions. |
 | fm-voice-relay | `fm-voice-client.py: error: say where the relay is` | platform: toolchain | read. The voice path has no Windows story yet. |
 | fm-task-inbox | `a concurrent inbox write failed` | platform: spawn cost | measured. The slowest script in the lane at 1501 s; it hit the per-script bound. |
-| fm-watch-checkpoint | `signal checkpoint exit: expected exit 0, got 124` | platform: spawn cost | read. The checkpoint's own timeout fired - finding 27's family, an iteration-counted budget that assumes a free poll. |
-| fm-wake-queue | `no actionable wake within 3s` | platform: spawn cost | read. A three-second deadline where one liveness probe costs seconds. |
-| fm-watch-recovery-loop | `did not surface the crew event within a poll interval or two (waited 16s)` | platform: spawn cost | read. |
-| fm-watch-arm | `re-arm stayed live instead of surfacing durable wakes` | platform: spawn cost | read. |
-| fm-watch-triage | `watcher did not surface a turn-end whose crew is not provably working` | platform: spawn cost | read. |
-| fm-wake-daemon-lifecycle-e2e | `watcher did not exit for the routine signal` | platform: spawn cost | read. |
-| fm-home-summary-refresh | `the real watcher did not begin polling` | platform: spawn cost | read. |
+| fm-watch-checkpoint | `signal checkpoint exit: expected exit 0, got 124` | platform: spawn cost | read. The checkpoint's own timeout fired - finding 27's family, an iteration-counted budget that assumes a free poll. Closed by issue #8 slice 1 (see "Issue #8, slice 1" under Integration); the suite now reaches a row-21 gate. |
+| fm-wake-queue | `no actionable wake within 3s` | platform: spawn cost | read. A three-second deadline where one liveness probe costs seconds. Closed by issue #8 slice 1; the suite now reaches a row-21 gate at case 12. |
+| fm-watch-recovery-loop | `did not surface the crew event within a poll interval or two (waited 16s)` | platform: spawn cost | read. Closed by issue #8 slice 1; the suite now reaches the extension host's identity dialect at case 2. |
+| fm-watch-arm | `re-arm stayed live instead of surfacing durable wakes` | platform: spawn cost | read. Closed by issue #8 slice 1. |
+| fm-watch-triage | `watcher did not surface a turn-end whose crew is not provably working` | platform: spawn cost | read. Closed by issue #8 slice 1. |
+| fm-wake-daemon-lifecycle-e2e | `watcher did not exit for the routine signal` | platform: spawn cost | read. Closed by issue #8 slice 1: 2 of 2 green. |
+| fm-home-summary-refresh | `the real watcher did not begin polling` | platform: spawn cost | read. Re-measured under issue #8 slice 1: at `5ed6c5e` the suite stops earlier, on case 3's provenance assertion, which is not a timing budget; still open. |
 | fm-pending-reply | `recovery should send after completed turn + grace` | platform: spawn cost | read. A grace window in wall-clock seconds. |
 | fm-spawn-worktree-settle | `already-settled pane took 31s to confirm` | platform: spawn cost | read. The assertion is a wall-clock bound sized for a fast spawn. |
 | fm-startup-network | `start blocked for 10s behind a 10s worker` | platform: spawn cost | read. A parallelism assertion in wall-clock seconds. |
@@ -2320,6 +2320,34 @@ The workers surfaced eight more defects on the way.
 
 One lesson, measured three times: a headless worker's session ends with its final message, so a worker that ends a turn "waiting for a background suite" loses both the suite and its commit.
 The brief for the remaining issues now says to run suites in the foreground.
+
+### Issue #8, slice 1: a host time scale, and the watcher family on it
+
+The twenty-nine "platform: spawn cost" rows in the serial lane's verdict table were each read from one line of output, and the issue proposed one fix for all of them: a shared "wait until this condition holds or this deadline passes" helper sized from a measured spawn cost, with the families moved onto it one at a time.
+Measured here first (twenty operations each, per operation): a fork costs 30 ms and an exec 53 ms in Git Bash, against 1.7 ms and 2.1 ms in WSL Ubuntu on the same machine, so a budget written on Linux is short here by fifteen to thirty times before any product work starts.
+`tests/lib.sh` now measures that once as it is sourced (twenty execs of the external `true`), turns it into an integer scale of at least 1 and at most 40 against a 4 ms reference, exports it as `FM_TEST_TIME_SCALE` so fakes and child shells agree, prints one TAP comment when the scale is above 1, and refuses a malformed pin instead of quietly scaling 1; the scale measured 9 to 19 across the runs below depending on what else the box was doing.
+On top of that sit `fm_test_seconds`, `fm_test_budget_ms`, `fm_test_tenths` and `fm_test_wait_until`, whose contract is the point: the happy path returns the moment its condition holds, and only the bound moves, so a fast host measures scale 1 and keeps every Linux budget exactly as it was.
+`tests/fm-test-time-scale.test.sh` proves the helper's own behavior in six cases, including that `wait_for_exit` now waits for the sized deadline and still bounds a hung child.
+
+The watcher family went first because 84 of its wait sites already pass through one helper, `wait_for_exit` in `tests/wake-helpers.sh`, whose tick count is now a host-sized deadline with no caller changed.
+The rest was the suites' own tick loops and the budgets they hand the product: seven checkpoint `--seconds` values in `fm-wake-queue` and four in `fm-watch-checkpoint` go through `fm_test_seconds`, and `fm-watch-recovery-loop`, `fm-watch-arm` and `fm-watch-triage` replace their loops with `fm_test_wait_until` and small named predicates.
+One assertion needed a different budget rather than a scaled one: `fm-watch-arm`'s re-arm case slept 0.25 s and then asserted the arm was gone, which at scale still fell inside the re-armed watcher's first poll here; the assertion now waits for the arm to go within two `FM_POLL=1` cycles, which still separates it from the pre-fix path that stayed live until an actionable status.
+
+The baseline was taken from a separate pristine worktree at `5ed6c5e`, each suite run to its first red; the after column is the whole suite on the branch.
+
+| Suite | Before | After |
+| --- | --- | --- |
+| fm-wake-queue | case 2, `no actionable wake within 3s`, 14 s | 11 green, then case 12 `could not register queue custom check`: the mode-700 private-file gate, row 21, not timing (1031 s) |
+| fm-watch-checkpoint | case 2, `signal checkpoint exit: expected exit 0, got 124`, 15 s | 2 green, then case 3 `could not register checkpoint custom check`: the same row-21 gate (79 s) |
+| fm-watch-recovery-loop | case 1, `waited 3s`, 11 s | 1 green, then case 2, the node extension test's `expected exactly one recovery follow-up, got 0`: the extension host's Linux-only identity dialect, not timing (119 s) |
+| fm-wake-daemon-lifecycle-e2e | case 1, `watcher did not exit for the routine signal`, 23 s | 2 of 2 green (169 s) |
+| fm-watch-arm | case 4, `re-arm stayed live instead of surfacing durable wakes`, 243 s | 14 of 14 green (1337 s); the red case alone had gone green first in a one-case copy (330 s) |
+| fm-watch-triage | case 18, `watcher did not surface a turn-end whose crew is not provably working`, 178 s | 71 of 71 green: 54 in one run that my own one-hour cap ended, the remaining 17 from a copy invoking only those (1112 s); about 67 s per case here |
+| fm-home-summary-refresh | case 3, `fleet snapshot consumed the poisoned publication instead of recomputing its established path`, 126 s | not converted: that is a jq assertion on the snapshot's provenance, not the line this table recorded and not a timing budget, so its loops cannot be proven here and the finding is recorded instead |
+
+This means the family's six timing reds are gone and what the lane now reaches behind them are three defects the ledger already names elsewhere (row 21 twice, the extension host once) and one new non-timing finding.
+Linux is unchanged: on WSL Ubuntu 24.04 the seven suites are green at the branch and at the base with the same counts (wake-queue 29, checkpoint 4, recovery-loop 2, lifecycle 2, arm 14, triage 71, plus the six-case helper test), the scale measuring 1 so no budget moved; one first run of wake-queue at the branch stalled under a ShellCheck pass I had started alongside it, and reran clean in 63 s with nothing else on the box.
+Not done here: the other twenty-two "spawn cost" rows are later slices of the same issue, and the guidance in CONTRIBUTING.md now sends new waits to these helpers so the family does not grow back.
 
 ## What the spike did not know
 
