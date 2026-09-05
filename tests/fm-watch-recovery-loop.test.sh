@@ -165,6 +165,11 @@ EOF
 # T2: a handling successor must enter its poll loop immediately and surface a
 # real crew event instead of sitting in a pre-loop wait that refreshes the
 # liveness beacon and then exits with a synthetic rearm-resurface.
+# watch_lock_is <state> <pid>: the watcher lock names that pid.
+watch_lock_is() {
+  [ "$(cat "$1/.watch.lock/pid" 2>/dev/null || true)" = "$2" ]
+}
+
 test_handling_successor_does_not_go_blind() {
   local dir home state fakebin child event_start now out
   dir=$(make_case recovery-gap-successor)
@@ -180,26 +185,13 @@ test_handling_successor_does_not_go_blind() {
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=600 \
     FM_WATCH_HANDLING_SUCCESSOR=1 "$WATCH" > "$out" 2>&1 &
   child=$!
-  now=0
-  while [ "$now" -lt 40 ]; do
-    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$child" ] && break
-    sleep 0.1
-    now=$((now + 1))
-  done
-  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$child" ] \
+  fm_test_wait_until 4 watch_lock_is "$state" "$child" \
     || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not take the watcher lock"; }
   sleep 0.4
   printf 'done: crew finished its task\n' >> "$state/crew.status"
   event_start=$(date +%s)
-  now=0
-  while [ "$now" -lt 5 ]; do
-    if grep -q '^signal:' "$out" 2>/dev/null; then
-      break
-    fi
-    sleep 0.5
-    now=$((now + 1))
-  done
-  if ! grep -q '^signal:' "$out" 2>/dev/null; then
+  # Two poll intervals on Linux, sized for this host.
+  if ! fm_test_wait_until 2.5 grep -q '^signal:' "$out"; then
     kill -TERM "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
     fail "handling successor did not surface the crew event within a poll interval or two (waited $(( $(date +%s) - event_start ))s): $(cat "$out")"

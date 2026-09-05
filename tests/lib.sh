@@ -394,3 +394,118 @@ assert_absent() {
 assert_present() {
   [ -e "$1" ] || fail "$2"
 }
+
+# --- host time scale ----------------------------------------------------------
+# A wall-clock or poll-count budget written on Linux is a lie on a host where a
+# process spawn costs an order of magnitude more (Git Bash on Windows: about
+# 50 ms per exec against 1 to 2 ms on Linux, measured 2026-09-05; ledger finding
+# 27). These helpers size such a budget from one measurement of this host
+# instead of from a bigger constant, so the happy path still returns the moment
+# its condition holds and only the bound moves. FM_TEST_TIME_SCALE=<integer>
+# pins the scale (1 reproduces the raw Linux budgets on any host); when it is
+# unset the library measures once as it is sourced, then exports the result so
+# fake scripts, child shells and one-case copies share it. The measurement and
+# the family of budgets it retired are in docs/windows/measurement.md.
+
+FM_TEST_TIME_SCALE_REFERENCE_MS=4   # exec cost a fast Linux box stays under: scale 1 there
+FM_TEST_TIME_SCALE_MAX=40           # an overloaded host still gets bounded budgets
+
+# fm_test_now_ms: milliseconds without a spawn where bash offers a clock
+# (EPOCHREALTIME, bash 5); date +%s%N elsewhere; whole seconds from SECONDS when
+# neither exists (stock macOS bash 3.2 with BSD date).
+fm_test_now_ms() {
+  local s
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    s=${EPOCHREALTIME/./}
+    printf '%s\n' "${s%???}"
+    return 0
+  fi
+  s=$(date +%s%N 2>/dev/null)
+  case "$s" in
+    ''|*[!0-9]*) printf '%s\n' "$((SECONDS * 1000))" ;;
+    *) printf '%s\n' "${s%??????}" ;;
+  esac
+}
+
+# fm_test_spawn_cost_ms: measured milliseconds per external command on this
+# host, from twenty execs of the external true; never below 1.
+fm_test_spawn_cost_ms() {
+  local true_bin start end i cost
+  true_bin=$(type -P true 2>/dev/null) || true_bin=/bin/true
+  start=$(fm_test_now_ms)
+  i=0
+  while [ "$i" -lt 20 ]; do
+    "$true_bin"
+    i=$((i + 1))
+  done
+  end=$(fm_test_now_ms)
+  cost=$(( (end - start) / 20 ))
+  [ "$cost" -ge 1 ] || cost=1
+  printf '%s\n' "$cost"
+}
+
+# fm_test_time_scale_init: validate a pinned FM_TEST_TIME_SCALE or measure one,
+# then export it. Runs once when this library is sourced.
+fm_test_time_scale_init() {
+  local cost scale
+  if [ -n "${FM_TEST_TIME_SCALE:-}" ]; then
+    case "$FM_TEST_TIME_SCALE" in
+      *[!0-9]*|0*) fail "FM_TEST_TIME_SCALE must be a positive integer, got '$FM_TEST_TIME_SCALE'" ;;
+    esac
+    export FM_TEST_TIME_SCALE
+    return 0
+  fi
+  cost=$(fm_test_spawn_cost_ms)
+  scale=$(( (cost + FM_TEST_TIME_SCALE_REFERENCE_MS - 1) / FM_TEST_TIME_SCALE_REFERENCE_MS ))
+  [ "$scale" -ge 1 ] || scale=1
+  [ "$scale" -le "$FM_TEST_TIME_SCALE_MAX" ] || scale=$FM_TEST_TIME_SCALE_MAX
+  FM_TEST_TIME_SCALE=$scale
+  export FM_TEST_TIME_SCALE
+  # A TAP comment, so a slow host's sizing is visible in the run log.
+  [ "$scale" -eq 1 ] || printf '# host time scale %s (about %s ms per exec)\n' "$scale" "$cost"
+}
+fm_test_time_scale_init
+
+# fm_test_seconds <linux-seconds>: that integer budget sized for this host.
+fm_test_seconds() {
+  printf '%s\n' "$(( $1 * FM_TEST_TIME_SCALE ))"
+}
+
+# fm_test_budget_ms <seconds>: an integer or decimal Linux budget, in
+# milliseconds sized for this host.
+fm_test_budget_ms() {
+  local whole frac
+  case "$1" in
+    *.*) whole=${1%%.*}; frac=${1#*.} ;;
+    *) whole=$1; frac='' ;;
+  esac
+  frac="${frac}000"
+  frac=${frac:0:3}
+  printf '%s\n' "$(( (10#${whole:-0} * 1000 + 10#$frac) * FM_TEST_TIME_SCALE ))"
+}
+
+# fm_test_tenths <ticks>: a tick count in tenths of a second, as the decimal
+# seconds string fm_test_wait_until takes; for helpers that still count ticks.
+fm_test_tenths() {
+  printf '%s.%s\n' "$(( $1 / 10 ))" "$(( $1 % 10 ))"
+}
+
+# fm_test_wait_until <linux-seconds> <command> [args...]: run the command every
+# 0.1 s until it succeeds (return 0) or this host's sizing of that budget
+# elapses (return 124). The command is a function or executable with its
+# arguments, never a shell string; wrap a compound condition in a function.
+# The probe's stderr is dropped: a file that does not exist yet is the normal
+# state while waiting, not an error worth logging on every tick.
+fm_test_wait_until() {
+  local budget=$1 deadline now
+  shift
+  deadline=$(( $(fm_test_now_ms) + $(fm_test_budget_ms "$budget") ))
+  while :; do
+    if "$@" 2>/dev/null; then
+      return 0
+    fi
+    now=$(fm_test_now_ms)
+    [ "$now" -lt "$deadline" ] || return 124
+    sleep 0.1
+  done
+}
