@@ -23,6 +23,7 @@ run_with_scale() {
   fi
 }
 
+# shellcheck disable=SC2016  # the body is evaluated by the fresh shell in run_with_scale
 test_measured_scale_is_a_bounded_positive_integer() {
   local scale
   scale=$(run_with_scale '' 'printf "%s\n" "$FM_TEST_TIME_SCALE"' 2>/dev/null | tail -1)
@@ -34,6 +35,7 @@ test_measured_scale_is_a_bounded_positive_integer() {
   pass "time scale: the library measures a bounded positive integer scale"
 }
 
+# shellcheck disable=SC2016  # the bodies are evaluated by the fresh shell in run_with_scale
 test_pinned_scale_wins_and_sizes_every_budget_shape() {
   local out
   out=$(run_with_scale 3 'printf "%s %s %s %s\n" "$FM_TEST_TIME_SCALE" "$(fm_test_seconds 2)" "$(fm_test_budget_ms 0.5)" "$(fm_test_budget_ms 4)"')
