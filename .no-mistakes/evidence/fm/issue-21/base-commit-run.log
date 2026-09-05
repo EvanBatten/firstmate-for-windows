@@ -1,0 +1,3 @@
+# tests/fm-cursor-primary.test.sh as of base 5ed6c5e, run on MINGW64_NT-10.0-26200; cc=none gcc=none
+not ok - a C compiler is required to build the fake Cursor process
+# exit=1 elapsed=2s

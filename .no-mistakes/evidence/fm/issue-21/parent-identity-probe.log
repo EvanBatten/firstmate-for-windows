@@ -1,0 +1,45 @@
+== host ==
+MINGW64_NT-10.0-26200 GeneralBerserk 3.5.7-463ebcdc.x86_64 2025-03-03 17:26 UTC x86_64 Msys
+GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)
+cc=none gcc=none
+
+== fake harness ==
+-rwxr-xr-x 1 ebatt 197609 2553064 Sep  5 01:56 /tmp/fm-issue21-probe.qCxASR/fakebin/cursor-agent
+copy vs bash: byte-identical
+
+== case A: copy of bash, body ends in exit "$?" (the suite shape) ==
+  child pid=47825 ppid=47818
+  parent comm=/tmp/fm-issue21-probe.qCxASR/fakebin/cursor-agent
+  parent args=/tmp/fm-issue21-probe.qCxASR/fakebin/cursor-agent -c printf '%s\n' "$$" > '/tmp/fm-issue21-probe.qCxASR/state/.lock'; '/tmp/fm-issue21-probe.qCxASR/child.sh'; exit "$?"
+  classifier: parent IS a verified harness
+  lock pid=47818
+  harness ancestry pids: 47818 
+  fm_session_lock_owned_by_self: YES
+  fake harness exit status=3 (child exited 3)
+
+== case B: copy of bash, NO exit guard (bash execs the final command) ==
+  child pid=48100 ppid=47794
+  parent comm=/usr/bin/bash
+  parent args=bash /c/Users/ebatt/.no-mistakes/evidence/01M1R1GG4MCXEMHWKF840ZQ7G4/parent-identity-probe.sh /c/Users/ebatt/.no-mistakes/worktrees/1beea4074a2d/01M1R1GG4MCXEMHWKF840ZQ7G4
+  classifier: parent is NOT a harness
+  lock pid=48100
+  harness ancestry pids: 102460 
+  fm_session_lock_owned_by_self: NO
+  fake harness exit status=3 (child exited 3)
+
+== case C: exit status propagation through the guard ==
+  inner exit 0 -> 0
+  inner exit 7 -> 7
+Terminated
+  inner SIGTERM -> 143
+
+== case D (informational): a real symlink named cursor-agent, guarded ==
+lrwxrwxrwx 1 ebatt 197609 17 Sep  5 01:56 /tmp/fm-issue21-probe.qCxASR/linkbin/cursor-agent -> /usr/bin/bash.exe
+  child pid=48584 ppid=48583
+  parent comm=/tmp/fm-issue21-probe.qCxASR/linkbin/cursor-agent
+  parent args=/tmp/fm-issue21-probe.qCxASR/linkbin/cursor-agent -c printf '%s\n' "$$" > '/tmp/fm-issue21-probe.qCxASR/state/.lock'; '/tmp/fm-issue21-probe.qCxASR/child.sh'; exit "$?"
+  classifier: parent IS a verified harness
+  lock pid=48583
+  harness ancestry pids: 48583 
+  fm_session_lock_owned_by_self: YES
+  fake harness exit status=3
