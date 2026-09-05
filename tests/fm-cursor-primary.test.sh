@@ -31,15 +31,17 @@ fm_git_identity fmtest fmtest@example.invalid
 
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 # Use a real executable whose own canonical basename is cursor-agent: a COPY of
-# bash, not a symlink. A symlink is not sufficient on Linux, where /proc resolves
-# it to bash and the real Cursor ancestry classifier correctly rejects that
-# process as an impostor; a copy has its own exe and comm. The copy needs no
-# compiler, which a stock Git for Windows does not ship (issue #21), and it
-# already understands -c. What it does NOT do is stay alive on its own: bash
-# execs the final external command of a -c body in place, which would turn this
-# cursor-agent process INTO the adapter it launches, so every body handed to
-# FAKE_CURSOR ends in `exit "$?"` to keep the harness process alive as the
-# adapter's parent and to hand back the adapter's exit status.
+# bash, not a symlink. The Cursor ancestry classifier matches the parent's
+# command name and argv0, which a symlink named cursor-agent also satisfies on
+# Linux and on MSYS; the copy is chosen because its identity holds however a
+# process is read (comm, argv0, or /proc/<pid>/exe, which resolves a symlink
+# back to bash). The copy needs no compiler, which a stock Git for Windows does
+# not ship (issue #21), and it already understands -c. What it does NOT do is
+# stay alive on its own: bash execs the final external command of a -c body in
+# place, which would turn this cursor-agent process INTO the adapter it
+# launches, so every body handed to FAKE_CURSOR ends in `exit "$?"` to keep the
+# harness process alive as the adapter's parent and to hand back the adapter's
+# exit status.
 cp "$(command -v bash)" "$FAKEBIN/cursor-agent" \
   || fail "could not copy bash as the fake Cursor process"
 FAKE_CURSOR="$FAKEBIN/cursor-agent"
