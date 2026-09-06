@@ -1,0 +1,22 @@
+### WITHOUT the fix's failure-path release (same barrier fixture, EXIT trap and home-existence guard stripped)
+$ TMPDIR=/tmp/i10probeNOTRAP MSYS=winsymlinks:nativestrict bash tests/i10-leak-notrap.test.sh
+  (the case's first assertion after owner A parks in its arm is forced to fail: expect_code 99)
+not ok - a firing during a live open claim must defer promptly (no mutex is held across arming): expected exit 99, got 0
+exit=1
+-- fixture hook/arm processes alive 2 s after the test exited:
+    pid 42032  "C:\Program Files\Git\usr\bin\bash.exe" /tmp/i10probeNOTRAP/fm-claude-stop-autoarm.9Efh5G/v2-superseded-silence/bin/fm-claude-stop-autoarm.sh
+    pid 58360  "C:\Program Files\Git\usr\bin\bash.exe" /tmp/i10probeNOTRAP/fm-claude-stop-autoarm.9Efh5G/v2-superseded-silence/bin/fm-watch-arm.sh
+-- fixture hook/arm processes alive 22 s after the test exited:
+    pid 42032  "C:\Program Files\Git\usr\bin\bash.exe" /tmp/i10probeNOTRAP/fm-claude-stop-autoarm.9Efh5G/v2-superseded-silence/bin/fm-claude-stop-autoarm.sh
+    pid 58360  "C:\Program Files\Git\usr\bin\bash.exe" /tmp/i10probeNOTRAP/fm-claude-stop-autoarm.9Efh5G/v2-superseded-silence/bin/fm-watch-arm.sh
+
+### WITH the fix as shipped (release_parked_arms EXIT trap + home-existence guard)
+$ TMPDIR=/tmp/i10probeTRAP MSYS=winsymlinks:nativestrict bash tests/i10-leak-trap.test.sh
+  (the case's first assertion after owner A parks in its arm is forced to fail: expect_code 99)
+not ok - a firing during a live open claim must defer promptly (no mutex is held across arming): expected exit 99, got 0
+exit=1
+-- fixture hook/arm processes alive 2 s after the test exited:
+    (none)
+-- fixture hook/arm processes alive 22 s after the test exited:
+    (none)
+

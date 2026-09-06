@@ -1,0 +1,2 @@
+not ok - the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2
+exit=1 elapsed=36s
