@@ -1907,7 +1907,7 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-pi-watch-extension | `must surface an external healthy watcher as an owned-wake failure` | platform: spawn cost | read. |
 | fm-secondmate-reconcile | `the window was shorter than four hours` | platform: spawn cost | read. A cooldown computed from wall-clock stamps. |
 | fm-teardown-endpoint-safety | `recorded target pid no longer belongs to the expected child` | platform: spawn cost | read. A pid-identity assertion against a child the fixture outlived. |
-| fm-claude-stop-autoarm | `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2` | test - **fixed**: a six-second supersession window that a slow spawn outruns; closed by issue #10 (see "Issue #10" under Integration) | measured three ways: in the lane after 603 s, alone at HEAD after 574 s, and alone in a worktree at slice 9's own commit `d80757f` - 36 cases pass and then the same line, every time. Diagnosed 2026-09-05: owner A was never superseded before it legitimately won; a parked-arm barrier replaces the sleep. |
+| fm-claude-stop-autoarm | `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2` | unclassified at the time; **fixed** by issue #10: a six-second supersession window that a slow spawn outruns (see the "Issue #10" section under Integration) | measured three ways: in the lane after 603 s, alone at HEAD after 574 s, and alone in a worktree at slice 9's own commit `d80757f` - 36 cases pass and then the same line, every time. Diagnosed 2026-09-05: owner A was never superseded before it legitimately won; a parked-arm barrier replaces the sleep. |
 | fm-turnend-guard | `OpenCode plugin must run the guard from worktree even when directory is elsewhere` | unclassified, but **not** load and **not** a regression | measured the same three ways: 43 cases pass and then the same line, in the lane, alone at HEAD, and alone at `d80757f`. |
 | fm-kimi-harness | `Kimi hook removal failed` | unclassified | measured. Converting its three fakebins to `fm_fakebin_link` did not move the first case, so the cause is elsewhere; the speculative change was reverted rather than left in. |
 | fm-on | `remote exit status was not preserved (got 64)` | unclassified | read. 64 is a usage refusal from the fixture's ssh stub, so the stub and the product are not separated. |
@@ -1920,6 +1920,7 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-tool-update-check | `commits behind the origin branch were not reported`, with `origin has no branch main` | unclassified | read. The product answered that about a fixture remote it had just created; a `file://` remote with a drive-letter path is the first suspect. |
 
 Counted by class: 12 fixed this slice (6 of them fully green), 7 row 21, 5 toolchain, 29 spawn cost, 1 product, 11 unclassified - 65.
+Those counts are slice 11's snapshot: one of the eleven unclassified rows, `fm-claude-stop-autoarm`, was later closed by issue #10 and its suite now runs green.
 
 ### The four fixture defects this slice fixed
 
