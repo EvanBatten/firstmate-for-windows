@@ -51,7 +51,6 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
 }
 
-# Wait up to <limit> 0.1s ticks while <pid> stays alive; 0 if still alive, 1 if it died.
 # wait_live <pid> [ticks]: 0 when the watcher is still alive after the budget
 # (ticks of 0.1 s on Linux, sized for this host), 1 when it exited inside it.
 wait_live() {
