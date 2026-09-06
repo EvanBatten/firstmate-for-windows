@@ -1,0 +1,14 @@
+== fm-watch-checkpoint whole via runner, 00:23:41Z ==
+FM_TEST_BEGIN 2026-09-06T00:23:42Z tests/fm-watch-checkpoint.test.sh family=watcher-wake-lock expected_gate_skip=none
+# host time scale 23 (about 91 ms per exec)
+ok - quiet checkpoint exits 124 with a clean checkpoint line and no live lock
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 36967.1788654281.3WNojP
+ok - checkpoint passes through a real watcher wake and leaves the queue for drain
+error: custom check is unavailable
+not ok - could not register checkpoint custom check
+FM_TEST_END 2026-09-06T00:25:08Z tests/fm-watch-checkpoint.test.sh exit=1 duration_ms=85457 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=86814
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=85457 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-checkpoint.test.sh duration_ms=85457
+exit=1
+elapsed=88s

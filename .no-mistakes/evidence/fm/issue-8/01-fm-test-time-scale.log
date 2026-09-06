@@ -1,0 +1,11 @@
+# host time scale 20 (about 79 ms per exec)
+ok - time scale: the library measures a bounded positive integer scale
+ok - time scale: a pinned FM_TEST_TIME_SCALE wins and sizes integer and decimal budgets
+ok - time scale: a malformed pin stops the suite with the rule, never a silent scale of 1
+ok - time scale: wait_until returns the moment its condition holds, well inside the budget
+ok - time scale: wait_until returns 124 once the host-sized deadline passes
+ok - time scale: wait_for_exit waits for a host-sized deadline and still bounds a hung child
+ok - time scale: a comma-decimal locale keeps the clock an integer and its deadlines comparable
+ok - time scale: a whole-second clock takes scale 1 unmeasured and pads its deadlines instead of ending waits early
+exit=0
+elapsed=121s

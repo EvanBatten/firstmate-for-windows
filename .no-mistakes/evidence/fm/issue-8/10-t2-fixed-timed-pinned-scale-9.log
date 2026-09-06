@@ -1,0 +1,12 @@
+== T2 one-case copy of the fixed file (10 s family budget), timed, pinned FM_TEST_TIME_SCALE=9, 00:51:40Z ==
+# T2 signal latency: 30962 ms (budget 90000 ms at scale 9)
+# 2026-09-05 20:51:47.412809700 -0400 state/.watch.lock/pid
+# 2026-09-05 20:51:50.179412700 -0400 state/.watch.lock/fm-home
+# 2026-09-05 20:51:50.530894200 -0400 state/.watch.lock/pid-identity
+# 2026-09-05 20:51:50.584487500 -0400 state/.last-heartbeat
+# 2026-09-05 20:51:47.956126200 -0400 state/crew.status
+# 2026-09-05 20:52:13.063703000 -0400 state/.wake-queue
+# 2026-09-05 20:52:18.835723100 -0400 watch.out
+ok - a resurfacing handling successor stays alive and supervises instead of going blind
+exit=0
+elapsed=43s

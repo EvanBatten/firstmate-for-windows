@@ -1,0 +1,17 @@
+== tests/fm-test-time-scale.test.sh whole via bin/fm-test-run.sh at 3003c39, measured scale, 2026-09-06T01:00:37Z ==
+FM_TEST_BEGIN 2026-09-06T01:00:37Z tests/fm-test-time-scale.test.sh family=unclassified expected_gate_skip=none
+# host time scale 13 (about 51 ms per exec)
+ok - time scale: the library measures a bounded positive integer scale
+ok - time scale: a pinned FM_TEST_TIME_SCALE wins and sizes integer and decimal budgets
+ok - time scale: a malformed pin stops the suite with the rule, never a silent scale of 1
+ok - time scale: wait_until returns the moment its condition holds, well inside the budget
+ok - time scale: wait_until returns 124 once the host-sized deadline passes
+ok - time scale: wait_for_exit waits for a host-sized deadline and still bounds a hung child
+ok - time scale: a comma-decimal locale keeps the clock an integer and its deadlines comparable
+ok - time scale: a whole-second clock takes scale 1 unmeasured and pads its deadlines instead of ending waits early
+FM_TEST_END 2026-09-06T01:01:31Z tests/fm-test-time-scale.test.sh exit=0 duration_ms=52650 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=54238
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=52650 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-test-time-scale.test.sh duration_ms=52650
+exit=0
+elapsed=55s

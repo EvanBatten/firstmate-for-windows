@@ -1,0 +1,4 @@
+== T2 one-case copy of HEAD (871de04, pre-fix 2.5 s wait), pinned FM_TEST_TIME_SCALE=9, 00:49:33Z ==
+not ok - handling successor did not surface the crew event within a poll interval or two (waited 25s): 
+exit=1
+elapsed=34s

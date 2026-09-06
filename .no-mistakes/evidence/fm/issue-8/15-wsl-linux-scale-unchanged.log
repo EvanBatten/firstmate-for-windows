@@ -1,0 +1,7 @@
+== Linux unchanged: WSL Ubuntu sourcing tests/lib.sh at 3003c39 from the same worktree, 2026-09-06T01:06:19Z ==
+run bash: scale=1 clock=epochrealtime spawn_cost_ms=1 fm_test_seconds_3=3 fm_test_budget_ms_2.5=2500
+run bash: scale=1 clock=epochrealtime spawn_cost_ms=1 fm_test_seconds_3=3 fm_test_budget_ms_2.5=2500
+run bash: scale=1 clock=epochrealtime spawn_cost_ms=1 fm_test_seconds_3=3 fm_test_budget_ms_2.5=2500
+uname: Linux 5.15.167.4-microsoft-standard-WSL2
+bash: 5.2.21(1)-release
+exit=0

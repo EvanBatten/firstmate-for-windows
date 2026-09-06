@@ -1,0 +1,18 @@
+== recovery-loop rerun #2 via runner, 00:32:41Z ==
+FM_TEST_BEGIN 2026-09-06T00:32:41Z tests/fm-watch-recovery-loop.test.sh family=watcher-wake-lock expected_gate_skip=none
+# host time scale 19 (about 74 ms per exec)
+ok - a resurfacing handling successor stays alive and supervises instead of going blind
+not ok - an unacknowledged recovery must be announced at most once per generation: file:///C:/Users/ebatt/.no-mistakes/worktrees/1beea4074a2d/01M1T049E65PKNF8PAH8PTA8K7/[eval1]:34
+  throw new Error(`expected exactly one recovery follow-up, got ${rearm.length}: ${prompts.join(" || ")}`);
+        ^
+
+Error: expected exactly one recovery follow-up, got 0: 
+    at file:///C:/Users/ebatt/.no-mistakes/worktrees/1beea4074a2d/01M1T049E65PKNF8PAH8PTA8K7/[eval1]:34:9
+
+Node.js v24.19.0: expected exit 0, got 1
+FM_TEST_END 2026-09-06T00:34:53Z tests/fm-watch-recovery-loop.test.sh exit=1 duration_ms=130873 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=132679
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=130873 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-recovery-loop.test.sh duration_ms=130873
+exit=1
+elapsed=133s

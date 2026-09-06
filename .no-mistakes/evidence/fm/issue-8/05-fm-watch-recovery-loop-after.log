@@ -1,0 +1,10 @@
+== fm-watch-recovery-loop whole via runner, 00:31:00Z ==
+FM_TEST_BEGIN 2026-09-06T00:31:01Z tests/fm-watch-recovery-loop.test.sh family=watcher-wake-lock expected_gate_skip=none
+# host time scale 9 (about 36 ms per exec)
+not ok - handling successor did not surface the crew event within a poll interval or two (waited 27s): 
+FM_TEST_END 2026-09-06T00:31:36Z tests/fm-watch-recovery-loop.test.sh exit=1 duration_ms=34484 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=36518
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=34484 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-recovery-loop.test.sh duration_ms=34484
+exit=1
+elapsed=38s

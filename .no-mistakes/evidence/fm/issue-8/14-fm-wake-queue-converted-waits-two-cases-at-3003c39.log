@@ -1,0 +1,8 @@
+== two-case copy of tests/fm-wake-queue.test.sh at 3003c39: the review round's converted waits (wait_for_file_text -> fm_test_wait_until 5 grep -qF; .wake-queue.lock -> fm_test_wait_until 5 test -e), cases 18 and 29 only, measured scale, 2026-09-06T01:04:15Z ==
+# host time scale 11 (about 43 ms per exec)
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 23721.1788656662.VIxXzs
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 23721.1788656662.VIxXzs
+ok - slow annotation releases the append lock and a deleted status file fails open
+ok - interruptions preserve durable rows until post-handling acknowledgement
+exit=0
+elapsed=106s

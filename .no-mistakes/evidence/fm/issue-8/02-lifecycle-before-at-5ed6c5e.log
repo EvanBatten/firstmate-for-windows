@@ -1,0 +1,4 @@
+== BEFORE: tests at base 5ed6c5e (pristine tree extracted to .i8-base), lifecycle suite, 00:15:32Z ==
+not ok - watcher did not exit for the routine signal
+exit=1
+elapsed=41s
