@@ -170,6 +170,13 @@ watch_lock_is() {
   [ "$(cat "$1/.watch.lock/pid" 2>/dev/null || true)" = "$2" ]
 }
 
+# signal_surfaced_or_gone <out> <pid>: the watcher printed a signal line, or it
+# exited so the caller's own check on its output speaks.
+signal_surfaced_or_gone() {
+  kill -0 "$2" 2>/dev/null || return 0
+  grep -q '^signal:' "$1" 2>/dev/null
+}
+
 test_handling_successor_does_not_go_blind() {
   local dir home state fakebin child event_start now out
   dir=$(make_case recovery-gap-successor)
@@ -190,11 +197,18 @@ test_handling_successor_does_not_go_blind() {
   sleep 0.4
   printf 'done: crew finished its task\n' >> "$state/crew.status"
   event_start=$(date +%s)
-  # Two poll intervals on Linux, sized for this host.
-  if ! fm_test_wait_until 2.5 grep -q '^signal:' "$out"; then
+  # 10 s on Linux (the family's 100-tick budget, see fm-watch-triage's
+  # wait_for_exit note), sized for this host: the crew event lands while
+  # fm-watch.sh is still doing its bounded startup work (recovery-marker
+  # snapshot, first poll), so a two-poll budget reaps a successor that is
+  # starting, not one that went blind. The wait ends early when the watcher
+  # exits; a successor that never surfaces the event still fails when the
+  # budget runs out.
+  fm_test_wait_until 10 signal_surfaced_or_gone "$out" "$child" || true
+  if ! grep -q '^signal:' "$out" 2>/dev/null; then
     kill -TERM "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
-    fail "handling successor did not surface the crew event within a poll interval or two (waited $(( $(date +%s) - event_start ))s): $(cat "$out")"
+    fail "handling successor did not surface the crew event within the family's startup budget (waited $(( $(date +%s) - event_start ))s): $(cat "$out")"
   fi
   grep -F 'crew.status' "$out" >/dev/null \
     || { kill -TERM "$child" 2>/dev/null || true; fail "handling successor did not name the crew status file: $(cat "$out")"; }
