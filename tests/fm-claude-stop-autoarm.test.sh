@@ -126,6 +126,7 @@ SH
 echo "$$" >> "$FM_HOME/state/arm-ran"
 : > "$FM_HOME/state/arm-waiting"
 while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.02; done
+rm -f "$FM_HOME/state/arm-waiting"
 printf 'watcher: FAILED - cycle ended without an actionable reason\n'
 exit 1
 SH
@@ -142,15 +143,17 @@ SH
       ;;
     blocking-actionable)
       # The FIRST arm parks until the test releases it (arm-waiting, then
-      # arm-release), so a supersession is staged against a live mid-arm owner
-      # on any host instead of inside a fixed sleep that a slow spawn outruns;
-      # every later arm returns at once so the superseder's own arm completes.
+      # arm-release, and arm-waiting cleared once it unparks), so a supersession
+      # is staged against a live mid-arm owner on any host instead of inside a
+      # fixed sleep that a slow spawn outruns; every later arm returns at once
+      # so the superseder's own arm completes.
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
 if [ "$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')" -eq 1 ]; then
   : > "$FM_HOME/state/arm-waiting"
   while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.02; done
+  rm -f "$FM_HOME/state/arm-waiting"
 fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
 printf 'stale: fixture-win actionable\n'
@@ -194,6 +197,32 @@ SH
   esac
   chmod +x "$dir/bin/fm-watch-arm.sh"
 }
+
+# A parked arm blocks on state/arm-release and clears state/arm-waiting only
+# once it unparks, so state/arm-waiting names exactly the fixture homes holding
+# a live arm right now. tests/lib.sh's cleanup registration documents the seam
+# for a file that needs teardown of its own: define an EXIT trap and call
+# fm_test_cleanup from inside it. Release every parked arm - in any fixture
+# home, since the barrier shape is shared - and wait for it to unpark BEFORE the
+# library removes the directories, so an assertion that exits between a park and
+# its release cannot strand the fake harness, the hook and the arm polling for a
+# path that is about to be deleted.
+release_parked_arms() {
+  local waiting parked i=0
+  while [ "$i" -lt 250 ]; do
+    parked=0
+    for waiting in "$TMP_ROOT"/*/state/arm-waiting; do
+      [ -e "$waiting" ] || continue
+      parked=1
+      : > "${waiting%/arm-waiting}/arm-release" 2>/dev/null || true
+    done
+    [ "$parked" = 1 ] || return 0
+    sleep 0.02
+    i=$((i + 1))
+  done
+}
+
+trap 'release_parked_arms; fm_test_cleanup' EXIT
 
 epoch_outcome() {
   sed -n '1s/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$1/state/.claude-autoarm-epoch" 2>/dev/null || true
