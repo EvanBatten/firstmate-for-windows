@@ -141,10 +141,17 @@ exit 0
 SH
       ;;
     blocking-actionable)
+      # The FIRST arm parks until the test releases it (arm-waiting, then
+      # arm-release), so a supersession is staged against a live mid-arm owner
+      # on any host instead of inside a fixed sleep that a slow spawn outruns;
+      # every later arm returns at once so the superseder's own arm completes.
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
-sleep 6
+if [ "$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')" -eq 1 ]; then
+  : > "$FM_HOME/state/arm-waiting"
+  while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.02; done
+fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
 printf 'stale: fixture-win actionable\n'
 exit 0
@@ -1152,8 +1159,8 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   run_autoarm_bg "$dir" "$a_out"
   a_pid=$RUN_AUTOARM_BG_PID
   i=0
-  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-ran" ]; do
-    [ "$i" -lt 400 ] || fail "owner A never published its arming claim"
+  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-waiting" ]; do
+    [ "$i" -lt 400 ] || fail "owner A never published its arming claim and parked in its arm"
     sleep 0.1
     i=$((i + 1))
   done
@@ -1169,6 +1176,9 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   c_out=$(run_autoarm "$dir" 2>/dev/null); c_status=$?
   expect_code 2 "$c_status" "the superseding generation must translate its own close"
   assert_contains "$c_out" "firstmate watcher wake" "the superseding generation must carry the rewake banner"
+  # Only now does A's arm return, with the actionable close it would have
+  # translated had it still owned a generation.
+  : > "$dir/state/arm-release"
   wait "$a_pid"
   a_status=$?
   expect_code 0 "$a_status" "the superseded owner must exit 0 instead of double-translating"
