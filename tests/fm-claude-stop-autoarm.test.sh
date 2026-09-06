@@ -125,7 +125,7 @@ SH
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
 : > "$FM_HOME/state/arm-waiting"
-while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.02; done
+while [ ! -e "$FM_HOME/state/arm-release" ] && [ -d "$FM_HOME/state" ]; do sleep 0.02; done
 rm -f "$FM_HOME/state/arm-waiting"
 printf 'watcher: FAILED - cycle ended without an actionable reason\n'
 exit 1
@@ -152,7 +152,7 @@ SH
 echo "$$" >> "$FM_HOME/state/arm-ran"
 if [ "$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')" -eq 1 ]; then
   : > "$FM_HOME/state/arm-waiting"
-  while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.02; done
+  while [ ! -e "$FM_HOME/state/arm-release" ] && [ -d "$FM_HOME/state" ]; do sleep 0.02; done
   rm -f "$FM_HOME/state/arm-waiting"
 fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
@@ -198,23 +198,29 @@ SH
   chmod +x "$dir/bin/fm-watch-arm.sh"
 }
 
-# A parked arm blocks on state/arm-release and clears state/arm-waiting only
-# once it unparks, so state/arm-waiting names exactly the fixture homes holding
-# a live arm right now. tests/lib.sh's cleanup registration documents the seam
-# for a file that needs teardown of its own: define an EXIT trap and call
-# fm_test_cleanup from inside it. Release every parked arm - in any fixture
-# home, since the barrier shape is shared - and wait for it to unpark BEFORE the
-# library removes the directories, so an assertion that exits between a park and
-# its release cannot strand the fake harness, the hook and the arm polling for a
-# path that is about to be deleted.
+# A barrier fixture's arm blocks on state/arm-release and clears
+# state/arm-waiting once it unparks. tests/lib.sh's cleanup registration
+# documents the seam for a file that needs teardown of its own: define an EXIT
+# trap and call fm_test_cleanup from inside it. The order below is the whole
+# point. Write state/arm-release into EVERY fixture home first, parked or not,
+# because the wait-loop timeouts fire exactly when a hook is slow to reach its
+# arm - so an arm can still be between its arm-ran append and its arm-waiting
+# write, and one that parks after a scan for arm-waiting would be missed. With
+# the release already there it never parks at all. Only then wait, bounded, for
+# the arms that were parked to clear arm-waiting, so the library removes the
+# directories with nothing left polling a path that is about to be deleted. The
+# park itself is conditioned on the fixture home still existing, so even an arm
+# this helper cannot reach in time stops when its directory goes.
 release_parked_arms() {
-  local waiting parked i=0
+  local state waiting parked i=0
+  for state in "$TMP_ROOT"/*/state; do
+    [ -d "$state" ] || continue
+    : > "$state/arm-release" 2>/dev/null || true
+  done
   while [ "$i" -lt 250 ]; do
     parked=0
     for waiting in "$TMP_ROOT"/*/state/arm-waiting; do
-      [ -e "$waiting" ] || continue
-      parked=1
-      : > "${waiting%/arm-waiting}/arm-release" 2>/dev/null || true
+      [ -e "$waiting" ] && parked=1
     done
     [ "$parked" = 1 ] || return 0
     sleep 0.02
