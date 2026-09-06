@@ -62,9 +62,10 @@
 # state/.claude-autoarm-failure-notified deduplicates the last-resort notice,
 # and state/.claude-autoarm-failure-alarmed bounds the attended fail-open and
 # suppresses any later automatic continuation in that unresolved episode.
-# state/.claude-autoarm-claim-ms carries how long this hook took to claim, which
-# is what that guard sizes its cooperation window from on a host where claiming
-# takes seconds; only a firing that actually claimed writes it.
+# state/.claude-autoarm-claim-ms carries the slowest time-to-claim this hook has
+# observed, which is what that guard sizes its cooperation window from on a host
+# where claiming takes seconds; only a firing that actually claimed writes it,
+# and only when its own measurement exceeds the one already stored.
 #
 # This hook never blocks the Stop decision itself and never prints to stdout:
 # exit 0 is always silent, and exit 2 carries the rewake banner on stderr.
@@ -199,11 +200,27 @@ MY_GEN=$FM_AUTOARM_MY_GEN
 # so the claiming firing is the only one that can measure it: a firing that
 # deferred above measured nothing and leaves the record alone. A claim faster
 # than a millisecond records 1, because 0 is the file's "no measurement" value.
+# The record only ever RISES, so it keeps this home's slowest observed
+# time-to-claim rather than its most recent one. Time-to-claim is bimodal: the
+# first Stop of a session pays the stale session-lock recovery that a
+# mid-session reclaim skips, so a cheap claim overwriting the slow one would
+# size the next session's first Stop from a number that shape never pays, and
+# the forced continuation would cost one per session again rather than one per
+# home. Keeping the maximum is cheap on both counts: the guard's
+# SYNC_WAIT_MAX_MS already bounds what the record can ask for, and the widened
+# window only ever spends wall clock on the failure path, where no auto-arm
+# claims at all.
 # Best effort throughout - a missing or unwritable record only means the guard
 # falls back to its own default window, which must never be worth an exit here.
 CLAIM_MS=$(( $(fm_timing_now_ms) - START_MS ))
 [ "$CLAIM_MS" -ge 1 ] || CLAIM_MS=1
-if CLAIM_TMP=$(mktemp "$STATE/.claude-autoarm-claim-ms.XXXXXX" 2>/dev/null); then
+CLAIM_RECORDED=$(sed -n '1p' "$STATE/.claude-autoarm-claim-ms" 2>/dev/null || true)
+case "$CLAIM_RECORDED" in
+  ''|*[!0-9]*|??????????*) CLAIM_RECORDED=0 ;;
+  *) CLAIM_RECORDED=$((10#$CLAIM_RECORDED)) ;;
+esac
+if [ "$CLAIM_MS" -gt "$CLAIM_RECORDED" ] \
+  && CLAIM_TMP=$(mktemp "$STATE/.claude-autoarm-claim-ms.XXXXXX" 2>/dev/null); then
   if printf '%s\n' "$CLAIM_MS" > "$CLAIM_TMP" 2>/dev/null; then
     mv -f "$CLAIM_TMP" "$STATE/.claude-autoarm-claim-ms" 2>/dev/null \
       || rm -f "$CLAIM_TMP" 2>/dev/null || true

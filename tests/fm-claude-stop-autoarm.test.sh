@@ -1121,6 +1121,35 @@ test_identityless_ledger_never_defers() {
 # time-to-claim, so the claiming firing is what has to publish that measurement
 # (docs/turnend-guard.md; issue #6). A firing that defers to a live open claim
 # measured nothing and must leave the record alone.
+# Time-to-claim is bimodal: the first Stop of a session pays the stale
+# session-lock recovery that a mid-session reclaim skips. If a cheap claim
+# overwrote the slow one the guard would size the next session's first Stop
+# from a number that shape never pays, which is the per-session forced
+# continuation this slice removes. So the record rises and never falls.
+test_claim_record_only_ever_rises() {
+  local dir out status recorded
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-never-lowers")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  printf '900000\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  [ "$recorded" = 900000 ] || fail "a faster claim lowered the home's slowest recorded time-to-claim to '$recorded'"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-raises")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  printf '1\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  case "$recorded" in ''|*[!0-9]*) fail "time-to-claim must stay one integer of milliseconds, got: '$recorded'" ;; esac
+  [ "$recorded" -gt 1 ] || fail "a slower claim did not raise the recorded time-to-claim, still '$recorded'"
+  [ "$(wc -l < "$dir/state/.claude-autoarm-claim-ms")" -eq 1 ] || fail "time-to-claim must be exactly one line"
+  pass "auto-arm: the claim record keeps the home's slowest time-to-claim and never lowers it"
+}
+
 test_claim_records_its_own_time_to_claim() {
   local dir out status recorded pid
   dir=$(make_primary_dir "$TMP_ROOT/claim-ms")
@@ -1295,6 +1324,7 @@ test_open_generation_claim_defers_without_any_lock
 test_stuck_generation_claim_is_superseded_and_rearms
 test_identityless_ledger_never_defers
 test_claim_records_its_own_time_to_claim
+test_claim_record_only_ever_rises
 test_superseded_owner_never_reinvokes_the_arm
 test_superseded_owner_goes_silent_and_never_double_translates
 test_need_vanished_mid_cycle_closes_quietly

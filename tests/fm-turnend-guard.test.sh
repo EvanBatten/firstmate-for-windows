@@ -1892,6 +1892,16 @@ test_hook_claude_mode_malformed_claim_record_keeps_the_default_window() {
 # carries a digit no octal literal allows, so the expansion fails, bash
 # abandons the rest of the widening block, and the window collapses back to the
 # floor while an interpreter error leaks into the guard's own output.
+# Both leading-zero shapes fail loudly in the shell before they fail quietly in
+# the decision, so the guard's own output is where an unnormalised operand shows
+# up first.
+assert_window_arithmetic_stayed_quiet() {  # <guard-output> <label>
+  case "$1" in
+    *"value too great for base"*) fail "the guard read the $2 as an octal literal: $1" ;;
+    *"unbound variable"*) fail "the guard died before its Stop decision under the $2: $1" ;;
+  esac
+}
+
 test_hook_claude_mode_leading_zero_claim_record_is_decimal() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-claim-leading-zero")
@@ -1913,6 +1923,51 @@ test_hook_claude_mode_leading_zero_claim_record_is_decimal() {
   case "$out" in *"value too great for base"*) fail "the guard read the recorded 09000 as an octal literal: $out" ;; esac
   [ -z "$out" ] || fail "the non-octal leading-zero record produced output: $out"
   pass "fm-turnend-guard --claude: a leading-zero time-to-claim record is read as decimal"
+}
+
+# The floor and the cap reach the deadline arithmetic the same way the record
+# does, so a zero-padded FM_CLAUDE_AUTOARM_SYNC_WAIT_MS or
+# FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS has to mean its decimal value too. The
+# test builtin reads those operands as decimal while $(( )) reads them as
+# octal, so an unnormalised 010000 silently buys 4096 ms of window instead of
+# 10000, and an unnormalised 09 fails the expansion outright, which leaves
+# DEADLINE_MS unbound and kills the guard under set -u before any Stop
+# decision - a turn that ends with no banner at all.
+test_hook_claude_mode_leading_zero_window_bounds_are_decimal() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-floor-leading-zero")
+  : > "$dir/state/task1.meta"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "the floor cases must size the window from the floor alone"
+  late_claim_publish "$dir" 7
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=010000 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "a floor of 010000 must be 10000 ms of window, not octal 4096"
+  [ -z "$out" ] || fail "the zero-padded floor produced output: $out"
+
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-floor-leading-zero-nonoctal")
+  : > "$dir/state/task1.meta"
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=09 run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "a floor of 09 must be 9 ms of window and still reach the guard's own Stop decision"
+  assert_contains "$out" "TURN WOULD END BLIND" "a zero-padded floor must still carry the blind-turn banner"
+  assert_window_arithmetic_stayed_quiet "$out" "floor 09"
+
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-cap-leading-zero")
+  : > "$dir/state/task1.meta"
+  printf '60000\n' > "$dir/state/.claude-autoarm-claim-ms"
+  late_claim_publish "$dir" 7
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=010000 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "a cap of 010000 must bound the widening at 10000 ms, not at octal 4096"
+  [ -z "$out" ] || fail "the zero-padded cap produced output: $out"
+
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-cap-leading-zero-nonoctal")
+  : > "$dir/state/task1.meta"
+  printf '5000\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=8 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=09 run_hook_claude "$dir" false); status=$?
+  expect_code 2 "$status" "a cap of 09 must bound the widening at 9 ms and still reach the guard's own Stop decision"
+  assert_contains "$out" "TURN WOULD END BLIND" "a zero-padded cap must still carry the blind-turn banner"
+  assert_window_arithmetic_stayed_quiet "$out" "cap 09"
+  pass "fm-turnend-guard --claude: a zero-padded window floor and cap are read as decimal"
 }
 
 test_hook_claude_mode_secondmate_reblocks_like_primary() {
@@ -2008,4 +2063,5 @@ test_hook_claude_mode_caps_the_widened_window
 test_hook_claude_mode_malformed_cap_falls_back_to_the_default
 test_hook_claude_mode_malformed_claim_record_keeps_the_default_window
 test_hook_claude_mode_leading_zero_claim_record_is_decimal
+test_hook_claude_mode_leading_zero_window_bounds_are_decimal
 test_hook_claude_mode_secondmate_reblocks_like_primary

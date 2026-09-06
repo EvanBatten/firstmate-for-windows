@@ -61,7 +61,7 @@
 #      while later fresh failed epochs consume it instead of resetting it.
 #      That window is a wall-clock deadline, never a count of polls:
 #      FM_CLAUDE_AUTOARM_SYNC_WAIT_MS (default 800ms) is its floor, twice the
-#      home's last measured time-to-claim (state/.claude-autoarm-claim-ms,
+#      home's slowest measured time-to-claim (state/.claude-autoarm-claim-ms,
 #      written by bin/fm-claude-stop-autoarm.sh) widens it, and
 #      FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS (default 15000ms) bounds that
 #      widening - the loop below owns why;
@@ -85,8 +85,8 @@ SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
 SYNC_WAIT_MAX_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS:-15000}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
-case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; esac
-case "$SYNC_WAIT_MAX_MS" in ''|*[!0-9]*) SYNC_WAIT_MAX_MS=15000 ;; esac
+case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; *) SYNC_WAIT_MS=$((10#$SYNC_WAIT_MS)) ;; esac
+case "$SYNC_WAIT_MAX_MS" in ''|*[!0-9]*) SYNC_WAIT_MAX_MS=15000 ;; *) SYNC_WAIT_MAX_MS=$((10#$SYNC_WAIT_MAX_MS)) ;; esac
 case "$EPOCH_FRESH" in ''|*[!0-9]*|0) EPOCH_FRESH=15 ;; esac
 case "$BLOCK_BUDGET" in ''|*[!0-9]*|0) BLOCK_BUDGET=3 ;; esac
 
@@ -415,17 +415,21 @@ failure_episode_verified() {
 # continuation (docs/windows/measurement.md, issue #6).
 # Raising the constant instead would hold every turn on a slow host for a budget
 # no host has been shown to need, so the window is sized from what THIS home has
-# measured: twice the last time-to-claim bin/fm-claude-stop-autoarm.sh recorded,
-# bounded by SYNC_WAIT_MAX_MS and never below SYNC_WAIT_MS. A missing or
-# malformed record leaves the window at SYNC_WAIT_MS, so a host that claims in
-# milliseconds, or a home that has never claimed, waits exactly as it did before.
+# measured: twice the slowest time-to-claim bin/fm-claude-stop-autoarm.sh has
+# recorded, bounded by SYNC_WAIT_MAX_MS and never below SYNC_WAIT_MS. A missing
+# or malformed record leaves the window at SYNC_WAIT_MS, so a host that claims
+# in milliseconds, or a home that has never claimed, waits as it did before.
 WINDOW_MS=$SYNC_WAIT_MS
 CLAIM_MS=$(sed -n '1p' "$STATE/.claude-autoarm-claim-ms" 2>/dev/null || true)
 # Ten digits is 115 days: a measurement that long is forged or corrupt rather
-# than slow, and rejecting it here keeps it out of the arithmetic below.
-case "$CLAIM_MS" in ''|*[!0-9]*|??????????*) CLAIM_MS=0 ;; esac
+# than slow, and rejecting it here keeps it out of the arithmetic below. Every
+# number entering this computation is normalised to base ten where it is
+# validated, because a zero-padded value reads as octal in $(( )) while the
+# test builtin reads it as decimal, and an eight or a nine makes that
+# expansion fail outright.
+case "$CLAIM_MS" in ''|*[!0-9]*|??????????*) CLAIM_MS=0 ;; *) CLAIM_MS=$((10#$CLAIM_MS)) ;; esac
 if [ "$CLAIM_MS" -gt 0 ]; then
-  MEASURED_MS=$((10#$CLAIM_MS * 2))
+  MEASURED_MS=$((CLAIM_MS * 2))
   [ "$MEASURED_MS" -le "$SYNC_WAIT_MAX_MS" ] || MEASURED_MS=$SYNC_WAIT_MAX_MS
   [ "$MEASURED_MS" -le "$WINDOW_MS" ] || WINDOW_MS=$MEASURED_MS
 fi

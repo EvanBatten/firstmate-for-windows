@@ -2332,9 +2332,12 @@ So the window was both far longer than its budget and still too short for the th
 Raising the constant would have been wrong twice over: it holds every turn on a slow host for a budget no host has been shown to need, and it changes nothing on Linux, where the claim lands in milliseconds.
 What landed instead is a wall-clock deadline sized from the host's own evidence.
 `bin/fm-claude-stop-autoarm.sh` records the milliseconds from its own start to a successful `fm_autoarm_claim_next` into `state/.claude-autoarm-claim-ms`, one integer written through a temp file and a rename, best effort and never fatal, and only ever by a firing that actually claimed; a firing that defers to a live open claim measured nothing and leaves the record alone.
+The record only rises, so it holds the home's slowest observed time-to-claim rather than its most recent one.
+Time-to-claim is bimodal: the first Stop of a session pays the stale session-lock recovery that a mid-session reclaim skips, and a cheap claim overwriting the slow one would size the next session's first Stop from a number that shape never pays.
+That is the difference between one forced continuation per home and one per session, and keeping the maximum costs nothing on either side: the cap already bounds what the record can ask for, and the widened window only spends wall clock on the failure path, where no auto-arm claims at all.
 `bin/fm-turnend-guard.sh` reads that record and waits `max(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS, 2 * claim_ms)` of wall clock, with the widening bounded by `FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS` (default 15000) and a malformed value of either falling back to its own default.
 A missing or malformed record leaves the window at `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS`, so a Linux host and a fresh home behave exactly as they did.
-The forced continuation therefore costs at most one per home rather than one per session: the first claim is what teaches the guard how long this host takes.
+The forced continuation therefore costs at most one per home rather than one per session: the first slow claim is what teaches the guard how long this host takes, and no later cheap one can un-teach it.
 Both scripts read `fm_timing_now_ms` from `bin/fm-timing-lib.sh` rather than carrying a second millisecond clock, which is why that library's header now says the clock is shared and the instrumentation is not.
 
 Measured here, guard elapsed for a 3000 ms budget with no claim arriving: 23038 ms unfixed, 3426 ms fixed.
