@@ -2334,7 +2334,7 @@ One counterfactual settles it: the same case with the sleep raised to thirty sec
 
 The fix is a barrier, not a bigger number: the fixture's first arm parks until the test releases it, in the `arm-waiting` and `arm-release` shape the reset-boundary fixture already uses, and the case releases A only after C has returned with its rewake, so A's arm returns actionable, A finds generation 2 owned by C, and exits 0 silently.
 Windows whole suite on the shipped fixture: 41 of 41 green in 630 s (the case itself 35 s in a one-case copy).
-Linux: unchanged, 41 of 41 at the branch and at the base 5ed6c5e on WSL Ubuntu 24.04 (13 s and 19 s).
+Linux: unchanged, 41 of 41 at the shipping head 405cb84 and at the base 5ed6c5e on WSL Ubuntu 24.04 (14 s and 20 s), re-measured after the two review commits that touched the same fixture.
 This means row 28's "one deterministic red" is closed without touching `bin/`, and `fm-claude-stop-autoarm` leaves the unclassified list.
 
 ## What the spike did not know
