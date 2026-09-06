@@ -1852,7 +1852,10 @@ test_hook_claude_mode_caps_the_widened_window() {
 
 # The same 60 s measurement and the same 8 s claim under a malformed cap: the
 # default cap is what has to apply, so the claim lands inside the window and no
-# malformed value ever reaches the shell as an operand.
+# malformed value ever reaches the shell as an operand. A malformed CAP is
+# deliberately not a malformed RECORD: the record leaving the window at the
+# floor is the case below, while a typo in the cap must not silently disable
+# the widening the cap exists to bound.
 test_hook_claude_mode_malformed_cap_falls_back_to_the_default() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-cap-malformed")

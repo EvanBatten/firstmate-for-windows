@@ -823,6 +823,7 @@ FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and 
 FM_CLAUDE_AUTOARM_ATTEMPTS=2   # bounded Stop-owned arm attempts per Claude auto-arm cycle; accepted values are 1, 2, or 3
 FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=800   # floor for the milliseconds the --claude turn-end guard waits for watcher health, an open Stop auto-arm generation claim, or a fresh epoch before deciding recovery ownership or failure progression; a recorded time-to-claim can widen the window above it
 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=15000   # cap on how far a recorded time-to-claim may widen that window; an explicitly configured FM_CLAUDE_AUTOARM_SYNC_WAIT_MS above the cap is still honored
+FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=60000   # ceiling on the time-to-claim the Claude Stop auto-arm is willing to record; a slower measurement is a stall or a wall-clock step rather than this host's speed, so it is dropped and the previous record stands
 FM_CLAUDE_AUTOARM_EPOCH_FRESH=15   # seconds a recorded auto-arm outcome remains eligible for the current event epoch's recovery or failure decision
 FM_CLAUDE_TURNEND_BLOCK_BUDGET=3   # consecutive --claude guard re-blocks before the verified one-time attended fail-open; safely below Claude Code's 8-block override
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED; default 30 on Git Bash/MSYS

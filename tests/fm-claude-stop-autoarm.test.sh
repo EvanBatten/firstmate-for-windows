@@ -1126,6 +1126,40 @@ test_identityless_ledger_never_defers() {
 # overwrote the slow one the guard would size the next session's first Stop
 # from a number that shape never pays, which is the per-session forced
 # continuation this slice removes. So the record rises and never falls.
+# The measurement is a wall-clock delta, so a suspend or an NTP step between
+# the hook's start and its claim lands in it whole. A monotonic record with no
+# ceiling would keep that artifact forever and hold every later unclaimed Stop
+# at the guard's cap. Exercised by lowering the ceiling under a real
+# measurement, which is the same state a clock jump reaches from the other
+# direction.
+test_claim_record_refuses_a_measurement_above_the_ceiling() {
+  local dir out status recorded
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-ceiling-keeps-previous")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  printf '1\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  [ "$recorded" = 1 ] || fail "a measurement above the ceiling replaced the surviving record with '$recorded'"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-ceiling-writes-nothing")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "a measurement above the ceiling was recorded into a home that had none"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-ceiling-malformed")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=not-a-number run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms" 2>/dev/null || true)
+  case "$recorded" in ''|*[!0-9]*) fail "a malformed ceiling must fall back to the 60 s default, got record: '$recorded'" ;; esac
+  pass "auto-arm: a time-to-claim above the ceiling is never recorded and the surviving record stands"
+}
+
 test_claim_record_only_ever_rises() {
   local dir out status recorded
   dir=$(make_primary_dir "$TMP_ROOT/claim-ms-never-lowers")
@@ -1325,6 +1359,7 @@ test_stuck_generation_claim_is_superseded_and_rearms
 test_identityless_ledger_never_defers
 test_claim_records_its_own_time_to_claim
 test_claim_record_only_ever_rises
+test_claim_record_refuses_a_measurement_above_the_ceiling
 test_superseded_owner_never_reinvokes_the_arm
 test_superseded_owner_goes_silent_and_never_double_translates
 test_need_vanished_mid_cycle_closes_quietly
