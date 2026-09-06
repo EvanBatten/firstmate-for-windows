@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # fm-timing-lib.sh - the single owner of the deferred network stage's elapsed-time
-# instrumentation.
+# instrumentation, and of the repo's millisecond clock.
 #
 # Sourced, never executed.
+#
+# THE CLOCK IS SHARED, THE INSTRUMENTATION IS NOT. fm_timing_now_ms is also what
+# the Claude Stop cooperation window waits on (bin/fm-turnend-guard.sh and
+# bin/fm-claude-stop-autoarm.sh), because a second millisecond clock would be a
+# second set of platform assumptions to keep true. Those two record nothing; the
+# rest of this file stays inert for them exactly as it does for a sweep that did
+# not ask for timings.
 #
 # WHY THIS EXISTS. The deferred stage (bin/fm-startup-network.sh) publishes one
 # aggregate started/finished pair, so a run that took a minute could not be

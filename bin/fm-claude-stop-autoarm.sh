@@ -62,6 +62,9 @@
 # state/.claude-autoarm-failure-notified deduplicates the last-resort notice,
 # and state/.claude-autoarm-failure-alarmed bounds the attended fail-open and
 # suppresses any later automatic continuation in that unresolved episode.
+# state/.claude-autoarm-claim-ms carries how long this hook took to claim, which
+# is what that guard sizes its cooperation window from on a host where claiming
+# takes seconds; only a firing that actually claimed writes it.
 #
 # This hook never blocks the Stop decision itself and never prints to stdout:
 # exit 0 is always silent, and exit 2 carries the rewake banner on stderr.
@@ -85,6 +88,13 @@ case "$AUTOARM_ATTEMPTS" in
   *) AUTOARM_ATTEMPTS=2 ;;
 esac
 
+# fm_timing_now_ms is the repo's millisecond clock. Sourced first, and the
+# start instant taken immediately after, so the cost of sourcing everything else
+# is inside the time-to-claim this firing publishes for the guard to size its
+# cooperation window from.
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
+START_MS=$(fm_timing_now_ms)
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-supervision-lib.sh
@@ -183,6 +193,24 @@ if [ "$CLAIM_RC" -ne 0 ]; then
 fi
 MY_GEN=$FM_AUTOARM_MY_GEN
 [ -n "$MY_GEN" ] || exit 0
+
+# Publish how long this firing took to claim, from its own start. The turn-end
+# guard sizes its cooperation window from this record (bin/fm-turnend-guard.sh),
+# so the claiming firing is the only one that can measure it: a firing that
+# deferred above measured nothing and leaves the record alone. A claim faster
+# than a millisecond records 1, because 0 is the file's "no measurement" value.
+# Best effort throughout - a missing or unwritable record only means the guard
+# falls back to its own default window, which must never be worth an exit here.
+CLAIM_MS=$(( $(fm_timing_now_ms) - START_MS ))
+[ "$CLAIM_MS" -ge 1 ] || CLAIM_MS=1
+if CLAIM_TMP=$(mktemp "$STATE/.claude-autoarm-claim-ms.XXXXXX" 2>/dev/null); then
+  if printf '%s\n' "$CLAIM_MS" > "$CLAIM_TMP" 2>/dev/null; then
+    mv -f "$CLAIM_TMP" "$STATE/.claude-autoarm-claim-ms" 2>/dev/null \
+      || rm -f "$CLAIM_TMP" 2>/dev/null || true
+  else
+    rm -f "$CLAIM_TMP" 2>/dev/null || true
+  fi
+fi
 
 # Commit <outcome> (optionally with the once-per-episode notice marker) for
 # this generation. Success means this generation's translation WINS and the

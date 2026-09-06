@@ -34,6 +34,7 @@ install_autoarm_scripts() {
   # library, and both read FM_PROC_UNAME at source time: without it in the
   # fixture the hook dies on an unbound variable before it decides anything.
   cp "$ROOT/bin/fm-proc-lib.sh" "$dir/bin/fm-proc-lib.sh"
+  cp "$ROOT/bin/fm-timing-lib.sh" "$dir/bin/fm-timing-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
@@ -1116,6 +1117,41 @@ test_identityless_ledger_never_defers() {
   pass "auto-arm: an identityless arming ledger never defers the gate (reused-pid loophole closed)"
 }
 
+# The turn-end guard sizes its cooperation window from the host's own measured
+# time-to-claim, so the claiming firing is what has to publish that measurement
+# (docs/turnend-guard.md; issue #6). A firing that defers to a live open claim
+# measured nothing and must leave the record alone.
+test_claim_records_its_own_time_to_claim() {
+  local dir out status recorded pid
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  assert_present "$dir/state/.claude-autoarm-claim-ms" "a firing that claimed the home recorded no time-to-claim"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  case "$recorded" in
+    ''|*[!0-9]*|0) fail "time-to-claim must be a positive integer of milliseconds, got: '$recorded'" ;;
+  esac
+  [ "$(wc -l < "$dir/state/.claude-autoarm-claim-ms")" -eq 1 ] || fail "time-to-claim must be exactly one line"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-defer")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_v2_claim "$dir" 471 "$pid" arming "$pid" || fail "could not record a v2 claim"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  : > "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "a firing that defers to a live open claim must exit 0"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "a firing that never claimed recorded a time-to-claim anyway"
+  pass "auto-arm: the claiming firing records its own time-to-claim and a deferring one records nothing"
+}
+
 # A superseded owner must not start or attach another watcher: when its claim
 # is superseded between arm attempts, the retry boundary goes silent instead
 # of invoking the arm again.
@@ -1258,6 +1294,7 @@ test_stopped_legacy_owner_is_reclaimed_with_term_pending
 test_open_generation_claim_defers_without_any_lock
 test_stuck_generation_claim_is_superseded_and_rearms
 test_identityless_ledger_never_defers
+test_claim_records_its_own_time_to_claim
 test_superseded_owner_never_reinvokes_the_arm
 test_superseded_owner_goes_silent_and_never_double_translates
 test_need_vanished_mid_cycle_closes_quietly
