@@ -2339,7 +2339,10 @@ A record that only rises needs a ceiling, though, because the measurement is a w
 So the auto-arm drops any measurement above `FM_CLAUDE_AUTOARM_CLAIM_MS_MAX` (default 60000) instead of storing it, on the reading that a claim slower than a minute is a stall or a clock step rather than a measurement of this host, and that a stale record beats a poisoned one.
 Row 25 records that this host does take ordinary clock steps, so that is not a hypothetical trigger.
 `bin/fm-turnend-guard.sh` reads that record and waits `max(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS, min(2 * claim_ms, FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS))` of wall clock, with the cap defaulting to 15000.
-A missing or malformed record leaves the window at `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS`, so a Linux host and a fresh home behave exactly as they did.
+A missing or malformed record leaves the window at `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS`, so the configured window is unchanged and Linux is unchanged.
+On a slow host that is less wall clock than the count accidentally spent: eight iterations of a 620 ms poll ran about 5.5 s for a nominal 800 ms, which sometimes caught the roughly 5.1 s first claim by luck.
+So a fresh home now blocks after its configured window rather than after whatever the poll happened to cost, and the first supervision-needing Stop of a never-claimed home is more likely to force one continuation than that accidental slowness was.
+That is the trade this slice makes on purpose: the firing that forces the continuation is the firing that records the measurement, and every later Stop in that home is sized from it rather than from luck.
 A missing or malformed cap is the other case and behaves differently on purpose: it falls back to the default 15000 and a recorded measurement still widens the window, because a typo in the cap must not silently reintroduce the forced continuation this slice removes.
 The forced continuation therefore costs at most one per home rather than one per session: the first slow claim is what teaches the guard how long this host takes, and no later cheap one can un-teach it.
 Both scripts read `fm_timing_now_ms` from `bin/fm-timing-lib.sh` rather than carrying a second millisecond clock, which is why that library's header now says the clock is shared and the instrumentation is not.

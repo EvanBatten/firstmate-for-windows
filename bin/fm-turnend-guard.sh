@@ -417,8 +417,15 @@ failure_episode_verified() {
 # no host has been shown to need, so the window is sized from what THIS home has
 # measured: twice the slowest time-to-claim bin/fm-claude-stop-autoarm.sh has
 # recorded, bounded by SYNC_WAIT_MAX_MS and never below SYNC_WAIT_MS. A missing
-# or malformed record leaves the window at SYNC_WAIT_MS, so a host that claims
-# in milliseconds, or a home that has never claimed, waits as it did before.
+# or malformed record leaves the window at SYNC_WAIT_MS, so the CONFIGURED
+# window is what it always was and Linux is untouched. On a slow host that is
+# less wall clock than the count accidentally spent: eight iterations of a
+# 620 ms poll ran about 5.5 s for a nominal 800 ms and sometimes caught the
+# first claim by luck. So a never-claimed home now blocks after its configured
+# window rather than after whatever the poll happened to cost, and its first
+# supervision-needing Stop is MORE likely to force one continuation than that
+# accidental slowness was - that firing is the one that records the
+# measurement every later Stop in the home is then sized from.
 WINDOW_MS=$SYNC_WAIT_MS
 CLAIM_MS=$(sed -n '1p' "$STATE/.claude-autoarm-claim-ms" 2>/dev/null || true)
 # Ten digits is 115 days: a measurement that long is forged or corrupt rather
