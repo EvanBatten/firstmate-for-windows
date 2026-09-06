@@ -425,7 +425,7 @@ CLAIM_MS=$(sed -n '1p' "$STATE/.claude-autoarm-claim-ms" 2>/dev/null || true)
 # than slow, and rejecting it here keeps it out of the arithmetic below.
 case "$CLAIM_MS" in ''|*[!0-9]*|??????????*) CLAIM_MS=0 ;; esac
 if [ "$CLAIM_MS" -gt 0 ]; then
-  MEASURED_MS=$((CLAIM_MS * 2))
+  MEASURED_MS=$((10#$CLAIM_MS * 2))
   [ "$MEASURED_MS" -le "$SYNC_WAIT_MAX_MS" ] || MEASURED_MS=$SYNC_WAIT_MAX_MS
   [ "$MEASURED_MS" -le "$WINDOW_MS" ] || WINDOW_MS=$MEASURED_MS
 fi

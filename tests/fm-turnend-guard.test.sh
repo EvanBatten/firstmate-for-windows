@@ -15,10 +15,6 @@ set -u
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-supervision-lib.sh"
-# The cooperation-window cases assert elapsed wall-clock milliseconds, so they
-# read the same millisecond clock the guard itself waits on.
-# shellcheck source=/dev/null
-. "$ROOT/bin/fm-timing-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-turnend-guard)
 fm_git_identity fmtest fmtest@example.invalid
@@ -1890,6 +1886,35 @@ test_hook_claude_mode_malformed_claim_record_keeps_the_default_window() {
   pass "fm-turnend-guard --claude: a malformed time-to-claim record neither widens the window nor breaks the deadline"
 }
 
+# A recorded measurement is decimal even when it carries a leading zero.
+# Reading it in the shell's default base loses the measurement two different
+# ways: 07000 is octal 3584 there, so the window silently halves, and 09000
+# carries a digit no octal literal allows, so the expansion fails, bash
+# abandons the rest of the widening block, and the window collapses back to the
+# floor while an interpreter error leaks into the guard's own output.
+test_hook_claude_mode_leading_zero_claim_record_is_decimal() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-claim-leading-zero")
+  : > "$dir/state/task1.meta"
+  printf '07000\n' > "$dir/state/.claude-autoarm-claim-ms"
+  late_claim_publish "$dir" 10.5
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "a recorded 07000 must widen the window to twice its DECIMAL value (14000 ms), not to twice octal 3584"
+  [ -z "$out" ] || fail "the leading-zero widened window produced output: $out"
+
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-claim-leading-zero-nonoctal")
+  : > "$dir/state/task1.meta"
+  printf '09000\n' > "$dir/state/.claude-autoarm-claim-ms"
+  late_claim_publish "$dir" 8
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=20000 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "a recorded 09000 must widen the window to 18000 ms rather than collapse it back to the floor on an illegal octal digit"
+  case "$out" in *"value too great for base"*) fail "the guard read the recorded 09000 as an octal literal: $out" ;; esac
+  [ -z "$out" ] || fail "the non-octal leading-zero record produced output: $out"
+  pass "fm-turnend-guard --claude: a leading-zero time-to-claim record is read as decimal"
+}
+
 test_hook_claude_mode_secondmate_reblocks_like_primary() {
   local dir pid out status
   dir=$(make_secondmate_dir "$TMP_ROOT/hook-claude-sm-reblock")
@@ -1982,4 +2007,5 @@ test_hook_claude_mode_default_window_ignores_a_late_claim
 test_hook_claude_mode_caps_the_widened_window
 test_hook_claude_mode_malformed_cap_falls_back_to_the_default
 test_hook_claude_mode_malformed_claim_record_keeps_the_default_window
+test_hook_claude_mode_leading_zero_claim_record_is_decimal
 test_hook_claude_mode_secondmate_reblocks_like_primary
