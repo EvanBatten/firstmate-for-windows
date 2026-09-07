@@ -50,15 +50,21 @@
 # guard ignores stop_hook_active and instead cooperates with the Stop-owned
 # auto-arm (bin/fm-claude-stop-autoarm.sh), which fires on the same Stop event:
 #   1. a live identity-matched watcher with a fresh beacon allows immediately;
-#   2. otherwise wait briefly (FM_CLAUDE_AUTOARM_SYNC_WAIT_MS, default 800ms)
-#      for the auto-arm to claim this home (a live OPEN generation claim in the
+#   2. otherwise wait a bounded cooperation window for the auto-arm to claim
+#      this home (a live OPEN generation claim in the
 #      state/.claude-autoarm-epoch ledger - fm_autoarm_claim_open - or a legacy
 #      build's lock-holding claim under the legacy abandonment proof) or to
 #      record a fresh actionable exit-2 outcome
 #      (state/.claude-autoarm-epoch) for this event epoch - either proof allows
 #      without consuming a continuation, so one event epoch yields exactly one recovery turn;
 #      the first fresh exhausted-failure epoch preserves the bounded progression,
-#      while later fresh failed epochs consume it instead of resetting it;
+#      while later fresh failed epochs consume it instead of resetting it.
+#      That window is a wall-clock deadline, never a count of polls:
+#      FM_CLAUDE_AUTOARM_SYNC_WAIT_MS (default 800ms) is its floor, twice the
+#      home's slowest measured time-to-claim (state/.claude-autoarm-claim-ms,
+#      written by bin/fm-claude-stop-autoarm.sh) widens it, and
+#      FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS (default 15000ms) bounds that
+#      widening - the loop below owns why;
 #   3. only when neither materializes is the auto-arm genuinely absent: re-block
 #      with the repair banner, bounded to FM_CLAUDE_TURNEND_BLOCK_BUDGET
 #      (default 3) consecutive blocks per session - safely below Claude Code's
@@ -76,9 +82,11 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 CLAUDE_MODE=0
 CURSOR_MODE=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
+SYNC_WAIT_MAX_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS:-15000}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
-case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; esac
+case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; *) SYNC_WAIT_MS=$((10#$SYNC_WAIT_MS)) ;; esac
+case "$SYNC_WAIT_MAX_MS" in ''|*[!0-9]*) SYNC_WAIT_MAX_MS=15000 ;; *) SYNC_WAIT_MAX_MS=$((10#$SYNC_WAIT_MAX_MS)) ;; esac
 case "$EPOCH_FRESH" in ''|*[!0-9]*|0) EPOCH_FRESH=15 ;; esac
 case "$BLOCK_BUDGET" in ''|*[!0-9]*|0) BLOCK_BUDGET=3 ;; esac
 
@@ -146,6 +154,10 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# fm_timing_now_ms is the repo's millisecond clock; the cooperation window
+# below is a wall-clock deadline and reads it rather than keeping a second one.
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
 
 BUDGET_FILE="$STATE/.turnend-claude-blocks"
 BUDGET_LOCK="$STATE/.turnend-claude-blocks.lock"
@@ -394,8 +406,42 @@ failure_episode_verified() {
   esac
 }
 
-i=0
-while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
+# The cooperation window is a wall-clock DEADLINE, not SYNC_WAIT_MS/100
+# iterations of a poll assumed to be free. One autoarm_owns_recovery costs about
+# 620 ms on Git Bash (its identity proofs read /proc, and fm_pid_alive on a
+# native pid falls back to a whole-table `ps -W`), so the count spent 5.5 s for
+# its nominal 800 ms and still missed the auto-arm's first claim, which needs
+# about 5.1 s there: every first Stop of a session ended in one forced
+# continuation (docs/windows/measurement.md, issue #6).
+# Raising the constant instead would hold every turn on a slow host for a budget
+# no host has been shown to need, so the window is sized from what THIS home has
+# measured: twice the slowest time-to-claim bin/fm-claude-stop-autoarm.sh has
+# recorded, bounded by SYNC_WAIT_MAX_MS and never below SYNC_WAIT_MS. A missing
+# or malformed record leaves the window at SYNC_WAIT_MS, so the CONFIGURED
+# window is what it always was and Linux is untouched. On a slow host that is
+# less wall clock than the count accidentally spent: eight iterations of a
+# 620 ms poll ran about 5.5 s for a nominal 800 ms and sometimes caught the
+# first claim by luck. So a never-claimed home now blocks after its configured
+# window rather than after whatever the poll happened to cost, and its first
+# supervision-needing Stop is MORE likely to force one continuation than that
+# accidental slowness was - that firing is the one that records the
+# measurement every later Stop in the home is then sized from.
+WINDOW_MS=$SYNC_WAIT_MS
+CLAIM_MS=$(sed -n '1p' "$STATE/.claude-autoarm-claim-ms" 2>/dev/null || true)
+# Ten digits is 115 days: a measurement that long is forged or corrupt rather
+# than slow, and rejecting it here keeps it out of the arithmetic below. Every
+# number entering this computation is normalised to base ten where it is
+# validated, because a zero-padded value reads as octal in $(( )) while the
+# test builtin reads it as decimal, and an eight or a nine makes that
+# expansion fail outright.
+case "$CLAIM_MS" in ''|*[!0-9]*|??????????*) CLAIM_MS=0 ;; *) CLAIM_MS=$((10#$CLAIM_MS)) ;; esac
+if [ "$CLAIM_MS" -gt 0 ]; then
+  MEASURED_MS=$((CLAIM_MS * 2))
+  [ "$MEASURED_MS" -le "$SYNC_WAIT_MAX_MS" ] || MEASURED_MS=$SYNC_WAIT_MAX_MS
+  [ "$MEASURED_MS" -le "$WINDOW_MS" ] || WINDOW_MS=$MEASURED_MS
+fi
+DEADLINE_MS=$(( $(fm_timing_now_ms) + WINDOW_MS ))
+while [ "$(fm_timing_now_ms)" -lt "$DEADLINE_MS" ]; do
   if autoarm_owns_recovery; then
     if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
       fm_failure_episode_reset "$STATE" || exit 2
@@ -403,7 +449,6 @@ while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
     exit 0
   fi
   sleep 0.1
-  i=$((i + 1))
 done
 if autoarm_owns_recovery; then
   if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then

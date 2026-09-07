@@ -138,7 +138,7 @@ That is a latency finding, not an identity one, and it deserves exact numbers ra
 
 The auto-arm's identity proof alone costs 2130 ms (`fm_session_lock_owned_by_self`) plus 3009 ms (the fallback) in the severed-hook shape, because each ancestry walk spawns a PowerShell, and `fm_pid_alive` on a native pid costs 1.2 s because `kill -0` fails and `ps -W` scans the whole Win32 process table.
 The guard's cooperation window is expressed as `SYNC_WAIT_MS / 100` iterations of a `sleep 0.1` plus one poll, which assumes a free poll; here that loop spends 5.5 s for its nominal 800 ms (about 620 ms per iteration).
-Raising the budget alone would make the guard hold the turn for the better part of a minute, so the honest fix is a deadline sized from a measured time-to-claim, and that is a separate change with its own measurement.
+Raising the budget alone would make the guard hold the turn for the better part of a minute, so the honest fix is a deadline sized from a measured time-to-claim, and that is a separate change with its own measurement - written since, and listed with the rest of the fork-only work in the covering issue.
 The cost today is one forced continuation at the first Stop of a session; every later Stop is clean.
 
 ## One shared hunk

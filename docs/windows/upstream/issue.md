@@ -141,6 +141,13 @@ Each is a candidate for its own small PR if it is wanted.
 - **The step-exact process identity**, which is the fifth finding above.
   Listed here as well because it is on the fork and in none of the seven branches: a non-Linux `/proc` records an absolute creation time in milliseconds instead of a raw tick count, and every equality site compares through one tolerant comparator rather than a string equality.
   The `fm_pid_identity` and `fm_pid_identity_equal` headers in `bin/fm-wake-lib.sh` own the contract; ledger row 25.
+- **The Stop guard's cooperation window, sized from a measured time-to-claim.**
+  This is the latency finding PR-7's body records and does not fix, and it is platform-neutral code rather than a Windows special case.
+  The window was `SYNC_WAIT_MS / 100` iterations of a poll assumed to be free; one poll costs about 620 ms here, because its identity proofs read `/proc` and `fm_pid_alive` on a native pid falls back to a whole-table `ps -W`.
+  So the nominal 800 ms spent 5.5 s and still missed an auto-arm that needs about 5.1 s to claim in the severed-hook shape, and a nominal 3000 ms window spent 23038 ms - far longer than its budget and still too short for the thing it was waiting for.
+  Raising the constant would hold every turn on a slow host for a budget no host has been shown to need and would change nothing on Linux, so the window is now a wall-clock deadline sized from the home's own evidence: `bin/fm-claude-stop-autoarm.sh` records the milliseconds from its start to a successful claim, and the guard widens its window from that record, floored at `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS` and bounded by `FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS`, with `FM_CLAUDE_AUTOARM_CLAIM_MS_MAX` bounding what a firing is willing to record at all.
+  A home with no record keeps the configured window, so Linux is untouched, and the forced continuation costs at most one per home rather than one per session.
+  Ledger row 27 and its "Issue #6: the cooperation window is a measured deadline" section own the arithmetic, the three knobs and the measurements behind them.
 - **CI triggers on the fork's default branch.**
   `.github/workflows/ci.yml` and `no-mistakes-required.yml` name `main` only, so on a fork whose default branch is `windows` neither has ever run: no lint, no test shard and no required check on anything pushed here.
   Both now name `windows` as well, asserted by parsing the workflow YAML rather than by matching its text, and skipping honestly where a YAML parser is absent.

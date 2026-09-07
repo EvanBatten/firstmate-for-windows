@@ -62,6 +62,11 @@
 # state/.claude-autoarm-failure-notified deduplicates the last-resort notice,
 # and state/.claude-autoarm-failure-alarmed bounds the attended fail-open and
 # suppresses any later automatic continuation in that unresolved episode.
+# state/.claude-autoarm-claim-ms carries the slowest time-to-claim this hook has
+# observed, which is what that guard sizes its cooperation window from on a host
+# where claiming takes seconds; only a firing that actually claimed writes it,
+# and only when its own measurement exceeds the one already stored and stays
+# under FM_CLAUDE_AUTOARM_CLAIM_MS_MAX.
 #
 # This hook never blocks the Stop decision itself and never prints to stdout:
 # exit 0 is always silent, and exit 2 carries the rewake banner on stderr.
@@ -84,7 +89,19 @@ case "$AUTOARM_ATTEMPTS" in
   1|2|3) : ;;
   *) AUTOARM_ATTEMPTS=2 ;;
 esac
+CLAIM_MS_MAX=${FM_CLAUDE_AUTOARM_CLAIM_MS_MAX:-60000}
+case "$CLAIM_MS_MAX" in
+  ''|*[!0-9]*) CLAIM_MS_MAX=60000 ;;
+  *) CLAIM_MS_MAX=$((10#$CLAIM_MS_MAX)) ;;
+esac
 
+# fm_timing_now_ms is the repo's millisecond clock. Sourced first, and the
+# start instant taken immediately after, so the cost of sourcing everything else
+# is inside the time-to-claim this firing publishes for the guard to size its
+# cooperation window from.
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
+START_MS=$(fm_timing_now_ms)
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-supervision-lib.sh
@@ -183,6 +200,48 @@ if [ "$CLAIM_RC" -ne 0 ]; then
 fi
 MY_GEN=$FM_AUTOARM_MY_GEN
 [ -n "$MY_GEN" ] || exit 0
+
+# Publish how long this firing took to claim, from its own start. The turn-end
+# guard sizes its cooperation window from this record (bin/fm-turnend-guard.sh),
+# so the claiming firing is the only one that can measure it: a firing that
+# deferred above measured nothing and leaves the record alone. A claim faster
+# than a millisecond records 1, because 0 is the file's "no measurement" value.
+# The record only ever RISES, so it keeps this home's slowest observed
+# time-to-claim rather than its most recent one. Time-to-claim is bimodal: the
+# first Stop of a session pays the stale session-lock recovery that a
+# mid-session reclaim skips, so a cheap claim overwriting the slow one would
+# size the next session's first Stop from a number that shape never pays, and
+# the forced continuation would cost one per session again rather than one per
+# home. Keeping the maximum is cheap on both counts: the guard's
+# SYNC_WAIT_MAX_MS already bounds what the record can ask for, and the widened
+# window only ever spends wall clock on the failure path, where no auto-arm
+# claims at all.
+# A measurement above CLAIM_MS_MAX is dropped rather than stored. The delta is
+# wall clock, not a monotonic one, so a suspend or an NTP step between
+# START_MS and the claim lands in it whole, and a claim slower than a minute
+# is that artifact or a stall rather than a measurement of this host. Without
+# the ceiling a monotonic record would keep such a value forever, and a stale
+# record is better than a poisoned one. The guard bounds the window it builds
+# from this number with its own SYNC_WAIT_MAX_MS regardless, so the ceiling is
+# about what this home is willing to believe, not about the window.
+# Best effort throughout - a missing or unwritable record only means the guard
+# falls back to its own default window, which must never be worth an exit here.
+CLAIM_MS=$(( $(fm_timing_now_ms) - START_MS ))
+[ "$CLAIM_MS" -ge 1 ] || CLAIM_MS=1
+CLAIM_RECORDED=$(sed -n '1p' "$STATE/.claude-autoarm-claim-ms" 2>/dev/null || true)
+case "$CLAIM_RECORDED" in
+  ''|*[!0-9]*|??????????*) CLAIM_RECORDED=0 ;;
+  *) CLAIM_RECORDED=$((10#$CLAIM_RECORDED)) ;;
+esac
+if [ "$CLAIM_MS" -gt "$CLAIM_RECORDED" ] && [ "$CLAIM_MS" -le "$CLAIM_MS_MAX" ] \
+  && CLAIM_TMP=$(mktemp "$STATE/.claude-autoarm-claim-ms.XXXXXX" 2>/dev/null); then
+  if printf '%s\n' "$CLAIM_MS" > "$CLAIM_TMP" 2>/dev/null; then
+    mv -f "$CLAIM_TMP" "$STATE/.claude-autoarm-claim-ms" 2>/dev/null \
+      || rm -f "$CLAIM_TMP" 2>/dev/null || true
+  else
+    rm -f "$CLAIM_TMP" 2>/dev/null || true
+  fi
+fi
 
 # Commit <outcome> (optionally with the once-per-episode notice marker) for
 # this generation. Success means this generation's translation WINS and the

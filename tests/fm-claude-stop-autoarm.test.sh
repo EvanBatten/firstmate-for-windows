@@ -34,6 +34,7 @@ install_autoarm_scripts() {
   # library, and both read FM_PROC_UNAME at source time: without it in the
   # fixture the hook dies on an unbound variable before it decides anything.
   cp "$ROOT/bin/fm-proc-lib.sh" "$dir/bin/fm-proc-lib.sh"
+  cp "$ROOT/bin/fm-timing-lib.sh" "$dir/bin/fm-timing-lib.sh"
   cp "$ROOT/bin/fm-session-lock-lib.sh" "$dir/bin/fm-session-lock-lib.sh"
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
@@ -1158,6 +1159,104 @@ test_identityless_ledger_never_defers() {
   pass "auto-arm: an identityless arming ledger never defers the gate (reused-pid loophole closed)"
 }
 
+# The turn-end guard sizes its cooperation window from the host's own measured
+# time-to-claim, so the claiming firing is what has to publish that measurement
+# (docs/turnend-guard.md; issue #6). A firing that defers to a live open claim
+# measured nothing and must leave the record alone.
+# Time-to-claim is bimodal: the first Stop of a session pays the stale
+# session-lock recovery that a mid-session reclaim skips. If a cheap claim
+# overwrote the slow one the guard would size the next session's first Stop
+# from a number that shape never pays, which is the per-session forced
+# continuation this slice removes. So the record rises and never falls.
+# The measurement is a wall-clock delta, so a suspend or an NTP step between
+# the hook's start and its claim lands in it whole. A monotonic record with no
+# ceiling would keep that artifact forever and hold every later unclaimed Stop
+# at the guard's cap. Exercised by lowering the ceiling under a real
+# measurement, which is the same state a clock jump reaches from the other
+# direction.
+test_claim_record_refuses_a_measurement_above_the_ceiling() {
+  local dir out status recorded
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-ceiling-keeps-previous")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  printf '1\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  [ "$recorded" = 1 ] || fail "a measurement above the ceiling replaced the surviving record with '$recorded'"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-ceiling-writes-nothing")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=1 run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "a measurement above the ceiling was recorded into a home that had none"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-ceiling-malformed")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  out=$(FM_CLAUDE_AUTOARM_CLAIM_MS_MAX=not-a-number run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms" 2>/dev/null || true)
+  case "$recorded" in ''|*[!0-9]*) fail "a malformed ceiling must fall back to the 60 s default, got record: '$recorded'" ;; esac
+  pass "auto-arm: a time-to-claim above the ceiling is never recorded and the surviving record stands"
+}
+
+test_claim_record_only_ever_rises() {
+  local dir out status recorded
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-never-lowers")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  printf '900000\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  [ "$recorded" = 900000 ] || fail "a faster claim lowered the home's slowest recorded time-to-claim to '$recorded'"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-raises")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  printf '1\n' > "$dir/state/.claude-autoarm-claim-ms"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  case "$recorded" in ''|*[!0-9]*) fail "time-to-claim must stay one integer of milliseconds, got: '$recorded'" ;; esac
+  [ "$recorded" -gt 1 ] || fail "a slower claim did not raise the recorded time-to-claim, still '$recorded'"
+  [ "$(wc -l < "$dir/state/.claude-autoarm-claim-ms")" -eq 1 ] || fail "time-to-claim must be exactly one line"
+  pass "auto-arm: the claim record keeps the home's slowest time-to-claim and never lowers it"
+}
+
+test_claim_records_its_own_time_to_claim() {
+  local dir out status recorded pid
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "an actionable arm close must still exit 2"
+  assert_present "$dir/state/.claude-autoarm-claim-ms" "a firing that claimed the home recorded no time-to-claim"
+  recorded=$(cat "$dir/state/.claude-autoarm-claim-ms")
+  case "$recorded" in
+    ''|*[!0-9]*|0) fail "time-to-claim must be a positive integer of milliseconds, got: '$recorded'" ;;
+  esac
+  [ "$(wc -l < "$dir/state/.claude-autoarm-claim-ms")" -eq 1 ] || fail "time-to-claim must be exactly one line"
+
+  dir=$(make_primary_dir "$TMP_ROOT/claim-ms-defer")
+  : > "$dir/state/task1.meta"
+  write_arm_fixture "$dir" actionable
+  sleep 60 &
+  pid=$!
+  record_autoarm_v2_claim "$dir" 471 "$pid" arming "$pid" || fail "could not record a v2 claim"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  : > "$dir/state/.last-watcher-beat"
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "a firing that defers to a live open claim must exit 0"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "a firing that never claimed recorded a time-to-claim anyway"
+  pass "auto-arm: the claiming firing records its own time-to-claim and a deferring one records nothing"
+}
+
 # A superseded owner must not start or attach another watcher: when its claim
 # is superseded between arm attempts, the retry boundary goes silent instead
 # of invoking the arm again.
@@ -1303,6 +1402,9 @@ test_stopped_legacy_owner_is_reclaimed_with_term_pending
 test_open_generation_claim_defers_without_any_lock
 test_stuck_generation_claim_is_superseded_and_rearms
 test_identityless_ledger_never_defers
+test_claim_records_its_own_time_to_claim
+test_claim_record_only_ever_rises
+test_claim_record_refuses_a_measurement_above_the_ceiling
 test_superseded_owner_never_reinvokes_the_arm
 test_superseded_owner_goes_silent_and_never_double_translates
 test_need_vanished_mid_cycle_closes_quietly
