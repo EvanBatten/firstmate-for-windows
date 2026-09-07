@@ -1050,7 +1050,9 @@ for _ in $(seq 1 24); do
   race_pids+=("$!")
 done
 wait_for "$RACE_LOG" || fail "no contender acquired the stale claim"
-fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" || true
+# A window for an ABSENCE - a second line that must never appear - so it is a
+# sleep and not a wait: the winner's runner is already up by the line above.
+fm_test_settle 0.5
 [ "$(wc -l < "$RACE_LOG" | tr -d ' ')" = 1 ] || fail "stale-claim race started more than one runner"
 : > "$RACE_TRIGGER"
 for race_pid in "${race_pids[@]}"; do wait "$race_pid" 2>/dev/null || true; done
@@ -1099,7 +1101,10 @@ kill -0 -"$orphan_leader" 2>/dev/null || fail "fixture invalid: the owned child 
 orphan_out=$(pe "$HG" reconcile)
 kill -0 -"$orphan_leader" 2>/dev/null \
   && fail "reconcile left the crashed generation's process group alive: $orphan_out"
-fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" || true
+# A window for an ABSENCE - an overlap marker that must never be written - so
+# it is a sleep and not a wait: the replacement is detached and would write it
+# after reconcile has already returned.
+fm_test_settle 0.5
 assert_absent "$ORPHAN_OVERLAP" "no replacement source starts while the crashed generation remains alive"
 case "$orphan_out" in
   *"started=1"*)

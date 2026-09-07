@@ -656,3 +656,18 @@ fm_test_wait_until() {
     sleep 0.1
   done
 }
+
+# fm_test_settle <linux-seconds>: sleep that budget sized for this host. This is
+# the window an assertion about an ABSENCE needs - "nothing started", "nothing
+# was written" - where there is nothing to wait FOR. fm_test_wait_until is the
+# wrong tool there: a predicate that is already true returns on its first probe
+# and leaves no window at all, and a predicate that stays false burns the whole
+# budget to say what the sleep would have said. Every wait for something that
+# must HAPPEN belongs in fm_test_wait_until instead.
+fm_test_settle() {  # <linux-seconds>
+  local ms whole frac
+  ms=$(fm_test_budget_ms "$1")
+  whole=$(( ms / 1000 ))
+  printf -v frac '%03d' "$(( ms % 1000 ))"
+  sleep "$whole.$frac"
+}

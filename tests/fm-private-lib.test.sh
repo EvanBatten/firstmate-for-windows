@@ -246,6 +246,56 @@ SH
   pass "private-lib: the probe draws no conclusion from a file this user does not own"
 }
 
+# The swap above is staged as already done. The interesting one is staged HALF
+# done: the probe is still ours when the ownership question is asked and another
+# account's by the time the modes are read back, which is exactly the window an
+# unlink-and-recreate in a group-writable directory opens. A defence that asks
+# once, before the measurement, waives the check on the strength of a file it no
+# longer owns; the answer has to be re-taken after the readbacks.
+test_probe_refuses_to_conclude_from_a_probe_swapped_mid_measurement() {
+  local dir fakebin out
+  dir=$(case_dir probe-swapped)
+  mkdir -p "$dir/work"
+  fakebin="$dir/fs-swapped"
+  mkdir -p "$fakebin"
+  fm_fake_noacl_stat "$fakebin"
+  mv "$fakebin/stat" "$fakebin/stat-noacl"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'NOACL_STAT=%s\n' "$(printf '%q' "$fakebin/stat-noacl")"
+    printf 'FIRST_ASK=%s\n' "$(printf '%q' "$dir/owner-asked-once")"
+    printf 'OUR_UID=%s\n' "$(printf '%q' "$(id -u)")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %u:*/.fm-private-probe.*)
+    if [ -e "$FIRST_ASK" ]; then
+      echo 4294967294
+    else
+      : > "$FIRST_ASK"
+      echo "$OUR_UID"
+    fi
+    exit 0
+    ;;
+esac
+exec "$NOACL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  out=$(fs_eval "$fakebin" "
+    : > '$dir/work/f'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+    echo \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "refused
+[]" ] || fail "a probe swapped after its ownership check must not waive anything, got '$out'"
+  pass "private-lib: the probe draws no conclusion from a file swapped mid-measurement"
+}
+
 test_probe_cannot_relax_a_directory_it_cannot_write() {
   local dir out
   dir=$(case_dir probe-unwritable)
@@ -428,6 +478,7 @@ test_probe_measures_a_mount_that_drops_modes
 test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback
 test_probe_leaves_nothing_behind
 test_probe_refuses_to_conclude_from_a_file_it_does_not_own
+test_probe_refuses_to_conclude_from_a_probe_swapped_mid_measurement
 test_probe_cannot_relax_a_directory_it_cannot_write
 test_creation_carries_700_and_600_where_modes_are_enforcing
 test_creation_succeeds_and_is_recorded_where_modes_are_not_representable

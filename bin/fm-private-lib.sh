@@ -17,12 +17,11 @@
 # WHAT THE CALLER GETS
 #   fm_private_modes_enforcing <path>   is a restrictive mode representable on
 #                                       the filesystem under <path>?
-#   fm_private_chmod <mode> <path>...   set the mode, accepting a filesystem
-#                                       that cannot take it
+#   fm_private_chmod <mode> <path>...   set the mode; fails only when the chmod
+#                                       itself fails
 #   fm_private_mkdir <dir>              create <dir> private; FAILS if <dir>
 #                                       already exists, so a caller using the
 #                                       creation as a lock still has its lock
-#   fm_private_mkdir_p <dir>            create <dir> and its parents private
 #   fm_private_mode_ok <path> <mode>    the mode half of the assertion, for the
 #                                       sites that carry their own structure
 #                                       checks around it
@@ -32,14 +31,15 @@
 #   FM_PRIVATE_MODE_UNENFORCEABLE       empty, or the first path whose mode
 #                                       this process could not enforce
 #
-# ON A FILESYSTEM THAT CARRIES MODES, EVERY HELPER HERE IS THE EXPRESSION ITS
-# CALLER WROTE BEFORE IT EXISTED, AT THE SAME COST. `fm_private_chmod` is
-# `chmod "$mode" "$@"` and only consults the probe when that chmod FAILS;
-# `fm_private_mode_ok` is `[ "$(stat ...)" = "$mode" ]` and only consults the
-# probe when that comparison DISAGREES. Neither branch is reached on a POSIX
-# host in the ordinary case, so no site pays for a probe, and a genuinely
-# group-readable file on a mode-carrying filesystem is still refused exactly as
-# before. Only the failing branch is new.
+# ON EVERY FILESYSTEM, EVERY HELPER HERE IS THE EXPRESSION ITS CALLER WROTE
+# BEFORE IT EXISTED, AT THE SAME COST. `fm_private_chmod` is
+# `chmod "$mode" "$@"` and nothing else: it never probes, on either branch, so
+# no setter anywhere pays for one. ONE PLACE DECIDES WHETHER A MODE IS
+# ENFORCEABLE, and it is the ASSERTION: `fm_private_mode_ok` is
+# `[ "$(stat ...)" = "$mode" ]` and consults the probe only when that
+# comparison DISAGREES, which a POSIX host does not reach in the ordinary case.
+# A genuinely group-readable file on a mode-carrying filesystem is therefore
+# still refused exactly as before. Only the disagreeing branch is new.
 #
 # WHY THE RELAXATION EXISTS (measured on Windows 11 26200, Git Bash 5.2
 # MINGW64; docs/windows/measurement.md rows 21 and 24). Every Git Bash mount is
@@ -219,6 +219,13 @@ _fm_private_probe_dir() {  # <path>
 # was catching the directory. It cannot forge OWNERSHIP, so that is what is
 # checked: a probe that is not a plain, singly-linked file belonging to this
 # user is not evidence, and the strict branch stands.
+#
+# This is asked BEFORE and AFTER the two readbacks, because a swap between the
+# check and the reading is exactly the swap that matters, and the probe's own
+# `chmod` calls have to succeed for the same reason: a chmod on a file this
+# process made and owns cannot fail on any filesystem, so one that does has
+# stopped describing our file. Nothing about a mount that merely drops modes
+# fails any of that - measured there, chmod exits 0 and only the readback moves.
 _fm_private_probe_is_ours() {  # <probe>
   local probe=$1
   _fm_private_resolve_uid
@@ -241,14 +248,14 @@ fm_private_modes_enforcing() {  # <path>
   esac
   probe=$(mktemp "$dir/.fm-private-probe.XXXXXX" 2>/dev/null) || probe=
   [ -n "$probe" ] || return 0
-  if _fm_private_probe_is_ours "$probe"; then
-    chmod 0644 "$probe" 2>/dev/null || true
+  wide=
+  narrow=
+  if _fm_private_probe_is_ours "$probe" && chmod 0644 "$probe" 2>/dev/null; then
     wide=$(_fm_private_mode_canon "$(fm_private_stat_mode "$probe")") || wide=
-    chmod 0600 "$probe" 2>/dev/null || true
-    narrow=$(_fm_private_mode_canon "$(fm_private_stat_mode "$probe")") || narrow=
-  else
-    wide=
-    narrow=
+    if chmod 0600 "$probe" 2>/dev/null; then
+      narrow=$(_fm_private_mode_canon "$(fm_private_stat_mode "$probe")") || narrow=
+    fi
+    _fm_private_probe_is_ours "$probe" || { wide=; narrow=; }
   fi
   rm -f -- "$probe" 2>/dev/null || true
   [ -n "$wide" ] && [ -n "$narrow" ] || return 0
@@ -282,42 +289,34 @@ fm_private_mode_ok() {  # <path> <mode>
   return 0
 }
 
-# Set <mode> on each <path>. Where the filesystem cannot take it, succeed and
-# record that, rather than refusing state the caller has no other way to make.
+# Set <mode> on each <path>. This is `chmod` and nothing more, and it measures
+# nothing: a filesystem that cannot carry the mode does not FAIL this call -
+# measured on Git Bash, `chmod 0600` returns 0 and leaves 644 behind - so a
+# probe here could only re-derive what fm_private_mode_ok already asks at the
+# one moment the answer is needed, which is when a readback disagrees. The
+# record of an unenforceable mode belongs to that assertion, so this setter
+# costs no site a probe on any host.
+#
+# A chmod that FAILS is an error on every filesystem, and is not waived here.
+# Waiving it would also waive a read-only mount, a file another user owns, and
+# a caller that cannot set the mode for any other reason, making "the tool
+# could not make this private" unobservable to the product that depends on it.
 fm_private_chmod() {  # <mode> <path>...
   local mode=${1-}
   shift || return 1
   [ "$#" -gt 0 ] || return 1
-  # A chmod that FAILS is an error on every filesystem, and is not waived here.
-  # A filesystem that cannot carry the mode does not fail this call: measured on
-  # Git Bash, `chmod 0600` returns 0 and leaves 644 behind, which is what
-  # fm_private_mode_ok answers for. Waiving a failed chmod would also waive a
-  # read-only mount, a file another user owns, and a caller that cannot set the
-  # mode for any other reason, making "the tool could not make this private"
-  # unobservable to the product that depends on it.
-  chmod "$mode" "$@" 2>/dev/null || return 1
-  fm_private_modes_enforcing "$1" || _fm_private_note_unenforceable "$1"
-  return 0
+  chmod "$mode" "$@" 2>/dev/null
 }
 
 # Create <dir> as a private directory. Creation is atomic and REFUSES an
 # existing <dir>, because several callers use exactly that to hold a lock; the
 # mode comes from the umask so there is no window in which the directory exists
-# at a wider one, and the chmod that follows is what `mkdir -m 700` did, with
-# the same acceptance every other setter here has.
+# at a wider one, and the chmod that follows is what `mkdir -m 700` did, minus
+# that command's failure on a mount which cannot take the mode.
 fm_private_mkdir() {  # <dir>
   local dir=${1-}
   [ -n "$dir" ] || return 1
   (umask 077; mkdir -- "$dir") 2>/dev/null || return 1
-  fm_private_chmod 700 "$dir"
-}
-
-# The same for a directory that may already exist, with its parents.
-fm_private_mkdir_p() {  # <dir>
-  local dir=${1-}
-  [ -n "$dir" ] || return 1
-  (umask 077; mkdir -p -- "$dir") 2>/dev/null || return 1
-  [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   fm_private_chmod 700 "$dir"
 }
 

@@ -491,16 +491,10 @@ for script in "${CANDIDATES[@]}"; do
   mkdir -p "$work/tmp" "$work/out"
   fm_private_chmod 0700 "$work" "$work/tmp" "$work/out" \
     || die "could not chmod 0700 worker roots under $work"
-  mode=$(dir_mode "$work")
-  case "$mode" in
-    700|0700) ;;
-    *) die "failed to create mode-0700 worker root at $work (mode=$mode)" ;;
-  esac
-  mode=$(dir_mode "$work/tmp")
-  case "$mode" in
-    700|0700) ;;
-    *) die "failed to create mode-0700 TMPDIR at $work/tmp (mode=$mode)" ;;
-  esac
+  fm_private_mode_ok "$work" 700 \
+    || die "failed to create mode-0700 worker root at $work (mode=$(dir_mode "$work"))"
+  fm_private_mode_ok "$work/tmp" 700 \
+    || die "failed to create mode-0700 TMPDIR at $work/tmp (mode=$(dir_mode "$work/tmp"))"
 
   printf 'FM_ISOLATION_CANDIDATE_BEGIN %s %s worker=%s\n' \
     "$(now_iso)" "$script" "$idx"
