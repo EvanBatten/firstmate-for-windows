@@ -277,25 +277,29 @@ SH
   printf '%s\n' "$dir"
 }
 
+# wait_for_exit <pid> [ticks]: wait for the child to exit and return its status,
+# or kill it and return 124. ticks is the Linux budget in tenths of a second
+# (default 50, five seconds); the deadline is that budget sized for this host by
+# tests/lib.sh's time scale, so a slow spawn moves the bound, not the verdict.
 wait_for_exit() {
-  local pid=$1 limit=${2:-50} i=0
-  while [ "$i" -lt "$limit" ]; do
-    if ! is_live_non_zombie "$pid"; then
-      wait "$pid"
-      return "$?"
-    fi
-    sleep 0.1
-    i=$((i + 1))
-  done
+  local pid=$1 limit=${2:-50}
+  if fm_test_wait_until "$(fm_test_tenths "$limit")" wait_for_exit_gone "$pid"; then
+    wait "$pid"
+    return "$?"
+  fi
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   return 124
 }
 
+wait_for_exit_gone() {
+  ! is_live_non_zombie "$1"
+}
+
 is_live_non_zombie() {
   local pid=$1 stat
   kill -0 "$pid" 2>/dev/null || return 1
-  stat=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+  stat=$(fm_test_stat "$pid" 2>/dev/null || true)
   case "$stat" in
     Z*) return 1 ;;
   esac

@@ -34,15 +34,14 @@ start_seed_watcher() {  # <state> <fakebin> <watch-out>
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   SEED_PID=$!
-  i=0
-  while [ "$i" -lt 60 ]; do
-    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
-      && [ -e "$state/.last-watcher-beat" ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
+  fm_test_wait_until 6 seed_watcher_is_beating "$state" || true
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
     || fail "seed watcher did not take the lock"
+}
+
+seed_watcher_is_beating() {  # <state>
+  [ "$(cat "$1/.watch.lock/pid" 2>/dev/null || true)" = "$SEED_PID" ] \
+    && [ -e "$1/.last-watcher-beat" ]
 }
 
 # Attach a real arm to the live cycle.
@@ -51,13 +50,7 @@ start_attached_arm() {  # <state> <fakebin> <arm-out> <confirm-timeout>
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 \
     FM_ARM_CONFIRM_TIMEOUT="$confirm" "$WATCH_ARM" > "$armout" &
   ARM_PID=$!
-  i=0
-  while [ "$i" -lt 80 ]; do
-    grep -qF "watcher: attached pid=$SEED_PID" "$armout" 2>/dev/null && break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  grep -qF "watcher: attached pid=$SEED_PID" "$armout" \
+  fm_test_wait_until 8 grep -qF "watcher: attached pid=$SEED_PID" "$armout" \
     || fail "arm did not attach to the live watcher: $(cat "$armout")"
 }
 
@@ -105,13 +98,7 @@ status_signature() {  # <status-path>
 }
 
 wait_for_file_text() {  # <file> <fixed-text>
-  local file=$1 expected=$2 i=0
-  while [ "$i" -lt 100 ]; do
-    grep -F "$expected" "$file" >/dev/null 2>&1 && return 0
-    sleep 0.05
-    i=$((i + 1))
-  done
-  return 1
+  fm_test_wait_until 5 grep -qF "$2" "$1"
 }
 
 ack_wakes() {  # <state>
@@ -141,20 +128,18 @@ drain_ack_pair() {  # <drain-stderr>
 }
 
 start_rearm_arm() {  # <home> <state> <fakebin> <arm-out> [predecessor-arm-pid]
-  local home=$1 state=$2 fakebin=$3 armout=$4 predecessor=${5:-} i
+  local home=$1 state=$2 fakebin=$3 armout=$4 predecessor=${5:-}
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
     FM_WATCH_PREDECESSOR_ARM_PID="$predecessor" \
     "$WATCH_ARM" --restart > "$armout" &
   ARM_PID=$!
-  i=0
-  while [ "$i" -lt 80 ]; do
-    grep -q '^watcher: started ' "$armout" 2>/dev/null && return 0
-    is_live_non_zombie "$ARM_PID" || return 0
-    sleep 0.05
-    i=$((i + 1))
-  done
+  fm_test_wait_until 4 rearm_started_or_gone "$armout" || true
   return 0
+}
+
+rearm_started_or_gone() {  # <arm-out>
+  grep -q '^watcher: started ' "$1" 2>/dev/null || ! is_live_non_zombie "$ARM_PID"
 }
 
 test_attached_arm_reports_the_delivered_wake() {
@@ -288,8 +273,9 @@ test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   append_wake "$state" check startup-network 'check: startup-network'
 
   start_rearm_arm "$home" "$state" "$fakebin" "$armout"
-  sleep 0.25
-  if is_live_non_zombie "$ARM_PID"; then
+  # The re-arm must surface the durable wakes and return within a couple of
+  # FM_POLL=1 cycles; the pre-fix path stayed live until an actionable status.
+  if ! fm_test_wait_until 2 wait_for_exit_gone "$ARM_PID"; then
     # End the fixture through an ordinary actionable status transition so this
     # failing pre-fix path leaves no child behind.
     printf 'done: fixture cleanup\n' > "$state/cleanup.status"
