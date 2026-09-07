@@ -2414,6 +2414,34 @@ Six of the guard cases and one of the auto-arm cases landed with the slice; the 
 Linux is unchanged apart from the new cases: on WSL Ubuntu the guard suite runs 70 green at the merge base and 78 green on this branch, and the auto-arm suite 41 then 44, all four runs fully green.
 The guard suite goes from 34 s at the base to 135 s here, because the new cases wait for claims that a Linux host would never be slow enough to need.
 
+### Issues #4 and #3: one owner for private state
+
+Thirty-two scripts under `bin/` created or asserted mode-700 and mode-600 private state, each spelling the same three steps inline: a `chmod` or a `mkdir -m`, a `stat` readback compared against that literal, and a refusal.
+That is a real check wherever the filesystem can carry a POSIX mode, and it is not a check at all where it cannot, which is every Git Bash mount here.
+The measurement turned out sharper than row 21 first recorded: a `noacl` mount stores no mode, and `stat` SYNTHESIZES one from the umask of the process doing the reading, `0644 & ~umask` for a file and `0755 & ~umask` for a directory.
+So the readback never described the file at all, and `chmod 0600` returns 0 while the file still reads 644.
+That is why the guarded merge path answered `error: could not prepare PR poll` on every merge (row 24, issue #3) and why the relay, test-runner and process-event suites stopped where they did.
+
+Decision D6, open since the plan was written, is settled for the shared helper rather than `acl` fstab mounts.
+An fstab requirement makes every Windows install perform an admin setup step or the tooling silently misbehaves, and it cannot be relied on for another person's machine, while a helper makes the code correct everywhere with no install ritual.
+Real `acl` mounts keep working unchanged as optional hardening.
+
+`bin/fm-private-lib.sh` is that owner: a leaf that sources nothing, with a per-filesystem capability probe, private directory and file creators, an assertion that keeps today's exact strictness where modes are enforcing, and one record of "the mode was not enforceable here" that a caller may surface once instead of printing prose per call.
+A failed `chmod` is deliberately not waived, because it is an error on every filesystem and waiving it would also hide a read-only mount, a file another user owns, or any other reason the tool could not make the state private; only a mode the filesystem cannot represent is recorded and allowed.
+The test side asks the same owner, so a suite no longer asserts a literal 600 or 700 the mount cannot carry, and a refusal that cannot occur where no mode exists skips with a printed reason rather than failing.
+
+Measured here, base `14529d7` against the branch:
+
+| suite | base | branch |
+| --- | --- | --- |
+| fm-pr-merge | stops at its first case | 16 cases reached, which is issue #3 closed |
+| fm-procevent | 2 cases, then `the captured result is private (missing: '600')` | 30 cases with no failure in the longest clean run |
+| fm-x-mode | 4 cases, then `poll auth error must write a dedupe marker` | past that gate |
+| fm-private-lib | absent | 15 cases, both branches of the probe proven on any host |
+
+Two fixture timing budgets surfaced behind the fixed mode gate and were sized to the host rather than enlarged, following issue #8's rule: five fixed waits for a forked runner, and a sibling process that had to outlive a setup slower than its own fixed thirty seconds.
+`fm-procevent` still stops at a different timing-sensitive case from run to run on this box, at 23 to 30 of its 57, which is the spawn-cost family issue #8 owns and not this change.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
