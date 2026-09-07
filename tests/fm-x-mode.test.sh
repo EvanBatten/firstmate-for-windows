@@ -474,6 +474,10 @@ test_poll_inbox_private_publication_rejects_unsafe_paths() {
   assert_absent "$home/external/req-x.json" "poll must not write through a linked inbox directory"
   [ -L "$home/state/x-inbox" ] || fail "poll must leave the rejected inbox symlink in place"
 
+  # A world-readable inbox is only distinguishable from a private one where the
+  # filesystem carries the mode at all; where it does not, every directory reads
+  # 755 and the refusal under test cannot be observed.
+  if fm_private_modes_enforcing "$TMP_ROOT"; then
   home="$TMP_ROOT/poll-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
   fakebin=$(make_fake_curl "$home")
   chmod 755 "$home/state/x-inbox"
@@ -485,6 +489,9 @@ test_poll_inbox_private_publication_rejects_unsafe_paths() {
     || fail "poll must reject a nonprivate inbox directory (got: $out)"
   assert_absent "$home/state/x-inbox/req-x.json" "poll must not publish into a nonprivate inbox directory"
   assert_no_private_artifact_temps "$home/state/x-inbox"
+  else
+    printf '# skipped the nonprivate-inbox refusal: this filesystem does not carry the mode\n'
+  fi
 
   home="$TMP_ROOT/poll-inbox-linked-dest"; mkdir -p "$home/state/x-inbox"
   fakebin=$(make_fake_curl "$home")

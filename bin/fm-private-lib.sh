@@ -285,18 +285,18 @@ fm_private_mode_ok() {  # <path> <mode>
 # Set <mode> on each <path>. Where the filesystem cannot take it, succeed and
 # record that, rather than refusing state the caller has no other way to make.
 fm_private_chmod() {  # <mode> <path>...
-  local mode=${1-} path
+  local mode=${1-}
   shift || return 1
   [ "$#" -gt 0 ] || return 1
-  chmod "$mode" "$@" 2>/dev/null && return 0
-  # The waiver is for a mode a filesystem cannot take, and for nothing else. A
-  # chmod of a path that is not there - or of a dangling symlink - failed for a
-  # structural reason the probe knows nothing about, and still fails.
-  for path in "$@"; do
-    [ -e "$path" ] || return 1
-  done
-  fm_private_modes_enforcing "$1" && return 1
-  _fm_private_note_unenforceable "$1"
+  # A chmod that FAILS is an error on every filesystem, and is not waived here.
+  # A filesystem that cannot carry the mode does not fail this call: measured on
+  # Git Bash, `chmod 0600` returns 0 and leaves 644 behind, which is what
+  # fm_private_mode_ok answers for. Waiving a failed chmod would also waive a
+  # read-only mount, a file another user owns, and a caller that cannot set the
+  # mode for any other reason, making "the tool could not make this private"
+  # unobservable to the product that depends on it.
+  chmod "$mode" "$@" 2>/dev/null || return 1
+  fm_private_modes_enforcing "$1" || _fm_private_note_unenforceable "$1"
   return 0
 }
 
