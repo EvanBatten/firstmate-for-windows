@@ -1,0 +1,16 @@
+=== Stop-guard cooperation window, issue #6 - FIXED branch fm/issue-6 ===
+host: MINGW64_NT-10.0-26200 3.5.7-463ebcdc.x86_64, bash 5.2.37(1)-release
+-------------------------------------------------------------------
+SCENARIO 1 [FIXED branch fm/issue-6]  nominal cooperation window = 3000 ms, no auto-arm ever claims
+  whole --claude run with the window disabled :   4070 ms (exit 2)
+  whole --claude run with a 3000 ms window    :   7398 ms
+  => the window itself held the turn for       :   3328 ms
+-------------------------------------------------------------------
+SCENARIO 2 [FIXED branch fm/issue-6]  home recorded time-to-claim = 4000 ms; auto-arm claims 4 s into the Stop
+  guard exit code: 0  (0 = turn ends, 2 = forced continuation)
+  guard output   : <silent - the turn ended and no continuation was consumed>
+-------------------------------------------------------------------
+SCENARIO 3 [FIXED branch fm/issue-6]  a real Stop-owned auto-arm firing that claimed this home
+  auto-arm exit code: 2
+  state/.claude-autoarm-claim-ms -> 6358 ms measured on this host
+-------------------------------------------------------------------

@@ -1,0 +1,22 @@
+=== Stop-guard cooperation window, issue #6 - BASE 5ed6c5e (unfixed) ===
+host: MINGW64_NT-10.0-26200 3.5.7-463ebcdc.x86_64, bash 5.2.37(1)-release
+-------------------------------------------------------------------
+SCENARIO 1 [BASE 5ed6c5e (unfixed)]  nominal cooperation window = 3000 ms, no auto-arm ever claims
+  whole --claude run with the window disabled :   3554 ms (exit 2)
+  whole --claude run with a 3000 ms window    :  18600 ms
+  => the window itself held the turn for       :  15046 ms
+-------------------------------------------------------------------
+SCENARIO 2 [BASE 5ed6c5e (unfixed)]  home recorded time-to-claim = 4000 ms; auto-arm claims 4 s into the Stop
+  guard exit code: 2  (0 = turn ends, 2 = forced continuation)
+  guard output   : what the user sees in Claude Code:
+    | ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    | ●  TURN WOULD END BLIND - SUPERVISION IS OFF
+    | ●  1 task(s) in flight, but no live watcher holds this home lock (last beat: never).
+    | ●  The Stop-owned auto-arm did not claim this home either, so recovery is NOT already under way.
+    | ●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+    | ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-------------------------------------------------------------------
+SCENARIO 3 [BASE 5ed6c5e (unfixed)]  a real Stop-owned auto-arm firing that claimed this home
+  auto-arm exit code: 2
+  state/.claude-autoarm-claim-ms -> ABSENT (nothing recorded)
+-------------------------------------------------------------------

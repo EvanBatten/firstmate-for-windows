@@ -1,0 +1,70 @@
+Issue #6 end-to-end: the Stop guard's cooperation window, before and after
+=========================================================================
+
+Both runs drive the real bin/fm-turnend-guard.sh --claude Stop hook the way
+Claude Code invokes it (Stop JSON on stdin, CLAUDECODE=1) against a
+supervision-needing home on this Windows host, and the real
+bin/fm-claude-stop-autoarm.sh firing on the same Stop event. The only thing
+that differs between the two runs is which commit's bin/ is in place.
+
+HEADLINE
+  Scenario 1  a nominal 3000 ms cooperation window held the turn for 15046 ms
+              before the change and 3328 ms after it.
+  Scenario 2  a Stop whose auto-arm claims 4 s in ends silently after the change
+              and burns a forced continuation (TURN WOULD END BLIND) before it.
+  Scenario 3  a claiming auto-arm firing now leaves 6358 ms of measured
+              time-to-claim in state/.claude-autoarm-claim-ms; before the change
+              it left nothing, so every session's first Stop guessed again.
+
+=== Stop-guard cooperation window, issue #6 - BASE 5ed6c5e (unfixed) ===
+host: MINGW64_NT-10.0-26200 3.5.7-463ebcdc.x86_64, bash 5.2.37(1)-release
+-------------------------------------------------------------------
+SCENARIO 1 [BASE 5ed6c5e (unfixed)]  nominal cooperation window = 3000 ms, no auto-arm ever claims
+  whole --claude run with the window disabled :   3554 ms (exit 2)
+  whole --claude run with a 3000 ms window    :  18600 ms
+  => the window itself held the turn for       :  15046 ms
+-------------------------------------------------------------------
+SCENARIO 2 [BASE 5ed6c5e (unfixed)]  home recorded time-to-claim = 4000 ms; auto-arm claims 4 s into the Stop
+  guard exit code: 2  (0 = turn ends, 2 = forced continuation)
+  guard output   : what the user sees in Claude Code:
+    | ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    | ●  TURN WOULD END BLIND - SUPERVISION IS OFF
+    | ●  1 task(s) in flight, but no live watcher holds this home lock (last beat: never).
+    | ●  The Stop-owned auto-arm did not claim this home either, so recovery is NOT already under way.
+    | ●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+    | ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-------------------------------------------------------------------
+SCENARIO 3 [BASE 5ed6c5e (unfixed)]  a real Stop-owned auto-arm firing that claimed this home
+  auto-arm exit code: 2
+  state/.claude-autoarm-claim-ms -> ABSENT (nothing recorded)
+-------------------------------------------------------------------
+
+=== Stop-guard cooperation window, issue #6 - FIXED branch fm/issue-6 ===
+host: MINGW64_NT-10.0-26200 3.5.7-463ebcdc.x86_64, bash 5.2.37(1)-release
+-------------------------------------------------------------------
+SCENARIO 1 [FIXED branch fm/issue-6]  nominal cooperation window = 3000 ms, no auto-arm ever claims
+  whole --claude run with the window disabled :   4070 ms (exit 2)
+  whole --claude run with a 3000 ms window    :   7398 ms
+  => the window itself held the turn for       :   3328 ms
+-------------------------------------------------------------------
+SCENARIO 2 [FIXED branch fm/issue-6]  home recorded time-to-claim = 4000 ms; auto-arm claims 4 s into the Stop
+  guard exit code: 0  (0 = turn ends, 2 = forced continuation)
+  guard output   : <silent - the turn ended and no continuation was consumed>
+-------------------------------------------------------------------
+SCENARIO 3 [FIXED branch fm/issue-6]  a real Stop-owned auto-arm firing that claimed this home
+  auto-arm exit code: 2
+  state/.claude-autoarm-claim-ms -> 6358 ms measured on this host
+-------------------------------------------------------------------
+
+
+The two deliberate decisions the intent calls out, exercised through the same
+hook on the branch:
+-------------------------------------------------------------------
+SCENARIO 4 [FIXED branch fm/issue-6]  operator floor 7000 ms under a 1000 ms widening cap; claim lands 5 s in
+  guard exit code: 0  (0 = the explicit floor was honored, 2 = the cap silently shortened it)
+-------------------------------------------------------------------
+-------------------------------------------------------------------
+SCENARIO 5 [FIXED branch fm/issue-6]  a forged ten-digit time-to-claim record (1234567890 ms = 115 days)
+  guard exit code: 2  (2 = the record was rejected and the window stayed at the 3000 ms floor)
+  banner         : the blind-turn banner was raised as normal
+-------------------------------------------------------------------

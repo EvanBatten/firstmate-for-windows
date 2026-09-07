@@ -1,0 +1,99 @@
+Issue #6 - red before, green after, one case at a time
+======================================================
+
+Host: MINGW64_NT-10.0-26200 (Git Bash), bash 5.2.37(1)-release
+Base: 5ed6c5e31e6c4ff583ea452d9ce7828831568d5b   Branch: bbca6ae (fm/issue-6)
+
+Method: each case was invoked on its own through a one-case copy of its suite
+(the suite file's fixtures and helpers, with only that one case registered),
+first with bin/fm-turnend-guard.sh (or bin/fm-claude-stop-autoarm.sh) restored
+from the base commit, then with the branch's own bin/ back in place. The suite
+reporter exits at the first failed assertion, so a red line is the assertion
+that stopped it.
+
+
+tests/fm-turnend-guard.test.sh - the eight cooperation-window cases
+-------------------------------------------------------------------
+
+1. test_hook_claude_mode_window_is_a_wall_clock_deadline
+   BASE   not ok - a 3000 ms window must expire on the clock, not after 30 polls
+                   of whatever the host charges: expected exit 2, got 0
+   BRANCH ok - fm-turnend-guard --claude: the cooperation window is a wall-clock
+               deadline, so a claim 8 s out misses a 3 s window
+
+2. test_hook_claude_mode_recorded_claim_widens_the_window
+   BASE   not ok - a home that measured 4000ms to claim must still be waiting 4 s
+                   in, instead of forcing a continuation: expected exit 0, got 2
+   BRANCH ok - fm-turnend-guard --claude: a recorded time-to-claim widens the
+               window to twice it
+
+3. test_hook_claude_mode_default_window_ignores_a_late_claim  (negative control)
+   BASE   ok - fm-turnend-guard --claude: with no recorded time-to-claim the
+               window is exactly FM_CLAUDE_AUTOARM_SYNC_WAIT_MS
+   BRANCH ok - (same line)
+   This one is the deliberate negative control and passes on both sides, which
+   is what makes case 2 attributable to the record rather than to a guard that
+   now waits for any late claim.
+
+4. test_hook_claude_mode_caps_the_widened_window
+   BASE   not ok - the default 15 s cap must still hold an 8 s claim inside the
+                   window: expected exit 0, got 2
+   BRANCH ok - fm-turnend-guard --claude: the cap bounds what a measurement may
+               widen the window to
+
+5. test_hook_claude_mode_malformed_cap_falls_back_to_the_default
+   BASE   not ok - a malformed cap must fall back to the 15 s default, which
+                   still holds an 8 s claim: expected exit 0, got 2
+   BRANCH ok - fm-turnend-guard --claude: a malformed cap falls back to the
+               default rather than to no window or an error
+
+6. test_hook_claude_mode_malformed_claim_record_keeps_the_default_window
+   BASE   not ok - a malformed time-to-claim record (not-a-number) must leave the
+                   window at FM_CLAUDE_AUTOARM_SYNC_WAIT_MS: expected exit 2, got 0
+   BRANCH ok - fm-turnend-guard --claude: a malformed time-to-claim record
+               neither widens the window nor breaks the deadline
+
+7. test_hook_claude_mode_leading_zero_claim_record_is_decimal
+   BASE   not ok - a recorded 07000 must widen the window to twice its DECIMAL
+                   value (14000 ms), not to twice octal 3584: expected exit 0, got 2
+   BRANCH ok - fm-turnend-guard --claude: a leading-zero time-to-claim record is
+               read as decimal
+
+8. test_hook_claude_mode_leading_zero_window_bounds_are_decimal
+   BASE   red (exit 1; the run ended on the blind-turn banner it did not expect)
+   BRANCH ok - fm-turnend-guard --claude: a zero-padded window floor and cap are
+               read as decimal
+
+
+tests/fm-claude-stop-autoarm.test.sh - the three claim-record cases
+-------------------------------------------------------------------
+
+9.  test_claim_records_its_own_time_to_claim
+    BASE   not ok - a firing that claimed the home recorded no time-to-claim
+    BRANCH ok - auto-arm: the claiming firing records its own time-to-claim and a
+                deferring one records nothing
+
+10. test_claim_record_only_ever_rises
+    BASE   not ok - a slower claim did not raise the recorded time-to-claim,
+                    still '1'
+    BRANCH ok - auto-arm: the claim record keeps the home's slowest time-to-claim
+                and never lowers it
+
+11. test_claim_record_refuses_a_measurement_above_the_ceiling
+    BASE   not ok - a malformed ceiling must fall back to the 60 s default, got
+                    record: ''
+    BRANCH ok - auto-arm: a time-to-claim above the ceiling is never recorded and
+                the surviving record stands
+
+
+Suite context on this host
+--------------------------
+
+tests/fm-claude-stop-autoarm.test.sh   39 ok, then the pre-existing ledger row 28
+                                       red (`the superseded owner must exit 0
+                                       instead of double-translating`), which also
+                                       fails with the base bin/ restored.
+tests/fm-turnend-guard.test.sh         43 ok, then the pre-existing OpenCode
+                                       node-harness stop, whose fixture uses a
+                                       stub guard script and never touches this
+                                       change.

@@ -1,0 +1,9 @@
+-------------------------------------------------------------------
+SCENARIO 4 [FIXED branch fm/issue-6]  operator floor 7000 ms under a 1000 ms widening cap; claim lands 5 s in
+  guard exit code: 0  (0 = the explicit floor was honored, 2 = the cap silently shortened it)
+-------------------------------------------------------------------
+-------------------------------------------------------------------
+SCENARIO 5 [FIXED branch fm/issue-6]  a forged ten-digit time-to-claim record (1234567890 ms = 115 days)
+  guard exit code: 2  (2 = the record was rejected and the window stayed at the 3000 ms floor)
+  banner         : the blind-turn banner was raised as normal
+-------------------------------------------------------------------
