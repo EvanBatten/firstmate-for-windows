@@ -125,7 +125,8 @@ SH
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
 : > "$FM_HOME/state/arm-waiting"
-while [ ! -e "$FM_HOME/state/arm-release" ]; do sleep 0.02; done
+while [ ! -e "$FM_HOME/state/arm-release" ] && [ -d "$FM_HOME/state" ]; do sleep 0.02; done
+rm -f "$FM_HOME/state/arm-waiting"
 printf 'watcher: FAILED - cycle ended without an actionable reason\n'
 exit 1
 SH
@@ -141,10 +142,19 @@ exit 0
 SH
       ;;
     blocking-actionable)
+      # The FIRST arm parks until the test releases it (arm-waiting, then
+      # arm-release, and arm-waiting cleared once it unparks), so a supersession
+      # is staged against a live mid-arm owner on any host instead of inside a
+      # fixed sleep that a slow spawn outruns; every later arm returns at once
+      # so the superseder's own arm completes.
       cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" >> "$FM_HOME/state/arm-ran"
-sleep 6
+if [ "$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')" -eq 1 ]; then
+  : > "$FM_HOME/state/arm-waiting"
+  while [ ! -e "$FM_HOME/state/arm-release" ] && [ -d "$FM_HOME/state" ]; do sleep 0.02; done
+  rm -f "$FM_HOME/state/arm-waiting"
+fi
 printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
 printf 'stale: fixture-win actionable\n'
 exit 0
@@ -187,6 +197,38 @@ SH
   esac
   chmod +x "$dir/bin/fm-watch-arm.sh"
 }
+
+# A barrier fixture's arm blocks on state/arm-release and clears
+# state/arm-waiting once it unparks. tests/lib.sh's cleanup registration
+# documents the seam for a file that needs teardown of its own: define an EXIT
+# trap and call fm_test_cleanup from inside it. The order below is the whole
+# point. Write state/arm-release into EVERY fixture home first, parked or not,
+# because the wait-loop timeouts fire exactly when a hook is slow to reach its
+# arm - so an arm can still be between its arm-ran append and its arm-waiting
+# write, and one that parks after a scan for arm-waiting would be missed. With
+# the release already there it never parks at all. Only then wait, bounded, for
+# the arms that were parked to clear arm-waiting, so the library removes the
+# directories with nothing left polling a path that is about to be deleted. The
+# park itself is conditioned on the fixture home still existing, so even an arm
+# this helper cannot reach in time stops when its directory goes.
+release_parked_arms() {
+  local state waiting parked i=0
+  for state in "$TMP_ROOT"/*/state; do
+    [ -d "$state" ] || continue
+    : > "$state/arm-release" 2>/dev/null || true
+  done
+  while [ "$i" -lt 250 ]; do
+    parked=0
+    for waiting in "$TMP_ROOT"/*/state/arm-waiting; do
+      [ -e "$waiting" ] && parked=1
+    done
+    [ "$parked" = 1 ] || return 0
+    sleep 0.02
+    i=$((i + 1))
+  done
+}
+
+trap 'release_parked_arms; fm_test_cleanup' EXIT
 
 epoch_outcome() {
   sed -n '1s/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$1/state/.claude-autoarm-epoch" 2>/dev/null || true
@@ -1152,8 +1194,8 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   run_autoarm_bg "$dir" "$a_out"
   a_pid=$RUN_AUTOARM_BG_PID
   i=0
-  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-ran" ]; do
-    [ "$i" -lt 400 ] || fail "owner A never published its arming claim"
+  while [ "$(epoch_outcome "$dir")" != arming ] || [ ! -e "$dir/state/arm-waiting" ]; do
+    [ "$i" -lt 400 ] || fail "owner A never published its arming claim and parked in its arm"
     sleep 0.1
     i=$((i + 1))
   done
@@ -1169,6 +1211,9 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   c_out=$(run_autoarm "$dir" 2>/dev/null); c_status=$?
   expect_code 2 "$c_status" "the superseding generation must translate its own close"
   assert_contains "$c_out" "firstmate watcher wake" "the superseding generation must carry the rewake banner"
+  # Only now does A's arm return, with the actionable close it would have
+  # translated had it still owned a generation.
+  : > "$dir/state/arm-release"
   wait "$a_pid"
   a_status=$?
   expect_code 0 "$a_status" "the superseded owner must exit 0 instead of double-translating"
