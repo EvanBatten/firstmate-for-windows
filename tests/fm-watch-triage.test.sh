@@ -51,14 +51,13 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
     FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
 }
 
-# Wait up to <limit> 0.1s ticks while <pid> stays alive; 0 if still alive, 1 if it died.
+# wait_live <pid> [ticks]: 0 when the watcher is still alive after the budget
+# (ticks of 0.1 s on Linux, sized for this host), 1 when it exited inside it.
 wait_live() {
-  local pid=$1 limit=${2:-30} i=0
-  while [ "$i" -lt "$limit" ]; do
-    kill -0 "$pid" 2>/dev/null || return 1
-    sleep 0.1
-    i=$((i + 1))
-  done
+  local pid=$1 limit=${2:-30}
+  if fm_test_wait_until "$(fm_test_tenths "$limit")" wait_for_exit_gone "$pid"; then
+    return 1
+  fi
   return 0
 }
 
@@ -74,28 +73,30 @@ wait_live() {
 # (some poll's top), then waits for that one to advance (the next poll's top) -
 # and the whole cycle in between is what the caller's assertions describe.
 # 0 if the watcher is still alive after a completed cycle, 1 if it exited.
+# Each phase gets the whole budget (ticks of 0.1 s on Linux, sized for this
+# host); a watcher that exits ends the wait early and reports 1.
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
-  local state=$1 pid=$2 limit=${3:-300} beat first now i=0
+  local state=$1 pid=$2 limit=${3:-300} beat first budget
   beat="$state/.last-watcher-beat"
+  budget=$(fm_test_tenths "$limit")
   rm -f "$beat"
-  first=""
-  while [ "$i" -lt "$limit" ]; do
-    kill -0 "$pid" 2>/dev/null || return 1
-    first=$(file_mtime "$beat")
-    [ -n "$first" ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  while [ "$i" -lt "$limit" ]; do
-    kill -0 "$pid" 2>/dev/null || return 1
-    now=$(file_mtime "$beat")
-    if [ -n "$now" ] && [ "$now" != "$first" ]; then
-      return 0
-    fi
-    sleep 0.1
-    i=$((i + 1))
-  done
-  return 1
+  fm_test_wait_until "$budget" beat_written_or_gone "$beat" "$pid" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  first=$(file_mtime "$beat")
+  fm_test_wait_until "$budget" beat_advanced_or_gone "$beat" "$pid" "$first" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  return 0
+}
+
+beat_written_or_gone() {  # <beat> <pid>
+  ! kill -0 "$2" 2>/dev/null || [ -n "$(file_mtime "$1")" ]
+}
+
+beat_advanced_or_gone() {  # <beat> <pid> <first-mtime>
+  local now
+  kill -0 "$2" 2>/dev/null || return 0
+  now=$(file_mtime "$1")
+  [ -n "$now" ] && [ "$now" != "$3" ]
 }
 
 # Every wait_for_exit budget in this file is 100 ticks (10s), not because any
@@ -104,24 +105,44 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
 # it is still starting and reports a spurious "did not surface" failure. A
 # generous budget can only remove that false negative - a watcher that never
 # exits still fails the assertion when the budget runs out.
-wait_numeric_file() {
-  local file=$1 limit=${2:-30} i=0 value
-  while [ "$i" -lt "$limit" ]; do
-    value=$(cat "$file" 2>/dev/null || true)
-    case "$value" in
-      ''|*[!0-9]*) ;;
-      *) return 0 ;;
-    esac
-    sleep 0.1
-    i=$((i + 1))
-  done
-  return 1
+wait_numeric_file() {  # <file> [ticks]
+  fm_test_wait_until "$(fm_test_tenths "${2:-30}")" file_is_numeric "$1"
+}
+
+file_is_numeric() {
+  local value
+  value=$(cat "$1" 2>/dev/null || true)
+  case "$value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  return 0
 }
 
 # Portable mtime in epoch seconds. Platform-detected, never the `stat -f || stat -c`
 # fallback (which writes a partial filesystem dump on Linux; see fm-watch.sh).
 file_mtime() {
   if [ "$(uname)" = Darwin ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
+}
+
+# Wait predicates for fm_test_wait_until: each is true when the awaited state
+# holds, or when the watcher is gone so the caller's own liveness check speaks.
+pause_entered_or_gone() {  # <state> <key> <pid>
+  kill -0 "$3" 2>/dev/null || return 0
+  [ -e "$1/.paused-$2" ] && [ ! -e "$1/.stale-since-$2" ]
+}
+
+pause_left_or_gone() {  # <state> <key> <pid>
+  kill -0 "$3" 2>/dev/null || return 0
+  [ ! -e "$1/.paused-$2" ] && [ -s "$1/.stale-since-$2" ]
+}
+
+triage_log_capped() {  # <state>
+  [ "$(awk 'END { print NR + 0 }' "$1/.watch-triage.log")" -le 2000 ]
+}
+
+heartbeat_streak_or_gone() {  # <state> <pid>
+  kill -0 "$2" 2>/dev/null || return 0
+  [ "$(cat "$1/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ]
 }
 
 # Set <file>'s mtime to exactly <epoch> seconds, for aging a busy-turn marker by
@@ -1506,12 +1527,7 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  i=0
-  while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
-    [ -e "$state/.paused-$key" ] && [ ! -e "$state/.stale-since-$key" ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
+  fm_test_wait_until 10 pause_entered_or_gone "$state" "$key" "$pid" || true
   kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "a stale hash that entered pause was wedge-escalated: $(cat "$out")"; }
   [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash did not enter paused mode"; }
   [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "pause transition retained its wedge timer"; }
@@ -1527,12 +1543,7 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  i=0
-  while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
-    [ ! -e "$state/.paused-$key" ] && [ -s "$state/.stale-since-$key" ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
+  fm_test_wait_until 10 pause_left_or_gone "$state" "$key" "$pid" || true
   kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "a stale hash that left pause did not resume wedge tracking: $(cat "$out")"; }
   [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash retained paused mode after resume"; }
   [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "unchanged stale hash did not restart wedge tracking after resume"; }
@@ -2647,13 +2658,8 @@ SH
   if ! wait_poll_cycle "$state" "$pid"; then
     reap "$pid"; fail "watcher exited for a benign signal while testing log capping: $(cat "$out")"
   fi
-  i=0
-  while [ "$i" -lt 30 ]; do
-    lines=$(awk 'END { print NR + 0 }' "$state/.watch-triage.log")
-    [ "$lines" -le 2000 ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
+  fm_test_wait_until 3 triage_log_capped "$state" || true
+  lines=$(awk 'END { print NR + 0 }' "$state/.watch-triage.log")
   [ "$lines" -le 2000 ] || { reap "$pid"; fail "triage log was not capped when wc emitted a spaced byte count (lines=$lines)"; }
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "benign signal enqueued a wake while testing log capping"; }
   reap "$pid"
@@ -2681,15 +2687,11 @@ pe_case() {  # <dir> <command>...
 # source so the fixture holds exactly the reported end state: one durably
 # captured, unhandled, queued result and no remaining poll work.
 seed_captured_procevent_result() {  # <dir>
-  local dir=$1 i=0
+  local dir=$1
   pe_case "$dir" register lavish delivery-src -- \
     /bin/sh -c 'printf "session:\n  file: /a.html\n  status: waiting\n"' >/dev/null || return 1
   pe_case "$dir" reconcile >/dev/null || return 1
-  while [ "$i" -lt 100 ]; do
-    [ -s "$dir/state/.wake-queue" ] && break
-    sleep 0.1
-    i=$((i + 1))
-  done
+  fm_test_wait_until 10 test -s "$dir/state/.wake-queue" || true
   pe_case "$dir" retire delivery-src >/dev/null || return 1
   [ -s "$dir/state/.wake-queue" ]
 }
@@ -2944,13 +2946,7 @@ test_heartbeat_no_change_absorbed() {
   # The heartbeat fires on the first poll whose .last-heartbeat has aged past
   # FM_HEARTBEAT, which need not be the first completed cycle, so wait for the
   # absorbed heartbeat itself rather than assuming one cycle produced it.
-  i=0
-  while [ "$i" -lt 200 ]; do
-    [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] && break
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1
-    i=$((i + 1))
-  done
+  fm_test_wait_until 20 heartbeat_streak_or_gone "$state" "$pid" || true
   [ ! -s "$out" ] || fail "no-change heartbeat printed a wake reason: $(cat "$out")"
   [ ! -s "$state/.wake-queue" ] || fail "no-change heartbeat enqueued a durable wake record"
   [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] || fail "heartbeat backoff streak did not advance while absorbing"
