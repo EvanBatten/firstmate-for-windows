@@ -72,13 +72,15 @@ Hints only affect balance: the coverage guard keeps the partition complete and d
 Balance is still worth keeping current, because enough unmeasured scripts let one shard carry more than twice another shard's real work and reach the job cap while another runner sits idle.
 Refresh the hints whenever the serial lane gains scripts, rather than waiting for a shard to time out.
 
+The table below is that packing over the lane as it stands here, so it also counts the scripts the lane has gained since that run, each at the default weight until a run measures it.
+
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of4` | 29 | 638602 ms (~638.6 s) |
-| `portable-serial-2of4` | 28 | 638594 ms (~638.6 s) |
-| `portable-serial-3of4` | 30 | 638607 ms (~638.6 s) |
-| `portable-serial-4of4` | 30 | 638591 ms (~638.6 s) |
-| imbalance | | 16 ms |
+| `portable-serial-1of4` | 35 | 768812 ms (~768.8 s) |
+| `portable-serial-2of4` | 35 | 768810 ms (~768.8 s) |
+| `portable-serial-3of4` | 36 | 768813 ms (~768.8 s) |
+| `portable-serial-4of4` | 35 | 768815 ms (~768.8 s) |
+| imbalance | | 5 ms |
 
 The single longest script, `tests/fm-pr-check-security.test.sh` at 250417 ms, is the floor for any shard count.
 
@@ -112,7 +114,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-4 | job `timeout-minutes: 20` | Each balanced shard is about eleven minutes of measured script time, leaving roughly 2x hang-tripwire margin for job setup and runner-speed spread. |
+| portable serial 1-4 | job `timeout-minutes: 20` | The balanced shards above are each about two thirds of that bound, leaving hang-tripwire margin for job setup and runner-speed spread. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finish around 7 minutes, so the step bound is the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. |
 | portable parallel 1/2 on Windows | job `timeout-minutes: 60`; `--per-script-timeout-secs 300` | A process spawn under Git Bash costs roughly ten times what it does on Linux, so the same two shards measure at 15 and 11 minutes. `.github/workflows/windows-port.yml` owns those numbers. |
 
