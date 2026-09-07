@@ -6,7 +6,8 @@
 #   . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 #
 # It provides the boilerplate every test file used to re-roll: ok/not-ok
-# reporters, a self-cleaning temp root, fakebin/PATH-shim helpers, deterministic
+# reporters, a self-cleaning temp root, fakebin/PATH-shim helpers, the
+# fm_test_* process-identity wrappers over bin/fm-proc-lib.sh, deterministic
 # git identity and fixture builders, state/<id>.meta writers, and the common
 # string/exit-code/file assertions. Shared fake-toolchain and spawn-world
 # builders live in tests/fixtures.sh; wake-queue mocks in wake-helpers.sh;
@@ -35,10 +36,19 @@ FM_TEST_LIB_SOURCED=1
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
-# Resolve the repo root from this library's own location. Consumed by sourcing
-# test files, not by this library, so it reads as "unused" here.
-# shellcheck disable=SC2034
+# Resolve the repo root from this library's own location. Exported (not just
+# set) so a fixture that writes a STANDALONE script into a fakebin - one that
+# runs as its own process, with none of this file's functions in scope - can
+# still find bin/fm-proc-lib.sh by absolute path: `. "$ROOT/bin/fm-proc-lib.sh"`.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ROOT
+
+# The one owner of "what process is this" (ppid, pgid, comm, args, liveness)
+# across macOS, Linux and MSYS, where `ps -o` does not exist at all
+# (docs/windows/measurement.md row 2). Sourced here so the fm_test_* wrappers
+# below can wrap it.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$ROOT/bin/fm-proc-lib.sh"
 
 # --- reporters --------------------------------------------------------------
 
@@ -277,6 +287,58 @@ SH
   chmod +x "$fakebin/$tool"
 }
 
+# --- process identity (ps -o replacement) ------------------------------------
+#
+# MSYS `ps` rejects `-o` outright, so a fixture that used to spell
+# `ps -o ppid=/pgid=/comm=/command=/stat= -p <pid>` calls these instead. On macOS and Linux
+# each one runs that literal `ps -o` command, so those platforms see no
+# behavior change at all - only bin/fm-proc-lib.sh's MSYS branch is new.
+#
+# A fixture that writes a STANDALONE script into a fakebin cannot call these:
+# that script runs as its own process, with none of this file's functions in
+# scope. It sources bin/fm-proc-lib.sh by absolute path instead
+# (`. "$ROOT/bin/fm-proc-lib.sh"`, $ROOT being exported above) and calls
+# fm_proc_ppid/fm_proc_pgid directly.
+#
+# A Node fixture (tests/fm-sessionstart-nudge.test.sh's alive()) cannot call
+# these either: the pids it is handed are MSYS pids from the bash side while
+# Node on Windows resolves Win32 pids, so it asks fm_pid_alive through bash
+# and treats `ps -o stat=` as advisory.
+
+# fm_test_ppid <pid>: the parent pid, the same answer `ps -o ppid=` gives.
+fm_test_ppid() {
+  fm_proc_ppid "$1"
+}
+
+# fm_test_pgid <pid>: the process group id, the same answer `ps -o pgid=` gives.
+fm_test_pgid() {
+  fm_proc_pgid "$1"
+}
+
+# fm_test_comm <pid>: the command name, the same answer `ps -o comm=` gives.
+fm_test_comm() {
+  fm_proc_comm "$1"
+}
+
+# fm_test_args <pid>: the full argument string, the same answer `ps -o command=`
+# gives on macOS and Linux (`args=` and `command=` are the same column there).
+fm_test_args() {
+  fm_proc_args "$1"
+}
+
+# fm_test_stat <pid>: the same answer `ps -o stat=` gives. Every caller of this
+# one only distinguishes "gone" (empty, or a zombie: `''|Z*`) from "still
+# running", so the MSYS branch answers exactly that: MSYS has no zombie state
+# for `fm_pid_alive` to report, so a gone pid prints nothing and a live one
+# prints 'R'.
+fm_test_stat() {
+  if [ "$FM_PROC_OS" = msys ]; then
+    fm_pid_alive "$1" && printf 'R\n'
+    return 0
+  fi
+  ps -o stat= -p "$1" 2>/dev/null
+}
+
 # --- deterministic git identity and fixtures --------------------------------
 
 # fm_git_identity [name] [email]: export a fixed author/committer identity so
@@ -393,4 +455,145 @@ assert_absent() {
 # assert_present <path> <msg>: path must exist.
 assert_present() {
   [ -e "$1" ] || fail "$2"
+}
+
+# --- host time scale ----------------------------------------------------------
+# A wall-clock or poll-count budget written on Linux is a lie on a host where a
+# process spawn costs an order of magnitude more (Git Bash on Windows: about
+# 50 ms per exec against 1 to 2 ms on Linux, measured 2026-09-05; ledger finding
+# 27). These helpers size such a budget from one measurement of this host
+# instead of from a bigger constant, so the happy path still returns the moment
+# its condition holds and only the bound moves. FM_TEST_TIME_SCALE=<integer>
+# pins the scale (1 reproduces the raw Linux budgets on any host); when it is
+# unset the library measures once as it is sourced, then exports the result so
+# fake scripts, child shells and one-case copies share it. The measurement and
+# the family of budgets it retired are in docs/windows/measurement.md.
+
+FM_TEST_TIME_SCALE_REFERENCE_MS=4   # exec cost a fast Linux box stays under: scale 1 there
+FM_TEST_TIME_SCALE_MAX=40           # an overloaded host still gets bounded budgets
+
+# fm_test_clock_init: pick this host's clock once as the library is sourced:
+# EPOCHREALTIME without a spawn (bash 5), date +%s%N elsewhere, and whole
+# seconds from SECONDS when neither exists (stock macOS bash 3.2 with BSD
+# date). FM_TEST_CLOCK_RESOLUTION_MS records how far one reading can trail the
+# true time, so a deadline pads for it: 1 with sub-second time, 1000 on the
+# whole-second fallback.
+fm_test_clock_init() {
+  FM_TEST_CLOCK_RESOLUTION_MS=1
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    FM_TEST_CLOCK=epochrealtime
+    return 0
+  fi
+  case "$(date +%s%N 2>/dev/null)" in
+    ''|*[!0-9]*) FM_TEST_CLOCK=seconds; FM_TEST_CLOCK_RESOLUTION_MS=1000 ;;
+    *) FM_TEST_CLOCK=date-ns ;;
+  esac
+}
+fm_test_clock_init
+
+# fm_test_now_ms: milliseconds from the clock fm_test_clock_init picked. Bash
+# renders EPOCHREALTIME with the locale's decimal separator, so every non-digit
+# is stripped rather than one dot.
+fm_test_now_ms() {
+  local s
+  case "$FM_TEST_CLOCK" in
+    epochrealtime)
+      s=${EPOCHREALTIME//[!0-9]/}
+      printf '%s\n' "${s%???}" ;;
+    date-ns)
+      s=$(date +%s%N)
+      printf '%s\n' "${s%??????}" ;;
+    *) printf '%s\n' "$((SECONDS * 1000))" ;;
+  esac
+}
+
+# fm_test_spawn_cost_ms: measured milliseconds per external command on this
+# host, from twenty execs of the external true; never below 1.
+fm_test_spawn_cost_ms() {
+  local true_bin start end i cost
+  true_bin=$(type -P true 2>/dev/null) || true_bin=/bin/true
+  start=$(fm_test_now_ms)
+  i=0
+  while [ "$i" -lt 20 ]; do
+    "$true_bin"
+    i=$((i + 1))
+  done
+  end=$(fm_test_now_ms)
+  cost=$(( (end - start) / 20 ))
+  [ "$cost" -ge 1 ] || cost=1
+  printf '%s\n' "$cost"
+}
+
+# fm_test_time_scale_init: validate a pinned FM_TEST_TIME_SCALE or measure one,
+# then export it. Runs once when this library is sourced. A whole-second clock
+# cannot time twenty execs, so it takes the fast-host scale of 1 unmeasured.
+fm_test_time_scale_init() {
+  local cost scale
+  if [ -n "${FM_TEST_TIME_SCALE:-}" ]; then
+    case "$FM_TEST_TIME_SCALE" in
+      *[!0-9]*|0*) fail "FM_TEST_TIME_SCALE must be a positive integer, got '$FM_TEST_TIME_SCALE'" ;;
+    esac
+    export FM_TEST_TIME_SCALE
+    return 0
+  fi
+  if [ "$FM_TEST_CLOCK_RESOLUTION_MS" -ne 1 ]; then
+    FM_TEST_TIME_SCALE=1
+    export FM_TEST_TIME_SCALE
+    return 0
+  fi
+  cost=$(fm_test_spawn_cost_ms)
+  scale=$(( (cost + FM_TEST_TIME_SCALE_REFERENCE_MS - 1) / FM_TEST_TIME_SCALE_REFERENCE_MS ))
+  [ "$scale" -ge 1 ] || scale=1
+  [ "$scale" -le "$FM_TEST_TIME_SCALE_MAX" ] || scale=$FM_TEST_TIME_SCALE_MAX
+  FM_TEST_TIME_SCALE=$scale
+  export FM_TEST_TIME_SCALE
+  # A TAP comment, so a slow host's sizing is visible in the run log.
+  [ "$scale" -eq 1 ] || printf '# host time scale %s (about %s ms per exec)\n' "$scale" "$cost"
+}
+fm_test_time_scale_init
+
+# fm_test_seconds <linux-seconds>: that integer budget sized for this host.
+fm_test_seconds() {
+  printf '%s\n' "$(( $1 * FM_TEST_TIME_SCALE ))"
+}
+
+# fm_test_budget_ms <seconds>: an integer or decimal Linux budget, in
+# milliseconds sized for this host.
+fm_test_budget_ms() {
+  local whole frac
+  case "$1" in
+    *.*) whole=${1%%.*}; frac=${1#*.} ;;
+    *) whole=$1; frac='' ;;
+  esac
+  frac="${frac}000"
+  frac=${frac:0:3}
+  printf '%s\n' "$(( (10#${whole:-0} * 1000 + 10#$frac) * FM_TEST_TIME_SCALE ))"
+}
+
+# fm_test_tenths <ticks>: a tick count in tenths of a second, as the decimal
+# seconds string fm_test_wait_until takes; for helpers that still count ticks.
+fm_test_tenths() {
+  printf '%s.%s\n' "$(( $1 / 10 ))" "$(( $1 % 10 ))"
+}
+
+# fm_test_wait_until <linux-seconds> <command> [args...]: run the command every
+# 0.1 s until it succeeds (return 0) or this host's sizing of that budget
+# elapses (return 124). The deadline is padded by the clock's resolution, so a
+# whole-second clock can only lengthen a wait, never end it early. The command
+# is a function or executable with its arguments, never a shell string; wrap a
+# compound condition in a function. The probe's stderr is dropped: a file that
+# does not exist yet is the normal state while waiting, not an error worth
+# logging on every tick.
+fm_test_wait_until() {
+  local budget=$1 deadline now
+  shift
+  deadline=$(( $(fm_test_now_ms) + $(fm_test_budget_ms "$budget") + FM_TEST_CLOCK_RESOLUTION_MS ))
+  while :; do
+    if "$@" 2>/dev/null; then
+      return 0
+    fi
+    now=$(fm_test_now_ms)
+    [ "$now" -lt "$deadline" ] || return 124
+    sleep 0.1
+  done
 }

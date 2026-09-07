@@ -263,13 +263,13 @@ while [ ! -s "$SLOW_MARKER" ] && [ "$i" -lt 100 ]; do
 done
 [ -s "$SLOW_MARKER" ] || fail "the real producer did not reach the controlled slow current-state read"
 SLOW_NM_PID=$(cat "$SLOW_MARKER" 2>/dev/null || true)
-writer_pgid=$(ps -o pgid= -p "$SLOW_WRITER_PID" 2>/dev/null | tr -d '[:space:]')
+writer_pgid=$(fm_test_pgid "$SLOW_WRITER_PID" 2>/dev/null | tr -d '[:space:]')
 ancestor=$SLOW_NM_PID
 child_pgid=
 i=0
 while [ "$i" -lt 20 ]; do
-  ancestor_pgid=$(ps -o pgid= -p "$ancestor" 2>/dev/null | tr -d '[:space:]')
-  parent=$(ps -o ppid= -p "$ancestor" 2>/dev/null | tr -d '[:space:]')
+  ancestor_pgid=$(fm_test_pgid "$ancestor" 2>/dev/null | tr -d '[:space:]')
+  parent=$(fm_test_ppid "$ancestor" 2>/dev/null | tr -d '[:space:]')
   if [ "$parent" = "$SLOW_WRITER_PID" ]; then
     if [ "$ancestor_pgid" != "$writer_pgid" ]; then
       SLOW_WORKER_PGID=$ancestor_pgid

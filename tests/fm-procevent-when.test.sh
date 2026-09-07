@@ -300,11 +300,11 @@ assert_grep 'action_exit: 124' "$RESULT" "the action timeout uses the shared tim
 wait_for_file "$DESCENDANT_PID" || fail "the timeout fixture did not record its descendant"
 descendant_pid=$(cat "$DESCENDANT_PID")
 for _ in $(seq 1 20); do
-  descendant_state=$(ps -o stat= -p "$descendant_pid" 2>/dev/null | tr -d ' ' || true)
+  descendant_state=$(fm_test_stat "$descendant_pid" | tr -d ' ' || true)
   case "$descendant_state" in ''|Z*) break ;; esac
   sleep 0.1
 done
-descendant_state=$(ps -o stat= -p "$descendant_pid" 2>/dev/null | tr -d ' ' || true)
+descendant_state=$(fm_test_stat "$descendant_pid" | tr -d ' ' || true)
 case "$descendant_state" in
   ''|Z*) ;;
   *)
