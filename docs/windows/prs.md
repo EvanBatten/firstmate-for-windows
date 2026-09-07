@@ -117,7 +117,7 @@ Everything else, including `pr-2` + `pr-3`, `pr-3` + `pr-5`, `pr-6` + `pr-7` and
 | `pr-7-session-identity` | `bin/fm-test-run.sh --check-coverage` | same `ok` line |
 | `pr-7-session-identity` | `shellcheck -x` on all six changed shell files | clean |
 | `pr-7-session-identity` | `tests/fm-session-lock-ancestry.test.sh` | 9 cases pass, then the same fork-failure red the integration branch has |
-| `pr-7-session-identity` | `tests/fm-claude-stop-autoarm.test.sh` | 36 cases pass, then the same deterministic red the integration branch has |
+| `pr-7-session-identity` | `tests/fm-claude-stop-autoarm.test.sh` | 36 cases pass, then the same deterministic red the integration branch had at `cd45ebf` - a fixture window, closed on `windows` by issue #10, which this branch does not carry |
 
 `pr-1-gitattributes` adds no code and has nothing to run; its effect is the checkout itself, and it is the reason every other branch's shebangs execute under Git Bash at all.
 
