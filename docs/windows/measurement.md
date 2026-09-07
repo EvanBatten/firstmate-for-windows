@@ -974,6 +974,7 @@ And it found the herdr-lab cancellation bug described above, by measuring bash's
 Three smaller findings became changes: four other test files copy `bin/fm-sessionstart-nudge.sh` into a fixture without its new library dependency (`fm-calm-pi-extension`, `fm-cursor-primary`, `fm-opencode-primary-live-e2e`, `fm-pi-primary-live-e2e` - two of them execute the nudge path); the `/proc/<pid>/pgid` comment claimed the file carries no trailing newline, which is true of `exename` beside it but not of `pgid`, `ppid` or `winpid` here; and the Windows lane's `timeout-minutes: 60` is now the binding constraint rather than the per-script bound.
 
 Two are recorded rather than fixed: `tests/fm-procevent.test.sh:196` and `tests/fm-home-summary-refresh.test.sh:266,271` read `ps -o pgid=` directly in TEST code and become the next red the moment row 21's D6 relaxation lands, and an empty `/proc/<pid>/pgid` file has no fixture (the `''` arm of the guard survives mutation, though every caller tolerates empty output).
+Issue #7 later moved every such fixture onto `tests/lib.sh`'s process-identity wrappers over `bin/fm-proc-lib.sh`.
 
 ### Not fixed here
 
@@ -2225,7 +2226,11 @@ With that the suite reaches 19 cases here, one past slice 11, and stops at `rest
 MSYS `ps` answers `ps: unknown option -- o` (row 2), `spawn_pid` is empty, and the fake exits 1 before any signal is sent, so the spawn was never interrupted and its exit 0 is honest.
 Classified as a fixture red of row 2's family, measured; ten test files still spell `ps -o` (`tests/fm-backend.test.sh`, `fm-backlog-handoff`, `fm-home-summary-refresh`, `fm-procevent`, `fm-procevent-when`, `fm-session-lock-ancestry`, among them), which is the shape a `tests/lib.sh` helper over `bin/fm-proc-lib.sh` would take.
 Not fixed here: it is upstream's fixture, one week old, and the merge is not the place to widen the port.
-The same suite prints `warning: in the working copy of 'README.md', LF will be replaced by CRLF` from the repositories it initializes, because the fixture inherits this machine's global `core.autocrlf=true`; it is noise, not a failure.
+Issue #7 closed the family afterwards: every per-pid `ps -o` read now goes through `tests/lib.sh`'s process-identity wrappers (`fm_test_ppid`, `fm_test_pgid`, `fm_test_comm`, `fm_test_args`, `fm_test_stat`) or, for a standalone fakebin script, sources `bin/fm-proc-lib.sh` by absolute path and calls `fm_proc_*` directly, and the one Node-spelled read (`tests/fm-sessionstart-nudge.test.sh`'s `alive()`) asks `fm_pid_alive` through `bash`, since the pids it is handed are MSYS pids while Node on Windows resolves Win32 pids, and treats `ps -o stat=` as advisory, so on macOS and Linux each site still runs the literal `ps -o` it replaced.
+Staging the interruption for real exposed the next red in `tests/fm-backlog-handoff.test.sh`: `test_pre_move_crash_does_not_wake_until_move_lands` now gets past its crash fixture on Windows and stops at `unrelated handoff changed the prepared batch's source item`, which is green on Linux and is a separate finding about what a killed handoff leaves behind here, not a fixture problem.
+The spellings that remain are the fixtures that implement a fake `ps` for product callers and either delegate `-o` queries to `/bin/ps` or answer canned `stat` and `comm` lines, such as `tests/fm-session-start.test.sh`, `tests/fm-startup-network.test.sh`, the death lab in `tests/fm-backend-herdr.test.sh` and `tests/fm-herdr-session-cleanup.test.sh`, plus `tests/fm-proc-lib.test.sh`, which fakes `ps` by design and asserts the exact invocation, the `ps -o lstart=` capability probe in `tests/fm-watcher-lock.test.sh`, which exists to skip where unsupported, and the `ps -axo ppid=,comm=` table scan in `tests/fm-backend-herdr-focus-flash-e2e.test.sh`.
+That scan asks whether a pane shell has a `sleep` child, a whole-table question the per-pid wrappers cannot express, and it runs only where a real `herdr` is installed, so it stays as it is.
+`tests/fm-backlog-atomicity.test.sh` also prints `warning: in the working copy of 'README.md', LF will be replaced by CRLF` from the repositories it initializes, because the fixture inherits this machine's global `core.autocrlf=true`; it is noise, not a failure.
 
 ### The live home after the merge
 
@@ -2312,7 +2317,7 @@ Stacked on `fm/issue-sweep-1` and re-verified there after a rebase onto `windows
 The four sessionstart-nudge cases were proven in isolation rather than in a suite run, three green and the live-harness re-emit case red on this box at the 120 s digest bound.
 This means every red left on the stack is one the ledger already names, and every new case this box can run to completion is green.
 
-Three more got partway and are parked on their branches with the progress written on the issue: #4's `bin/fm-private-lib.sh` (8/8 on its own suite, three sites wired, the full suites not run), #7's `ps -o` helpers in `tests/lib.sh` (seven files converted, the reproduction green, the full suites not run), and #12's operator-PATH composer (written, nothing run).
+Three more got partway and are parked on their branches with the progress written on the issue: #4's `bin/fm-private-lib.sh` (8/8 on its own suite, three sites wired, the full suites not run), #7's `ps -o` helpers in `tests/lib.sh` (seven files converted, the reproduction green, the full suites not run; finished afterwards, recorded under the upstream fixture that could not stage its interruption), and #12's operator-PATH composer (written, nothing run).
 #3, #6, #8, #9 and #10 were never started.
 
 The workers surfaced eight more defects on the way.

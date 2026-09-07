@@ -73,14 +73,14 @@ test_identity_accepts_cursor_shapes_rejects_lookalikes() {
   "$impostor_dir/agent" & local impostor_pid=$!
   if command -v node >/dev/null 2>&1; then
     node -e 'setTimeout(function(){}, 30000)' & real_node_pid=$!
-    out=$(LC_ALL=C ps -p "$real_node_pid" -o comm= 2>/dev/null || true)
+    out=$(fm_test_comm "$real_node_pid" 2>/dev/null || true)
     if [ -n "$out" ]; then
       ! fm_cursor_process_matches "$out" '' "$out" \
         || fail "a REAL unrelated node process must not identify as cursor (comm='$out')"
     fi
     kill "$real_node_pid" 2>/dev/null || true
   fi
-  out=$(LC_ALL=C ps -p "$impostor_pid" -o comm= 2>/dev/null || true)
+  out=$(fm_test_comm "$impostor_pid" 2>/dev/null || true)
   if [ -n "$out" ]; then
     ! fm_cursor_process_matches "$out" '' "$out" \
       || fail "a REAL unrelated executable named agent must not identify (comm='$out')"
