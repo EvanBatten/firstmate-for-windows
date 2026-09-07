@@ -88,6 +88,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 WHEN_DIR="$STATE/when"
 OUTPUT_TAIL_BYTES=${FM_WHEN_OUTPUT_TAIL_BYTES:-8192}
 
@@ -208,11 +213,11 @@ cmd_arm() {
     printf '%s\n' "${cond[@]}"
     printf '%s\n' "${act[@]}"
   } > "$tmp" || { rm -f -- "$tmp"; die "cannot write the spec"; }
-  chmod 0600 "$tmp" || { rm -f -- "$tmp"; die "cannot secure the spec"; }
+  fm_private_chmod 0600 "$tmp" || { rm -f -- "$tmp"; die "cannot secure the spec"; }
   hash=$(fm_pr_sha256 "$tmp") || { rm -f -- "$tmp"; die "cannot hash the spec"; }
   trust_tmp=$(umask 077; mktemp "$WHEN_DIR/.trust.XXXXXX") || { rm -f -- "$tmp"; die "cannot stage the trust record"; }
   printf 'fm-when-trust-v1\n%s\n' "$hash" > "$trust_tmp" || { rm -f -- "$tmp" "$trust_tmp"; die "cannot write the trust record"; }
-  chmod 0600 "$trust_tmp" || { rm -f -- "$tmp" "$trust_tmp"; die "cannot secure the trust record"; }
+  fm_private_chmod 0600 "$trust_tmp" || { rm -f -- "$tmp" "$trust_tmp"; die "cannot secure the trust record"; }
   mv -f -- "$tmp" "$(spec_file "$sid")" || { rm -f -- "$tmp" "$trust_tmp"; die "cannot publish the spec"; }
   mv -f -- "$trust_tmp" "$(trust_file "$sid")" || { rm -f -- "$(spec_file "$sid")" "$trust_tmp"; die "cannot publish the trust record"; }
   if ! fm_pr_private_file_valid "$(spec_file "$sid")" 600 "$device" \

@@ -86,6 +86,11 @@ DOCUMENT_LOCAL_FAILURE=2
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -140,7 +145,7 @@ read_cursor() { # <id>; sets CURSOR_OFFSET and CURSOR_HASH
 write_cursor() { # <id> <offset> <hash>
   local id=$1 offset=$2 hash=$3 path tmp
   mkdir -p "$CURSOR_DIR" || return 1
-  chmod 700 "$CURSOR_DIR" 2>/dev/null || true
+  fm_private_chmod 700 "$CURSOR_DIR" || true
   path=$(cursor_path "$id")
   [ ! -L "$path" ] || return 1
   tmp=$(umask 077; mktemp "$CURSOR_DIR/.cursor.XXXXXX") || return 1
@@ -149,7 +154,7 @@ write_cursor() { # <id> <offset> <hash>
     printf 'offset=%s\n' "$offset"
     printf 'prefix_sha256=%s\n' "$hash"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$path"
 }
 
@@ -170,7 +175,7 @@ ingest_receipt_matches() { # <id> <sequence> <result>
 write_ingest_receipt() { # <id> <sequence> <result>
   local id=$1 seq=$2 result=$3 path tmp hash
   mkdir -p "$CURSOR_DIR" || return 1
-  chmod 700 "$CURSOR_DIR" 2>/dev/null || true
+  fm_private_chmod 700 "$CURSOR_DIR" || true
   path=$(ingest_receipt_path "$id" "$seq")
   if [ -e "$path" ] || [ -L "$path" ]; then
     ingest_receipt_matches "$id" "$seq" "$result"
@@ -180,7 +185,7 @@ write_ingest_receipt() { # <id> <sequence> <result>
   tmp=$(umask 077; mktemp "$CURSOR_DIR/.ingested.XXXXXX") || return 1
   printf 'result_sha256=%s\n' "$hash" > "$tmp" \
     || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   if ! mv -f -- "$tmp" "$path"; then
     rm -f -- "$tmp"
     return 1
@@ -292,7 +297,7 @@ fetch_document() { # <id> <remote-relative> <result-var>
     [ "$rc" -ne "$SSH_UNAVAILABLE" ] || return "$SSH_UNAVAILABLE"
     return 1
   fi
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return "$DOCUMENT_LOCAL_FAILURE"; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return "$DOCUMENT_LOCAL_FAILURE"; }
   mv -f -- "$tmp" "$destination" || { rm -f -- "$tmp"; return "$DOCUMENT_LOCAL_FAILURE"; }
   local_rel="data/remote-secondmates/$id/$rel"
   printf -v "$result_var" '%s' "$local_rel"

@@ -489,9 +489,9 @@ test_valid_recording_and_merge_derivation() {
     || fail "canonical pr metadata was not exact"
   grep -qxF "pr_head=$expected" "$dir/home/state/task-a.meta" || fail "PR head metadata was not exact"
   cmp -s "$POLL" "$dir/home/state/task-a.check.sh" || fail "published check was not byte-for-byte static"
-  [ "$(file_mode "$dir/home/state/task-a.check.sh")" = 600 ] || fail "published check mode was not 0600"
-  [ "$(file_mode "$dir/home/state/task-a.pr-poll")" = 600 ] || fail "published sidecar mode was not 0600"
-  [ "$(file_mode "$dir/home/state/task-a.pr-poll-registration")" = 600 ] \
+  fm_private_mode_ok "$dir/home/state/task-a.check.sh" 600 || fail "published check mode was not 0600"
+  fm_private_mode_ok "$dir/home/state/task-a.pr-poll" 600 || fail "published sidecar mode was not 0600"
+  fm_private_mode_ok "$dir/home/state/task-a.pr-poll-registration" 600 \
     || fail "published registration mode was not 0600"
   [ "$(fm_pr_file_link_count "$dir/home/state/task-a.check.sh")" = 1 ] \
     && [ "$(fm_pr_file_link_count "$dir/home/state/task-a.pr-poll")" = 1 ] \
@@ -791,9 +791,9 @@ SH
     [ ! -s "$dir/watch.err" ] || fail "concurrent watcher observed a partial artifact error"
     if [ -e "$dir/home/state/task-a.check.sh" ]; then
       cmp -s "$POLL" "$dir/home/state/task-a.check.sh" || fail "concurrent publication check bytes changed"
-      [ "$(file_mode "$dir/home/state/task-a.check.sh")" = 600 ] || fail "concurrent check mode was not private"
-      [ "$(file_mode "$dir/home/state/task-a.pr-poll")" = 600 ] || fail "concurrent sidecar mode was not private"
-      [ "$(file_mode "$dir/home/state/task-a.pr-poll-registration")" = 600 ] \
+      fm_private_mode_ok "$dir/home/state/task-a.check.sh" 600 || fail "concurrent check mode was not private"
+      fm_private_mode_ok "$dir/home/state/task-a.pr-poll" 600 || fail "concurrent sidecar mode was not private"
+      fm_private_mode_ok "$dir/home/state/task-a.pr-poll-registration" 600 \
         || fail "concurrent registration mode was not private"
       fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
         || fail "concurrent publication did not leave canonical provenance"
@@ -987,7 +987,7 @@ test_postrename_poll_validation_revokes_and_retries() {
       fm_pr_poll_cleanup
       assert_no_final_poll "$state"
       [ "$(cat "$link_target")" = 'external sentinel' ] || fail "poll type fault changed an external target"
-      [ "$(file_mode "$link_target")" = 644 ] || fail "poll type fault changed an external target mode"
+      fm_private_mode_ok "$link_target" 644 || fail "poll type fault changed an external target mode"
 
       fm_pr_poll_prepare "$state" task-a github https://github.com/o/r/pull/2 github.com o/r 2 "$POLL" \
         || fail "could not prepare poll retry"

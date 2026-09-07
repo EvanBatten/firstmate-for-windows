@@ -270,6 +270,65 @@ SH
   done
 }
 
+# A suite that asserts a mode must ask the same question the product asks, or
+# it decides privacy a second time, in a weaker copy, and goes red on every
+# platform the product was taught to cope with. bin/fm-private-lib.sh is that
+# owner: `fm_private_mode_ok <path> <mode>` holds where the mode is carried and
+# is waived only where the filesystem cannot carry one, and
+# tests/fm-private-lib.test.sh proves both branches on any host. It is a leaf
+# with no side effects, so sourcing it here costs a suite nothing.
+# shellcheck source=bin/fm-private-lib.sh
+. "$ROOT/bin/fm-private-lib.sh"
+
+# fm_fake_noacl_stat <fakebin>
+# Puts a `stat` in <fakebin> that answers the mode question the way a mount
+# which cannot carry POSIX modes answers it. Every other question goes to the
+# real stat, so devices, inodes and link counts stay true.
+#
+# Such a mount stores no mode at all. `chmod` exits 0 and does nothing, and
+# `stat` SYNTHESIZES a mode from the umask of the process doing the reading:
+# 0644 & ~umask for a plain file, 0755 & ~umask for a directory or anything
+# executable. Measured on this repository's Git Bash mounts, where one file
+# reads 644 under umask 022 and 600 under umask 077
+# (docs/windows/measurement.md row 21).
+#
+# The umask is modelled rather than a constant returned, because the constant
+# is what makes this mount look harmless. A caller that sets `umask 077` before
+# staging private state - which bin/fm-pr-lib.sh's poll registration does -
+# reads 600 back off a file that carries nothing of the sort, and any check
+# that asks one question passes. The trap only appears when the answer moves
+# with the reader.
+#
+# A case that prepends this fakebin to PATH is running on such a mount wherever
+# the suite itself is running, which is the only way a Linux or macOS runner can
+# reach the code that has to cope with one.
+fm_fake_noacl_stat() {
+  local fakebin=$1 real
+  real=$(command -v stat) || return 1
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'REAL_STAT=%s\n' "$(printf '%q' "$real")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT" in
+  %a|%Lp)
+    [ -e "$ARG_PATH" ] || [ -L "$ARG_PATH" ] || exit 1
+    if { [ -d "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; } || [ -x "$ARG_PATH" ]; then
+      BASE=0755
+    else
+      BASE=0644
+    fi
+    printf '%o\n' "$(( BASE & ~$(umask) ))"
+    exit 0 ;;
+esac
+exec "$REAL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+}
+
 # fm_fake_version_tool <fakebin> <tool> <override-env-var> <default-version>
 # The stub answers `--version` with <override-env-var> when that variable is set
 # and non-empty, and with <default-version> otherwise; every other invocation

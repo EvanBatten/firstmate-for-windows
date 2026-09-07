@@ -170,6 +170,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 REG=$(fm_procevent_registry_dir "$STATE")
 MAX_OUTPUT_BYTES=${FM_PROCEVENT_MAX_OUTPUT_BYTES:-1048576}
 EXTENSION_HOST="$SCRIPT_DIR/fm-extension.mjs"
@@ -720,7 +725,7 @@ cmd_start() {
   else
     out=$(staging_file "$id" "$CLAIM_TOKEN")
     printf '%s\n' "$$" > "$runner" 2>/dev/null || true
-    chmod 0600 "$runner" 2>/dev/null || true
+    fm_private_chmod 0600 "$runner" || true
   fi
   # Built-in adapters do not run the extension capture helper, so keep this
   # sentinel defined while sharing the no-result branch below under `set -u`.

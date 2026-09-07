@@ -56,6 +56,11 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}"
 . "$SCRIPT_DIR/fm-remote-job-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
 REQUIRED_TOOLS=(git jq herdr tasks-axi treehouse)
 HARNESS_TOOLS=(claude codex opencode pi pi-signed grok kimi)
 OPTIONAL_TOOLS=(tmux no-mistakes gh)
@@ -416,7 +421,7 @@ repair_tool_wrapper() { # <tool>
     printf '%s\n' '# Firstmate remote tool wrapper v1'
     printf 'exec %q "$@"\n' "$target"
   } > "$tmp" || { rm -f -- "$tmp"; fix_report "required-$tool" failed "cannot write $wrapper"; return 1; }
-  if ! chmod 0700 "$tmp" || ! mv -f -- "$tmp" "$wrapper"; then
+  if ! fm_private_chmod 0700 "$tmp" || ! mv -f -- "$tmp" "$wrapper"; then
     rm -f -- "$tmp"
     fix_report "required-$tool" failed "cannot publish $wrapper"
     return 1

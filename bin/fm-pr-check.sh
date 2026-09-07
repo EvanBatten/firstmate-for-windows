@@ -18,6 +18,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
   exit 2
@@ -111,7 +116,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$META"
 printf 'pr=%s\n' "$URL" >> "$META_TMP" || exit 1
 [ -z "$PR_HEAD" ] || printf 'pr_head=%s\n' "$PR_HEAD" >> "$META_TMP" || exit 1
-chmod 0600 "$META_TMP" || exit 1
+fm_private_chmod 0600 "$META_TMP" || exit 1
 fm_pr_private_file_valid "$META_TMP" 600 "$STATE_DEVICE" || exit 1
 fm_pr_metadata_identity_parse "$META_TMP" || exit 1
 [ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \

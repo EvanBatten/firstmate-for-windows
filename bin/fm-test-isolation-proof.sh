@@ -55,6 +55,11 @@
 set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$ROOT/bin/fm-private-lib.sh"
 cd "$ROOT" || exit 1
 
 JOBS=4
@@ -388,7 +393,7 @@ for s in "${CANDIDATES[@]}"; do
 done
 
 PROOF_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-isolation-proof.XXXXXX")
-chmod 0700 "$PROOF_ROOT" || die "could not chmod 0700 proof root $PROOF_ROOT"
+fm_private_chmod 0700 "$PROOF_ROOT" || die "could not chmod 0700 proof root $PROOF_ROOT"
 RECORDS="$PROOF_ROOT/records.tsv"
 : >"$RECORDS"
 trap 'rm -rf "$PROOF_ROOT"' EXIT
@@ -440,15 +445,12 @@ wait_one_slot() {
     fi
   fi
   # Isolation: worker root must remain mode 0700 and under the proof parent.
-  mode=$(dir_mode "$work")
-  case "$mode" in
-    700|0700) ;;
-    *)
-      log "isolation failure: worker root mode is $mode, expected 0700 ($work)"
-      AGG_RC=1
-      FAILED=$((FAILED + 1))
-      ;;
-  esac
+  if ! fm_private_mode_ok "$work" 700; then
+    mode=$(dir_mode "$work")
+    log "isolation failure: worker root mode is $mode, expected 0700 ($work)"
+    AGG_RC=1
+    FAILED=$((FAILED + 1))
+  fi
   case "$work" in
     "$PROOF_ROOT"/*) ;;
     *)
@@ -487,7 +489,7 @@ for script in "${CANDIDATES[@]}"; do
   work="$PROOF_ROOT/w$idx"
   # Create then chmod: mkdir -m can still be umask-adjusted on some platforms.
   mkdir -p "$work/tmp" "$work/out"
-  chmod 0700 "$work" "$work/tmp" "$work/out" \
+  fm_private_chmod 0700 "$work" "$work/tmp" "$work/out" \
     || die "could not chmod 0700 worker roots under $work"
   mode=$(dir_mode "$work")
   case "$mode" in

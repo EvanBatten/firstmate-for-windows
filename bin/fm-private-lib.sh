@@ -70,14 +70,29 @@
 # THE CAPABILITY IS MEASURED, NEVER INFERRED. Not from `uname`, not from the
 # mount table, not from the shape of a path: this machine has both kinds of
 # mount, so only the filesystem under the path in hand can answer. The probe
-# creates a `mktemp` file in the target's own directory, chmods it 0600 and
-# reads the mode back. `mktemp`'s unpredictable name is what keeps the probe
-# from being answered by an entry planted in advance. The verdict is cached per
-# DEVICE, so a process that touches two mounts measures each, and the cache
-# lives in a plain shell variable that is deliberately not exported, so a child
-# on a different mount measures its own. A probe that cannot run proves
-# nothing, so it leaves the strict branch in force: an unwritable directory or
-# an unreadable `stat` never relaxes a mode-carrying host.
+# makes a `mktemp` file in the target's own directory - an unpredictable name
+# no entry planted in advance can answer for - and then WATCHES A MODE CHANGE:
+# `chmod 0644`, read back, `chmod 0600`, read back. Modes are enforcing only
+# when both readbacks are the mode that was just asked for.
+#
+# Two readings, not one, because ONE READING CANNOT TELL THE TWO MOUNTS APART.
+# A `noacl` mount does not store a mode at all: `stat` synthesizes one from the
+# READING process's umask, 0644 & ~umask for a file and 0755 & ~umask for a
+# directory, whatever the file was created as and whatever chmod was asked for.
+# Measured here: one file reads 644 under umask 022 and 600 under umask 077,
+# and a directory reads 755 and 700 the same way. So a probe that only chmods
+# 0600 and checks for 600 reports "modes are enforcing" on this mount for any
+# caller that set `umask 077` first - which `fm_pr_poll_prepare` does, and
+# which is exactly the code path this library exists for. Watching the mode
+# MOVE cannot be fooled that way: no umask makes one file read 644 after a
+# chmod 0644 and 600 after a chmod 0600 unless the chmod is real.
+#
+# The verdict is cached per DEVICE, so a process that touches two mounts
+# measures each, and the cache lives in a plain shell variable that is
+# deliberately not exported, so a child on a different mount measures its own.
+# A probe that cannot run proves nothing, so it leaves the strict branch in
+# force: an unwritable directory or an unreadable `stat` never relaxes a
+# mode-carrying host.
 #
 # HOW THE RELAXATION IS SURFACED. Every waiver records the path in
 # FM_PRIVATE_MODE_UNENFORCEABLE, and nothing here writes to stderr. These
@@ -90,9 +105,11 @@ if [ -n "${FM_PRIVATE_LIB_SOURCED:-}" ]; then
 fi
 FM_PRIVATE_LIB_SOURCED=1
 
-# The first path whose mode this process could not enforce, or empty. Read it,
-# do not write it.
-FM_PRIVATE_MODE_UNENFORCEABLE=${FM_PRIVATE_MODE_UNENFORCEABLE:-}
+# The first path whose mode this process could not enforce, or empty. An
+# OUTPUT: a caller reads it, nothing sets it, and it is neither exported nor
+# seeded from the environment, so it always describes the waivers THIS process
+# made and an inherited value can never pass one off as its own.
+FM_PRIVATE_MODE_UNENFORCEABLE=
 
 # " <device>=0 <device>=1 " - 0 enforcing, 1 not representable. Not exported.
 _FM_PRIVATE_PROBE_CACHE=
@@ -110,6 +127,17 @@ _fm_private_stat_flavor() {
   else
     _FM_PRIVATE_STAT_BSD=no
   fi
+}
+
+# This user's numeric id, resolved on the probe's first run and only there, so
+# a caller that never reaches the probe never pays for it. An `id` that cannot
+# answer leaves this empty and the ownership check stands down; on such a host
+# the probe's own regular-file and link-count checks are all that is left.
+_FM_PRIVATE_UID=
+
+_fm_private_resolve_uid() {
+  [ -z "$_FM_PRIVATE_UID" ] || return 0
+  _FM_PRIVATE_UID=$(id -u 2>/dev/null) || _FM_PRIVATE_UID=
 }
 
 fm_private_stat_mode() {  # <path>
@@ -136,6 +164,15 @@ fm_private_stat_link_count() {  # <path>
     stat -f %l "$1" 2>/dev/null
   else
     stat -c %h "$1" 2>/dev/null
+  fi
+}
+
+fm_private_stat_owner() {  # <path>
+  _fm_private_stat_flavor
+  if [ "$_FM_PRIVATE_STAT_BSD" = yes ]; then
+    stat -f %u "$1" 2>/dev/null
+  else
+    stat -c %u "$1" 2>/dev/null
   fi
 }
 
@@ -171,11 +208,30 @@ _fm_private_probe_dir() {  # <path>
   printf '%s\n' "$dir"
 }
 
+# The probe is only evidence about the filesystem if the file it reads is the
+# file it made. The one directory the probe cannot avoid writing into is the
+# very directory whose mode is in question, and the case that reaches the probe
+# at all is the case where that mode has already been found wrong - so on a
+# mode-carrying host the probe can be running inside a genuinely
+# group-writable directory. There, another account can unlink the probe and
+# leave a 644 file of the same name in its place, and a probe that believed it
+# would report "modes are not representable here" and waive the very check that
+# was catching the directory. It cannot forge OWNERSHIP, so that is what is
+# checked: a probe that is not a plain, singly-linked file belonging to this
+# user is not evidence, and the strict branch stands.
+_fm_private_probe_is_ours() {  # <probe>
+  local probe=$1
+  _fm_private_resolve_uid
+  [ -f "$probe" ] && [ ! -L "$probe" ] || return 1
+  [ "$(fm_private_stat_link_count "$probe")" = 1 ] || return 1
+  [ -z "$_FM_PRIVATE_UID" ] || [ "$(fm_private_stat_owner "$probe")" = "$_FM_PRIVATE_UID" ]
+}
+
 # Is a restrictive mode representable on the filesystem under <path>?
 # 0 yes (the strict branch), 1 no. An unmeasurable answer is yes: a probe that
 # could not run has not shown that anything is wrong with the host.
 fm_private_modes_enforcing() {  # <path>
-  local dir device probe mode
+  local dir device probe wide narrow
   dir=$(_fm_private_probe_dir "${1-}")
   device=$(fm_private_stat_device "$dir") || device=
   [ -n "$device" ] || return 0
@@ -185,11 +241,18 @@ fm_private_modes_enforcing() {  # <path>
   esac
   probe=$(mktemp "$dir/.fm-private-probe.XXXXXX" 2>/dev/null) || probe=
   [ -n "$probe" ] || return 0
-  chmod 0600 "$probe" 2>/dev/null || true
-  mode=$(fm_private_stat_mode "$probe") || mode=
+  if _fm_private_probe_is_ours "$probe"; then
+    chmod 0644 "$probe" 2>/dev/null || true
+    wide=$(_fm_private_mode_canon "$(fm_private_stat_mode "$probe")") || wide=
+    chmod 0600 "$probe" 2>/dev/null || true
+    narrow=$(_fm_private_mode_canon "$(fm_private_stat_mode "$probe")") || narrow=
+  else
+    wide=
+    narrow=
+  fi
   rm -f -- "$probe" 2>/dev/null || true
-  mode=$(_fm_private_mode_canon "$mode") || return 0
-  if [ "$mode" = 600 ]; then
+  [ -n "$wide" ] && [ -n "$narrow" ] || return 0
+  if [ "$wide" = 644 ] && [ "$narrow" = 600 ]; then
     _FM_PRIVATE_PROBE_CACHE="$_FM_PRIVATE_PROBE_CACHE $device=0 "
     return 0
   fi

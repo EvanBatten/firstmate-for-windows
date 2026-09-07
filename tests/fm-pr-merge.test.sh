@@ -68,6 +68,8 @@
 #   (av) a base branch with no queue rule says nothing about a merge queue
 #   (aw) a refusal built on the gh-axi view says the merge queue could not be
 #       observed, and judges that view's state like the queue-aware one
+#   (ax) a merge on a mount that cannot represent a mode still reaches the
+#       forge and records its metadata, instead of refusing the poll setup
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2133,3 +2135,39 @@ test_queued_github_merge_leaves_the_poll_armed
 test_distinct_merged_prs_keep_distinct_wakes
 test_uncommitted_marker_retry_is_never_silent
 test_secondmate_without_parent_binding_is_loud
+
+# (ax) Issue #3, ledger row 24. The poll registration fm-pr-check.sh performs
+# asserts that its private files carry mode 600, and on a mount that cannot
+# carry a mode that assertion could never hold: every merge answered
+# "error: could not prepare PR poll" and the forge was never called at all, so
+# the guarded path - pr= recorded before the merge, unproved merges refused -
+# was inert on that whole platform and captains merged through the forge tool
+# instead. The mount is staged rather than inherited, so this runs as the same
+# case on a host that carries modes and on one that does not.
+test_merge_reaches_the_forge_where_a_mode_cannot_be_represented() {
+  local case_dir rc
+  case_dir=$(make_case noacl-mount)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c
+  fm_fake_noacl_stat "$case_dir/fakebin"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/24 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  assert_no_grep 'could not prepare PR poll' "$case_dir/stderr" \
+    "noacl-mount: the poll registration must not refuse a mode the mount cannot represent"
+  expect_code 0 "$rc" "noacl-mount: fm-pr-merge should succeed on a mount that cannot carry a mode"
+  assert_grep 'pr=https://github.com/example/repo/pull/24' "$case_dir/state/task-x1.meta" \
+    "noacl-mount: pr= was not recorded"
+  assert_grep 'pr_head=7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c' "$case_dir/state/task-x1.meta" \
+    "noacl-mount: pr_head= was not recorded"
+  grep -qxF 'pr merge 24 --repo example/repo --squash' "$case_dir/gh-axi.log" \
+    || fail "noacl-mount: the merge never reached the forge"
+  pass "fm-pr-merge reaches the forge and records its metadata where a mode cannot be represented"
+}
+
+test_merge_reaches_the_forge_where_a_mode_cannot_be_represented

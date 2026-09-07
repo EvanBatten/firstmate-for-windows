@@ -15,10 +15,12 @@
 # reads it back. Both fixtures are faithful to a real mount rather than to the
 # library's internals:
 #
-#   noacl_fs     `stat` answers %a with 755 for a directory and 644 for
-#                anything else, whatever `chmod` was asked for, and `chmod`
-#                itself still exits 0. That is exactly what was measured on
+#   noacl_fs     `chmod` is left alone, because on such a mount it exits 0 and
+#                does nothing; `stat` stores no mode and synthesizes one from
+#                the READING process's umask, which is what was measured on
 #                this machine's Git Bash mounts (measurement.md row 21).
+#                tests/lib.sh owns that stub - tests/fm-pr-merge.test.sh puts
+#                the same mount under the guarded merge path.
 #   enforcing_fs `chmod` runs the real chmod AND records the mode it set
 #                against the file's device and inode; `stat` answers %a from
 #                that record. On a host that really carries modes the record
@@ -47,8 +49,8 @@ case_dir() {  # <name>
   printf '%s\n' "$dir"
 }
 
-# The header both `stat` stubs need: where the real stat is, which spelling it
-# answers to, and which format and path this invocation is asking about.
+# The header the enforcing `stat` stub needs: where the real stat is, which
+# spelling it answers to, and which format and path this call is asking about.
 fixture_stat_header() {  # <real-stat>
   printf 'REAL_STAT=%s\n' "$(printf '%q' "$1")"
   cat <<'SH'
@@ -60,27 +62,15 @@ ARG_PATH=${*: -1}
 SH
 }
 
-# A mount that cannot carry a restrictive mode: `chmod` is left alone, because
-# on such a mount it exits 0 and simply does nothing, and only the readback is
-# answered the way the mount answers it.
+# A mount that cannot carry a restrictive mode. `chmod` is left alone, because
+# on such a mount it exits 0 and simply does nothing; only the readback moves.
+# tests/lib.sh owns that stub, because tests/fm-pr-merge.test.sh puts the same
+# mount under the guarded merge path.
 noacl_fs() {  # <dir> -> a directory to prepend to PATH
   local dir=$1 fakebin
   fakebin="$dir/fs-noacl"
   mkdir -p "$fakebin"
-  {
-    printf '#!/usr/bin/env bash\n'
-    fixture_stat_header "$(command -v stat)"
-    cat <<'SH'
-case "$ARG_FMT" in
-  %a|%Lp)
-    [ -e "$ARG_PATH" ] || [ -L "$ARG_PATH" ] || exit 1
-    if [ -d "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; then echo 755; else echo 644; fi
-    exit 0 ;;
-esac
-exec "$REAL_STAT" "$@"
-SH
-  } > "$fakebin/stat"
-  chmod +x "$fakebin/stat"
+  fm_fake_noacl_stat "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -172,6 +162,29 @@ test_probe_measures_a_mount_that_drops_modes() {
   pass "private-lib: the probe measures a mount that drops modes as not representable"
 }
 
+# A mount that stores no mode synthesizes one from the READER's umask, so under
+# `umask 077` a plain file reads back 600 and a directory 700 while carrying
+# nothing at all. bin/fm-pr-lib.sh's poll registration sets exactly that umask
+# before it stages its private files, so a probe that asks one question - chmod
+# 0600, is it 600? - answers "modes are enforcing here" on the very mount, and
+# in the very code path, this library exists for. Only watching the mode MOVE
+# tells the two mounts apart.
+test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback() {
+  local dir out
+  dir=$(case_dir probe-umask)
+  mkdir -p "$dir/work"
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    umask 077
+    : > '$dir/work/f'
+    observed=\$(fm_private_stat_mode '$dir/work/f')
+    fm_private_modes_enforcing '$dir/work/f' && verdict=enforcing || verdict=relaxed
+    printf '%s %s\n' \"\$observed\" \"\$verdict\"
+  ")
+  [ "$out" = "600 relaxed" ] \
+    || fail "a 600 readback that is only the caller's own umask must not be read as an enforced mode, got '$out'"
+  pass "private-lib: a umask that flatters the readback does not fool the probe"
+}
+
 test_probe_leaves_nothing_behind() {
   local dir out residue
   dir=$(case_dir probe-residue)
@@ -186,6 +199,51 @@ test_probe_leaves_nothing_behind() {
   [ "$residue" -eq 0 ] \
     || fail "the probe must remove its own temp file, $residue entries left in the target directory"
   pass "private-lib: the probe removes the temp file it measures"
+}
+
+# The one directory the probe cannot avoid writing into is the directory whose
+# mode is in question, and it only ever gets there because that mode was
+# already found wrong - which on a mode-carrying host can mean the directory is
+# genuinely group-writable. Another account can unlink the probe there and
+# leave a 644 file of its own behind, and a probe that believed it would report
+# "this mount cannot carry modes" and waive the check that was catching the
+# directory. The swap is staged as what it actually leaves: a probe file this
+# user does not own.
+test_probe_refuses_to_conclude_from_a_file_it_does_not_own() {
+  local dir fakebin out
+  dir=$(case_dir probe-foreign)
+  mkdir -p "$dir/work"
+  fakebin="$dir/fs-foreign"
+  mkdir -p "$fakebin"
+  fm_fake_noacl_stat "$fakebin"
+  # Wrap that stat so the probe's own file reads back as another account's,
+  # exactly as it would after the swap. Every other path answers normally, so
+  # the case still exercises the real probe against the real filesystem.
+  mv "$fakebin/stat" "$fakebin/stat-noacl"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'NOACL_STAT=%s\n' "$(printf '%q' "$fakebin/stat-noacl")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %u:*/.fm-private-probe.*) echo 4294967294; exit 0 ;;
+esac
+exec "$NOACL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  out=$(fs_eval "$fakebin" "
+    : > '$dir/work/f'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+    echo \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "refused
+[]" ] || fail "a probe file this user does not own must not waive anything, got '$out'"
+  pass "private-lib: the probe draws no conclusion from a file this user does not own"
 }
 
 test_probe_cannot_relax_a_directory_it_cannot_write() {
@@ -367,7 +425,9 @@ test_a_setter_that_fails_for_a_real_reason_still_fails() {
 
 test_probe_measures_a_mount_that_carries_modes
 test_probe_measures_a_mount_that_drops_modes
+test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback
 test_probe_leaves_nothing_behind
+test_probe_refuses_to_conclude_from_a_file_it_does_not_own
 test_probe_cannot_relax_a_directory_it_cannot_write
 test_creation_carries_700_and_600_where_modes_are_enforcing
 test_creation_succeeds_and_is_recorded_where_modes_are_not_representable
