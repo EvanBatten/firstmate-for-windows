@@ -941,7 +941,7 @@ if [ "$1" = "-c" ] && [ "$2" = "%a" ]; then
   exit 0
 fi
 if [ "$1" = "-f" ] && [ "$2" = "%Lp" ]; then
-  printf '  File: "%s"\n    ID: fake Namelen: 255 Type: ext2/ext3\n700\n' "$3"
+  printf '700\n'
   exit 0
 fi
 exit 1

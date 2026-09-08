@@ -299,6 +299,18 @@ SH
 # that asks one question passes. The trap only appears when the answer moves
 # with the reader.
 #
+# EXECUTABLE IS DECIDED FROM CONTENT, NOT FROM THE PERMISSION BIT, because on
+# such a mount there is no permission bit to read: MSYS marks an entry
+# executable when it begins `#!` or `MZ`, or carries a Windows executable
+# extension. That is not a detail. Ledger row 24 names the one file issue #3
+# actually died on, `<id>.check.sh`, a copy of an EXECUTABLE template that
+# reads back 700 under the registration's `umask 077` while the two plain
+# files beside it read 600 and passed. A stub that asked `[ -x ]` instead
+# would answer 644 & ~077 = 600 for that copy as well, because the poll
+# registration creates its temps with `mktemp` at 0600 and `cp` into an
+# existing destination keeps that mode - so the mount it staged could not
+# reproduce the failure the fix exists for.
+#
 # A case that prepends this fakebin to PATH is running on such a mount wherever
 # the suite itself is running, which is the only way a Linux or macOS runner can
 # reach the code that has to cope with one.
@@ -315,10 +327,16 @@ ARG_PATH=${*: -1}
 case "$ARG_FMT" in
   %a|%Lp)
     [ -e "$ARG_PATH" ] || [ -L "$ARG_PATH" ] || exit 1
-    if { [ -d "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; } || [ -x "$ARG_PATH" ]; then
+    BASE=0644
+    if [ -d "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; then
       BASE=0755
-    else
-      BASE=0644
+    elif [ -f "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; then
+      MAGIC=
+      IFS= read -r -n2 MAGIC < "$ARG_PATH" 2>/dev/null
+      case "$MAGIC" in '#!'|MZ) BASE=0755 ;; esac
+      case "$ARG_PATH" in
+        *.exe|*.EXE|*.com|*.COM|*.bat|*.BAT|*.cmd|*.CMD) BASE=0755 ;;
+      esac
     fi
     printf '%o\n' "$(( BASE & ~$(umask) ))"
     exit 0 ;;

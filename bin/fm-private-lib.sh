@@ -115,19 +115,20 @@ FM_PRIVATE_MODE_UNENFORCEABLE=
 _FM_PRIVATE_PROBE_CACHE=
 
 # BSD `stat` and GNU `stat` spell the same three questions differently, and the
-# answer cannot change inside one process, so it is resolved once on first use
-# rather than forked per call the way the open-coded readers did. Resolving it
-# lazily is what keeps sourcing this file free of any process at all.
-_FM_PRIVATE_STAT_BSD=
-
-_fm_private_stat_flavor() {
-  [ -z "$_FM_PRIVATE_STAT_BSD" ] || return 0
-  if [ "$(uname 2>/dev/null)" = Darwin ]; then
-    _FM_PRIVATE_STAT_BSD=yes
-  else
-    _FM_PRIVATE_STAT_BSD=no
-  fi
-}
+# answer cannot change inside one process, so it is decided once, here, and the
+# readers below only read it. It comes from `$OSTYPE`, which bash sets at its
+# own startup, so this costs no process at all - sourcing this file still runs
+# nothing, and neither does any later call.
+#
+# A `uname` resolved on first use could not have been memoized at all: every
+# caller of these readers is a command substitution, so the assignment would
+# land in a subshell and be discarded, and each of the four would fork `uname`
+# again on every call - three per fm_private_file_valid, five of those per
+# guarded merge, on the platform whose fork price is the expensive one.
+case ${OSTYPE:-} in
+  darwin*) _FM_PRIVATE_STAT_BSD=yes ;;
+  *) _FM_PRIVATE_STAT_BSD=no ;;
+esac
 
 # This user's numeric id, resolved on the probe's first run and only there, so
 # a caller that never reaches the probe never pays for it. An `id` that cannot
@@ -141,7 +142,6 @@ _fm_private_resolve_uid() {
 }
 
 fm_private_stat_mode() {  # <path>
-  _fm_private_stat_flavor
   if [ "$_FM_PRIVATE_STAT_BSD" = yes ]; then
     stat -f %Lp "$1" 2>/dev/null
   else
@@ -150,7 +150,6 @@ fm_private_stat_mode() {  # <path>
 }
 
 fm_private_stat_device() {  # <path>
-  _fm_private_stat_flavor
   if [ "$_FM_PRIVATE_STAT_BSD" = yes ]; then
     stat -f %d "$1" 2>/dev/null
   else
@@ -159,7 +158,6 @@ fm_private_stat_device() {  # <path>
 }
 
 fm_private_stat_link_count() {  # <path>
-  _fm_private_stat_flavor
   if [ "$_FM_PRIVATE_STAT_BSD" = yes ]; then
     stat -f %l "$1" 2>/dev/null
   else
@@ -168,7 +166,6 @@ fm_private_stat_link_count() {  # <path>
 }
 
 fm_private_stat_owner() {  # <path>
-  _fm_private_stat_flavor
   if [ "$_FM_PRIVATE_STAT_BSD" = yes ]; then
     stat -f %u "$1" 2>/dev/null
   else
