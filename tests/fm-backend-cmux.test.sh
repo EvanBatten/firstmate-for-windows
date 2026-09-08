@@ -983,6 +983,30 @@ test_send_text_submit_send_failed_when_target_absent() {
   pass "fm_backend_cmux_send_text_submit: reports 'send-failed' when the target workspace/surface is absent"
 }
 
+# The window-id read fed a text-mode jq's bytes into a `while read` without
+# undoing the CR, so every window id carried one on Git Bash, the scoped
+# workspace call built from it failed, and `|| continue` swallowed the failure
+# so the function returned empty with nothing reported (issue #18). The fixture
+# is the same text-mode jq the capture case stages. The sibling reads this
+# change also routed through the shared owner return their value through a
+# command substitution, where a trailing CR is not observable from outside the
+# function, so they carry no case of their own rather than a vacuous one.
+
+test_window_of_workspace_survives_a_text_mode_jq() {
+  local dir fb out
+  dir="$TMP_ROOT/win-of-ws-text-mode"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 2 "e2222222-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
+  cmux_workspace_list_response "$dir" 3 "aaaaaaaa-0000-0000-0000-000000000000" "the-task"
+  fb=$(make_cmux_fakebin "$dir")
+  make_text_mode_jq "$dir"
+  out=$( OSTYPE=msys PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT" )
+  [ "$out" = "e2222222-0000-0000-0000-000000000000 1" ] \
+    || fail "window_of_workspace must strip a text-mode jq's CR from every window id and count, got '$out'"
+  pass "fm_backend_cmux_window_of_workspace: a text-mode jq's CR never reaches the scoped workspace call"
+}
+
 # --- window_of_workspace: which window holds a workspace, and its count ------
 
 test_window_of_workspace_finds_window_and_count() {
@@ -1179,6 +1203,7 @@ test_target_ready_checks_expected_label
 test_target_ready_rejects_label_mismatch
 test_capture_trims_locally
 test_capture_strips_cr_under_a_text_mode_jq
+test_window_of_workspace_survives_a_text_mode_jq
 test_capture_fails_when_read_screen_fails_empty
 test_capture_fails_when_target_not_ready
 test_send_key_normalizes_and_targets
