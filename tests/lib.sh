@@ -307,37 +307,48 @@ fm_test_modes_carried() {  # <path> <what>
 # rounds each found more of them. Deriving the closure from the scripts
 # themselves removes the possibility rather than detecting it.
 #
-# Sourcing in bin/ is uniformly `. "<dir>/fm-<name>.sh"`, with <dir> the
-# script's own directory under some name, so the basename is the whole answer.
 # A conditional source is staged too: over-staging a real sibling costs a
 # fixture nothing, and a fixture that wants a stub writes it afterwards.
+#
+# The queue is the positional parameters and the visited set is a
+# space-delimited string, because this repository keeps working on bash 3.2 -
+# the stock macOS shell, which docs/fm-test-isolation-proof.md records a real
+# measurement run against - and 3.2 has no associative arrays and treats
+# "${arr[@]}" on an emptied array as unset under `set -u`, which both callers
+# set. `case` membership over a padded string is the idiom
+# bin/fm-private-lib.sh already uses for its probe cache.
 fm_test_install_bin() {  # <dest-bin-dir> <script>...
-  local dest=$1 script cur sib
+  local dest=$1 want cur sib staged=' '
   shift
-  local -a queue=("$@")
-  local -A staged=()
+  want=$*
   mkdir -p "$dest" || return 1
-  while [ "${#queue[@]}" -gt 0 ]; do
-    cur=${queue[0]}
-    queue=("${queue[@]:1}")
-    [ -z "${staged[$cur]:-}" ] || continue
-    staged[$cur]=1
+  while [ "$#" -gt 0 ]; do
+    cur=$1
+    shift
+    case "$staged" in *" $cur "*) continue ;; esac
+    staged="$staged$cur "
     [ -f "$ROOT/bin/$cur" ] || return 1
     cp "$ROOT/bin/$cur" "$dest/$cur" || return 1
-    while IFS= read -r sib; do
-      [ -n "$sib" ] || continue
-      [ -n "${staged[$sib]:-}" ] || queue+=("$sib")
-    done < <(fm_test_bin_siblings "$cur")
+    for sib in $(fm_test_bin_siblings "$cur"); do
+      set -- "$@" "$sib"
+    done
   done
-  for script in "$@"; do
-    [ -f "$dest/$script" ] || return 1
+  for cur in $want; do
+    [ -f "$dest/$cur" ] || return 1
   done
 }
 
 # fm_test_bin_siblings <script>: the basenames bin/<script> sources from its
-# own directory, one per line. The single spelling every bin script uses.
+# own directory, one per line.
+#
+# The path between the `.` and the basename is not scanned, only skipped. Two
+# spellings are in use and the commonest one resolves the directory inline -
+# `. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-<x>.sh"` - so a pattern
+# that cannot cross an embedded quote sees nothing there, which silently
+# includes every script that sources bin/fm-private-lib.sh. Only the basename
+# is ever needed, so match to the closing quote and take the last path segment.
 fm_test_bin_siblings() {  # <script>
-  grep -oE '^[[:space:]]*\.[[:space:]]+"[^"]*/fm-[a-z0-9-]+\.sh"' "$ROOT/bin/$1" 2>/dev/null \
+  grep -oE '^[[:space:]]*(\.|source)[[:space:]]+.*/fm-[a-z0-9-]+\.sh"' "$ROOT/bin/$1" 2>/dev/null \
     | sed -E 's#.*/##; s#"$##'
 }
 

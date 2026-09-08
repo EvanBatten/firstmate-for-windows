@@ -1914,7 +1914,7 @@ SH
 }
 
 test_retire_reason_closes_the_open_loop() {
-  local home log out registry_file receipt_mode
+  local home log out registry_file
   home=$(make_home retire-reason)
   log="$home/curl.log"; : > "$log"
   seed_commitment "$home" pf-retire req-retire discord main work-retire
@@ -1954,10 +1954,8 @@ EOF
     "the retirement receipt must preserve the reason"
   assert_grep 'retired_at=' "$home/state/public-followup/retired/pf-retire" \
     "the retirement receipt must preserve its timestamp"
-  receipt_mode=$(stat -c %a "$home/state/public-followup/retired/pf-retire" 2>/dev/null \
-    || stat -f %Lp "$home/state/public-followup/retired/pf-retire" 2>/dev/null) \
-    || fail "could not inspect the retirement receipt mode"
-  [ "$receipt_mode" = 600 ] || fail "the retirement receipt must be private"
+  fm_private_mode_ok "$home/state/public-followup/retired/pf-retire" 600 \
+    || fail "the retirement receipt must be private"
   assert_absent "$home/state/public-followup/registry/pf-retire" \
     "retire is the only removal"
   out=$(run_pf "$home" pending || true)

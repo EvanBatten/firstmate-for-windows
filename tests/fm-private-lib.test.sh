@@ -473,6 +473,42 @@ test_a_setter_that_fails_for_a_real_reason_still_fails() {
   pass "private-lib: a setter that fails for a reason other than the mode still fails, on both mounts"
 }
 
+# --- the sibling this library became -----------------------------------------
+
+# Thirty-two scripts gained bin/fm-private-lib.sh as a required sibling, and a
+# fixture bin/ that stages one of them without it aborts the script at source
+# time, before any assertion. tests/lib.sh's fm_test_install_bin exists to make
+# that unrepresentable by staging the closure instead of a hand list, so the
+# thing worth proving is the property itself: stage a script ALONE and it must
+# still run out of the fixture.
+#
+# The five below reach this library through the spelling that resolves its own
+# directory inline, `. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/..."`, and
+# fm-session-lock-lib.sh through `. "$(dirname -- "${BASH_SOURCE[0]}")/..."`. A
+# closure walker that cannot read those spellings stages exactly one file and
+# every case here dies on a missing sibling, which is what makes this evidence
+# rather than decoration: it is red whenever the walk sees no edges at all.
+test_a_script_staged_alone_can_still_source_its_siblings() {
+  local dir subject bin staged rc out
+  dir=$(case_dir install-closure)
+  for subject in fm-pr-lib.sh fm-x-lib.sh fm-procevent-lib.sh \
+                 fm-remote-job-lib.sh fm-check-lib.sh fm-session-lock-lib.sh; do
+    bin="$dir/$subject/bin"
+    rm -rf "${dir:?}/$subject"
+    mkdir -p "$dir/$subject/home"
+    fm_test_install_bin "$bin" "$subject" \
+      || fail "the installer refused to stage $subject"
+    staged=$(find "$bin" -maxdepth 1 -name '*.sh' | wc -l | tr -d ' ')
+    [ "$staged" -gt 1 ] \
+      || fail "staging $subject brought no sibling at all, so the closure walk found no edges"
+    out=$(FM_HOME="$dir/$subject/home" "${BASH:-/bin/bash}" -c \
+      "set -eu; . \"\$0\"; echo sourced" "$bin/$subject" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] && [ "$out" = sourced ] \
+      || fail "$subject could not be sourced out of a bin staged for it alone: $out"
+  done
+  pass "private-lib: a script staged alone through the shared installer still finds its siblings"
+}
+
 test_probe_measures_a_mount_that_carries_modes
 test_probe_measures_a_mount_that_drops_modes
 test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback
@@ -489,3 +525,4 @@ test_assertion_refuses_a_second_link
 test_assertion_refuses_a_wrong_mode_where_modes_are_enforcing
 test_assertion_accepts_the_same_wrong_mode_where_modes_are_not_representable
 test_a_setter_that_fails_for_a_real_reason_still_fails
+test_a_script_staged_alone_can_still_source_its_siblings
