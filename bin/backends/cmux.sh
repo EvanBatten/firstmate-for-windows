@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Every jq program in this file stays in single quotes: the names they
+# reference are jq variables the --arg flags bind, not shell expansions.
+# shellcheck disable=SC2016
 # bin/backends/cmux.sh - the cmux session-provider adapter (EXPERIMENTAL).
 #
 # Design: data/cmux-backend-feasibility-c7/report.md (adapter design sketch,
