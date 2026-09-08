@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Every jq program in this file stays in single quotes: the names they
+# reference are jq variables the --arg flags bind, not shell expansions.
+# shellcheck disable=SC2016
 # bin/backends/cmux.sh - the cmux session-provider adapter (EXPERIMENTAL).
 #
 # Design: data/cmux-backend-feasibility-c7/report.md (adapter design sketch,
@@ -338,15 +341,15 @@ fm_backend_cmux_scoped_title() {  # <fm-task-label>
 # so this adopts the FIRST match `jq` returns, mirroring herdr's/zellij's own
 # duplicate-check posture.
 fm_backend_cmux_workspace_id_for_label() {  # <label>
-  local label=$1
-  fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
-    | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
+  local label=$1 wss
+  wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 0
+  fm_jq_rows "$wss" --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' | head -1
 }
 
 fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
-  local wsid=$1
-  fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
-    | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
+  local wsid=$1 panes
+  panes=$(fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null) || return 0
+  fm_jq_rows "$panes" '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)'
 }
 
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
@@ -416,11 +419,12 @@ fm_backend_cmux_surface_exists() {  # <workspace_id> <surface_id>
 # header for the fresh-surface pitfall this avoids). When the caller knows
 # the owning firstmate task label, refresh stale workspace/surface ids by label.
 fm_backend_cmux_target_ready() {  # <target> [expected-label]
-  local expected_label=${2:-} expected_title title wsid sfid
+  local expected_label=${2:-} expected_title title wsid sfid wss
   fm_backend_cmux_parse_target "$1" || return 1
   if [ -n "$expected_label" ]; then
     expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
-    title=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null)
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null)
+    title=$(fm_jq_rows "$wss" --arg id "$FM_BACKEND_CMUX_WORKSPACE" '.workspaces[]? | select(.id == $id) | .title')
     if [ "$title" = "$expected_title" ]; then
       fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE" && return 0
       wsid=$FM_BACKEND_CMUX_WORKSPACE
@@ -593,14 +597,14 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
   while IFS= read -r wid; do
     [ -n "$wid" ] || continue
     wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || continue
-    count=$(printf '%s' "$wss" | jq -er --arg id "$wsid" '
+    count=$(fm_jq_rows "$wss" -e --arg id "$wsid" '
       (.workspaces // []) as $workspaces
       | select(any($workspaces[]?; .id == $id))
       | ($workspaces | length)
-    ' 2>/dev/null) || continue
+    ') || continue
     printf '%s %s' "$wid" "$count"
     return 0
-  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+  done < <(fm_jq_rows "$wins" '.[]? | .id')
 }
 
 # fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors
@@ -653,5 +657,5 @@ fm_backend_cmux_list_live() {
     sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
     [ -n "$sfid" ] || continue
     printf '%s:%s\tfm-%s\n' "$wsid" "$sfid" "$plain"
-  done < <(printf '%s' "$wss" | jq -r --arg prefix "$prefix" '.workspaces[]? | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"' 2>/dev/null)
+  done < <(fm_jq_rows "$wss" --arg prefix "$prefix" '.workspaces[]? | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"')
 }
