@@ -254,8 +254,10 @@ function runSessionstartHook(generation: SessionstartGeneration): Promise<Sessio
     const runner = `${root}/bin/fm-sessionstart-run.sh`;
     let child: ChildProcess;
     try {
+      // Windows node cannot execute a shebang script, so the unsupervised
+      // branch hands the runner to bash rather than exec-ing it directly.
       child = spawn(
-        supervised ? "node" : runner,
+        supervised ? "node" : "bash",
         supervised
           ? [
               `${extensionDir}/lib/fm-sessionstart-supervisor.mjs`,
@@ -264,7 +266,7 @@ function runSessionstartHook(generation: SessionstartGeneration): Promise<Sessio
               generation.source,
               "--pi-prerequisite",
             ]
-          : ["--source", generation.source, "--pi-prerequisite"],
+          : [runner, "--source", generation.source, "--pi-prerequisite"],
         {
           detached: supervised,
           stdio: supervised
@@ -440,7 +442,8 @@ async function claimSessionstartMessage(
 
 function runGuard(): Promise<{ code: number; stderr: string }> {
   return new Promise((resolveResult) => {
-    const child = spawn(`${root}/bin/fm-turnend-guard.sh`, {
+    // Through bash for the same reason as the runner above.
+    const child = spawn("bash", [`${root}/bin/fm-turnend-guard.sh`], {
       stdio: ["pipe", "ignore", "pipe"],
     });
     let stderr = "";
@@ -462,7 +465,8 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
 // script owns its own decision and is inert outside the real primary checkout.
 function runChecker(script: string, command: string): Promise<{ code: number; stderr: string }> {
   return new Promise((resolveResult) => {
-    const child = spawn(`${root}/bin/${script}`, ["--command", command], {
+    // Through bash for the same reason as the two spawns above.
+    const child = spawn("bash", [`${root}/bin/${script}`, "--command", command], {
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
