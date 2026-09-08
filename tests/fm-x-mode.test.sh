@@ -477,20 +477,18 @@ test_poll_inbox_private_publication_rejects_unsafe_paths() {
   # A world-readable inbox is only distinguishable from a private one where the
   # filesystem carries the mode at all; where it does not, every directory reads
   # 755 and the refusal under test cannot be observed.
-  if fm_private_modes_enforcing "$TMP_ROOT"; then
-  home="$TMP_ROOT/poll-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
-  fakebin=$(make_fake_curl "$home")
-  chmod 755 "$home/state/x-inbox"
-  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
-    FMX_PAIRING_TOKEN=tok-public FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
-    "$ROOT/bin/fm-x-poll.sh"); rc=$?
-  expect_code 0 "$rc" "poll public inbox dir exit"
-  [ "$out" = "x-mode-error cannot write inbox" ] \
-    || fail "poll must reject a nonprivate inbox directory (got: $out)"
-  assert_absent "$home/state/x-inbox/req-x.json" "poll must not publish into a nonprivate inbox directory"
-  assert_no_private_artifact_temps "$home/state/x-inbox"
-  else
-    printf '# skipped the nonprivate-inbox refusal: this filesystem does not carry the mode\n'
+  if fm_test_modes_carried "$TMP_ROOT" "the nonprivate-inbox-directory refusal"; then
+    home="$TMP_ROOT/poll-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
+    fakebin=$(make_fake_curl "$home")
+    chmod 755 "$home/state/x-inbox"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
+      FMX_PAIRING_TOKEN=tok-public FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
+      "$ROOT/bin/fm-x-poll.sh"); rc=$?
+    expect_code 0 "$rc" "poll public inbox dir exit"
+    [ "$out" = "x-mode-error cannot write inbox" ] \
+      || fail "poll must reject a nonprivate inbox directory (got: $out)"
+    assert_absent "$home/state/x-inbox/req-x.json" "poll must not publish into a nonprivate inbox directory"
+    assert_no_private_artifact_temps "$home/state/x-inbox"
   fi
 
   home="$TMP_ROOT/poll-inbox-linked-dest"; mkdir -p "$home/state/x-inbox"
@@ -1046,17 +1044,19 @@ test_reply_dry_run_outbox_private_publication_rejects_unsafe_paths() {
   [ "$(jq -r .text "$hardlink")" = "old" ] || fail "reply dry-run must preserve the hardlink peer"
   assert_no_private_artifact_temps "$home/state/x-outbox"
 
-  home="$TMP_ROOT/reply-outbox-wrong-mode-dest"; mkdir -p "$home/state/x-outbox"
-  err="$home/err.txt"
-  chmod 700 "$home/state/x-outbox"
-  dest="$home/state/x-outbox/req-x.json"
-  printf '{"request_id":"req-x","text":"old"}\n' > "$dest"
-  chmod 644 "$dest"
-  out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-x "preview text" 2>"$err"); rc=$?
-  [ "$rc" -ne 0 ] || fail "reply dry-run must reject a wrong-mode outbox destination"
-  [ "$(jq -r .text "$dest")" = "old" ] || fail "reply dry-run must preserve a rejected wrong-mode destination"
-  fm_private_mode_ok "$dest" 644 || fail "reply dry-run must leave a rejected wrong-mode destination unchanged"
-  assert_no_private_artifact_temps "$home/state/x-outbox"
+  if fm_test_modes_carried "$TMP_ROOT" "the wrong-mode outbox-destination refusal"; then
+    home="$TMP_ROOT/reply-outbox-wrong-mode-dest"; mkdir -p "$home/state/x-outbox"
+    err="$home/err.txt"
+    chmod 700 "$home/state/x-outbox"
+    dest="$home/state/x-outbox/req-x.json"
+    printf '{"request_id":"req-x","text":"old"}\n' > "$dest"
+    chmod 644 "$dest"
+    out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-x "preview text" 2>"$err"); rc=$?
+    [ "$rc" -ne 0 ] || fail "reply dry-run must reject a wrong-mode outbox destination"
+    [ "$(jq -r .text "$dest")" = "old" ] || fail "reply dry-run must preserve a rejected wrong-mode destination"
+    fm_private_mode_ok "$dest" 644 || fail "reply dry-run must leave a rejected wrong-mode destination unchanged"
+    assert_no_private_artifact_temps "$home/state/x-outbox"
+  fi
 
   home="$TMP_ROOT/reply-outbox-private-success"; mkdir -p "$home"
   out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-x "preview text" 2>/dev/null); rc=$?
@@ -1235,15 +1235,17 @@ test_reply_rejects_unsafe_inbox_context_reads() {
     || fail "reply must not trust a hardlinked inbox file for Discord budget context"
   [ "$(jq -r .platform "$dest")" = "discord" ] || fail "reply must leave a hardlinked inbox lookalike unchanged"
 
-  home="$TMP_ROOT/reply-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
-  chmod 755 "$home/state/x-inbox"
-  jq -cn '{request_id:"req-public-dir",platform:"discord",reply_max_chars:1900,text:"question"}' \
-    > "$home/state/x-inbox/req-public-dir.json"
-  private_artifact_file "$home/state/x-inbox/req-public-dir.json"
-  out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-public-dir "$reply" 2>/dev/null); rc=$?
-  expect_code 0 "$rc" "reply public inbox dir read exit"
-  jq -e '.texts and (.texts|length>1)' "$home/state/x-outbox/req-public-dir.json" >/dev/null \
-    || fail "reply must not trust a nonprivate inbox directory for Discord budget context"
+  if fm_test_modes_carried "$TMP_ROOT" "the nonprivate-inbox-directory context refusal"; then
+    home="$TMP_ROOT/reply-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
+    chmod 755 "$home/state/x-inbox"
+    jq -cn '{request_id:"req-public-dir",platform:"discord",reply_max_chars:1900,text:"question"}' \
+      > "$home/state/x-inbox/req-public-dir.json"
+    private_artifact_file "$home/state/x-inbox/req-public-dir.json"
+    out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-public-dir "$reply" 2>/dev/null); rc=$?
+    expect_code 0 "$rc" "reply public inbox dir read exit"
+    jq -e '.texts and (.texts|length>1)' "$home/state/x-outbox/req-public-dir.json" >/dev/null \
+      || fail "reply must not trust a nonprivate inbox directory for Discord budget context"
+  fi
   pass "fm-x-reply rejects unsafe inbox context artifacts"
 }
 
@@ -1641,12 +1643,14 @@ test_context_registry_private_publication_rejects_unsafe_paths() {
   assert_absent "$home/external/req-x.json" "context registry must not write through a linked context directory"
   [ -L "$home/state/x-context" ] || fail "context registry must leave the rejected directory symlink in place"
 
-  home="$TMP_ROOT/context-public-dir"; mkdir -p "$home/state/x-context"
-  chmod 755 "$home/state/x-context"
-  fmx_context_registry_set "$home/state" req-x x 280; rc=$?
-  [ "$rc" -ne 0 ] || fail "context registry must reject a nonprivate context directory"
-  assert_absent "$home/state/x-context/req-x.json" "context registry must not publish into a nonprivate context directory"
-  assert_no_private_artifact_temps "$home/state/x-context"
+  if fm_test_modes_carried "$TMP_ROOT" "the nonprivate-context-directory refusal"; then
+    home="$TMP_ROOT/context-public-dir"; mkdir -p "$home/state/x-context"
+    chmod 755 "$home/state/x-context"
+    fmx_context_registry_set "$home/state" req-x x 280; rc=$?
+    [ "$rc" -ne 0 ] || fail "context registry must reject a nonprivate context directory"
+    assert_absent "$home/state/x-context/req-x.json" "context registry must not publish into a nonprivate context directory"
+    assert_no_private_artifact_temps "$home/state/x-context"
+  fi
 
   home="$TMP_ROOT/context-linked-dest"; mkdir -p "$home/state/x-context"
   chmod 700 "$home/state/x-context"
@@ -1672,16 +1676,18 @@ test_context_registry_private_publication_rejects_unsafe_paths() {
   [ "$(jq -r .platform "$hardlink")" = "x" ] || fail "context registry must preserve the hardlink peer"
   assert_no_private_artifact_temps "$home/state/x-context"
 
-  home="$TMP_ROOT/context-wrong-mode-dest"; mkdir -p "$home/state/x-context"
-  chmod 700 "$home/state/x-context"
-  dest="$home/state/x-context/req-x.json"
-  jq -cn '{request_id:"req-x",platform:"x",reply_max_chars:"280",recorded_at:1700000000}' > "$dest"
-  chmod 644 "$dest"
-  fmx_context_registry_set "$home/state" req-x discord 1900; rc=$?
-  [ "$rc" -ne 0 ] || fail "context registry must reject a wrong-mode destination"
-  [ "$(jq -r .platform "$dest")" = "x" ] || fail "context registry must preserve a rejected wrong-mode destination"
-  fm_private_mode_ok "$dest" 644 || fail "context registry must leave a rejected wrong-mode destination unchanged"
-  assert_no_private_artifact_temps "$home/state/x-context"
+  if fm_test_modes_carried "$TMP_ROOT" "the wrong-mode context-destination refusal"; then
+    home="$TMP_ROOT/context-wrong-mode-dest"; mkdir -p "$home/state/x-context"
+    chmod 700 "$home/state/x-context"
+    dest="$home/state/x-context/req-x.json"
+    jq -cn '{request_id:"req-x",platform:"x",reply_max_chars:"280",recorded_at:1700000000}' > "$dest"
+    chmod 644 "$dest"
+    fmx_context_registry_set "$home/state" req-x discord 1900; rc=$?
+    [ "$rc" -ne 0 ] || fail "context registry must reject a wrong-mode destination"
+    [ "$(jq -r .platform "$dest")" = "x" ] || fail "context registry must preserve a rejected wrong-mode destination"
+    fm_private_mode_ok "$dest" 644 || fail "context registry must leave a rejected wrong-mode destination unchanged"
+    assert_no_private_artifact_temps "$home/state/x-context"
+  fi
 
   home="$TMP_ROOT/context-private-success"; mkdir -p "$home"
   out=$(FMX_NOW_OVERRIDE=1700000000 bash -c '. "$1/bin/fm-x-lib.sh"; fmx_context_registry_set "$2/state" req-x x 280' _ "$ROOT" "$home")
@@ -1730,13 +1736,15 @@ test_context_registry_rejects_unsafe_reads() {
   [ "$(jq -r .platform "$hardlink")" = "discord" ] \
     || fail "context registry must not rewrite a hardlink peer when rejecting the local record"
 
-  home="$TMP_ROOT/context-read-wrong-mode-file"; private_artifact_dir "$home/state/x-context"
-  dest="$home/state/x-context/req-mode.json"
-  jq -cn '{request_id:"req-mode",platform:"discord",reply_max_chars:"1900",recorded_at:1700000000}' > "$dest"
-  chmod 644 "$dest"
-  out=$(fmx_context_registry_get "$home/state" req-mode)
-  [ "$(printf '%s' "$out" | jq -r .platform)" = "" ] \
-    || fail "context registry must not read a wrong-mode context file"
+  if fm_test_modes_carried "$TMP_ROOT" "the wrong-mode context-file read refusal"; then
+    home="$TMP_ROOT/context-read-wrong-mode-file"; private_artifact_dir "$home/state/x-context"
+    dest="$home/state/x-context/req-mode.json"
+    jq -cn '{request_id:"req-mode",platform:"discord",reply_max_chars:"1900",recorded_at:1700000000}' > "$dest"
+    chmod 644 "$dest"
+    out=$(fmx_context_registry_get "$home/state" req-mode)
+    [ "$(printf '%s' "$out" | jq -r .platform)" = "" ] \
+      || fail "context registry must not read a wrong-mode context file"
+  fi
   pass "context registry reads only private single-link artifacts"
 }
 

@@ -280,6 +280,67 @@ SH
 # shellcheck source=bin/fm-private-lib.sh
 . "$ROOT/bin/fm-private-lib.sh"
 
+# fm_test_modes_carried <path> <what>
+# True when the filesystem under <path> carries a POSIX mode, so a refusal that
+# can only be seen through one is worth asserting there. Where it does not,
+# this prints why <what> was skipped and returns 1. The product WAIVES such a
+# check on that mount by design, so asserting the refusal there would be
+# asserting that the fix is absent, and a test that cannot observe its subject
+# is not evidence. Wrap the whole staged case, not just its assertion: the
+# staging is what the refusal is about.
+fm_test_modes_carried() {  # <path> <what>
+  fm_private_modes_enforcing "$1" && return 0
+  printf '# skipped %s: this filesystem does not carry the mode\n' "$2"
+  return 1
+}
+
+# fm_test_install_bin <dest-bin-dir> <script>...
+# Copy each <script> from bin/ into <dest-bin-dir> TOGETHER WITH every sibling
+# it sources, transitively.
+#
+# A fixture bin/ is not a list of the scripts a case calls, it is a closure: a
+# script that cannot resolve `. "$SCRIPT_DIR/fm-<x>-lib.sh"` aborts at source
+# time, before any assertion, and hook entrypoints whose stdout and stderr are
+# a protocol abort silently. Hand-maintained lists get this wrong every time a
+# script gains a sibling, and the omission is invisible to a text sweep when
+# the installer copies through a loop variable, which is how three review
+# rounds each found more of them. Deriving the closure from the scripts
+# themselves removes the possibility rather than detecting it.
+#
+# Sourcing in bin/ is uniformly `. "<dir>/fm-<name>.sh"`, with <dir> the
+# script's own directory under some name, so the basename is the whole answer.
+# A conditional source is staged too: over-staging a real sibling costs a
+# fixture nothing, and a fixture that wants a stub writes it afterwards.
+fm_test_install_bin() {  # <dest-bin-dir> <script>...
+  local dest=$1 script cur sib
+  shift
+  local -a queue=("$@")
+  local -A staged=()
+  mkdir -p "$dest" || return 1
+  while [ "${#queue[@]}" -gt 0 ]; do
+    cur=${queue[0]}
+    queue=("${queue[@]:1}")
+    [ -z "${staged[$cur]:-}" ] || continue
+    staged[$cur]=1
+    [ -f "$ROOT/bin/$cur" ] || return 1
+    cp "$ROOT/bin/$cur" "$dest/$cur" || return 1
+    while IFS= read -r sib; do
+      [ -n "$sib" ] || continue
+      [ -n "${staged[$sib]:-}" ] || queue+=("$sib")
+    done < <(fm_test_bin_siblings "$cur")
+  done
+  for script in "$@"; do
+    [ -f "$dest/$script" ] || return 1
+  done
+}
+
+# fm_test_bin_siblings <script>: the basenames bin/<script> sources from its
+# own directory, one per line. The single spelling every bin script uses.
+fm_test_bin_siblings() {  # <script>
+  grep -oE '^[[:space:]]*\.[[:space:]]+"[^"]*/fm-[a-z0-9-]+\.sh"' "$ROOT/bin/$1" 2>/dev/null \
+    | sed -E 's#.*/##; s#"$##'
+}
+
 # fm_fake_noacl_stat <fakebin>
 # Puts a `stat` in <fakebin> that answers the mode question the way a mount
 # which cannot carry POSIX modes answers it. Every other question goes to the

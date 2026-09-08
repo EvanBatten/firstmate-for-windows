@@ -85,13 +85,8 @@ fmx_poll_shim_content() {
 fmx_single_link_file_valid() {
   local file=$1 expected_device=${2-} links device
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
-  if [ "$(uname)" = Darwin ]; then
-    links=$(stat -f %l "$file" 2>/dev/null) || return 1
-    device=$(stat -f %d "$file" 2>/dev/null) || return 1
-  else
-    links=$(stat -c %h "$file" 2>/dev/null) || return 1
-    device=$(stat -c %d "$file" 2>/dev/null) || return 1
-  fi
+  links=$(fm_private_stat_link_count "$file") || return 1
+  device=$(fm_private_stat_device "$file") || return 1
   [ "$links" = 1 ] || return 1
   [ -z "$expected_device" ] || [ "$device" = "$expected_device" ]
 }
@@ -102,16 +97,26 @@ fmx_single_link_file_mode_valid() {
   fm_private_mode_ok "$file" "$expected_mode"
 }
 
+# The device is handed back in FMX_PRIVATE_ARTIFACT_DEVICE rather than printed,
+# because a caller that reads stdout has to use a command substitution, and the
+# subshell that creates throws away everything the mode check LEARNED: the
+# per-device probe verdict bin/fm-private-lib.sh caches, and its record of a
+# mode the filesystem could not enforce. Every publication below asks this
+# first, so on a mount that carries no mode the 700 readback disagrees every
+# time and the whole probe - mktemp, two chmods, two stats, rm - would run
+# again for each artifact, on the platform whose fork price is the expensive
+# one. Nothing here writes to stdout now, so a caller wanting only the check
+# calls it plainly.
+FMX_PRIVATE_ARTIFACT_DEVICE=
+
 fmx_private_artifact_dir_device() {
   local dir=$1 device
+  FMX_PRIVATE_ARTIFACT_DEVICE=
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
-  if [ "$(uname)" = Darwin ]; then
-    device=$(stat -f %d "$dir" 2>/dev/null) || return 1
-  else
-    device=$(stat -c %d "$dir" 2>/dev/null) || return 1
-  fi
+  device=$(fm_private_stat_device "$dir") || return 1
+  [ -n "$device" ] || return 1
   fm_private_mode_ok "$dir" 700 || return 1
-  printf '%s\n' "$device"
+  FMX_PRIVATE_ARTIFACT_DEVICE=$device
 }
 
 fmx_private_artifact_dir_prepare() {
@@ -142,7 +147,8 @@ fmx_private_artifact_publish_stdin() {
     600|700) ;;
     *) return 1 ;;
   esac
-  device=$(fmx_private_artifact_dir_prepare "$dir") || return 1
+  fmx_private_artifact_dir_prepare "$dir" || return 1
+  device=$FMX_PRIVATE_ARTIFACT_DEVICE
   dest="$dir/$base"
   tmp=$(umask 077; mktemp "$dir/.${base}.fm-x.XXXXXX" 2>/dev/null) || return 1
   if ! cat > "$tmp" \
@@ -180,7 +186,8 @@ fmx_private_artifact_publish_stdin_once() {
     600|700) ;;
     *) return 2 ;;
   esac
-  device=$(fmx_private_artifact_dir_prepare "$dir") || return 2
+  fmx_private_artifact_dir_prepare "$dir" || return 2
+  device=$FMX_PRIVATE_ARTIFACT_DEVICE
   dest="$dir/$base"
   tmp=$(umask 077; mktemp "$dir/.${base}.fm-x.XXXXXX" 2>/dev/null) || return 2
   if ! cat > "$tmp" \
@@ -213,7 +220,8 @@ fmx_private_artifact_file_valid() {
     600|700) ;;
     *) return 1 ;;
   esac
-  device=$(fmx_private_artifact_dir_device "$dir") || return 1
+  fmx_private_artifact_dir_device "$dir" || return 1
+  device=$FMX_PRIVATE_ARTIFACT_DEVICE
   fmx_single_link_file_mode_valid "$dir/$base" "$mode" "$device"
 }
 
@@ -434,7 +442,8 @@ fmx_context_registry_recorded_at() {
 fmx_context_registry_prune() {
   local state=$1 dir now max_age file recorded_at age dir_device
   dir="$state/x-context"
-  dir_device=$(fmx_private_artifact_dir_device "$dir" 2>/dev/null) || return 0
+  fmx_private_artifact_dir_device "$dir" 2>/dev/null || return 0
+  dir_device=$FMX_PRIVATE_ARTIFACT_DEVICE
   now=${FMX_NOW_OVERRIDE:-$(date +%s)}
   case "$now" in
     ''|*[!0-9]*) return 0 ;;
@@ -491,7 +500,8 @@ fmx_context_registry_set() {
     return 0
   fi
   dir="$state/x-context"
-  dir_device=$(fmx_private_artifact_dir_prepare "$dir") || return 1
+  fmx_private_artifact_dir_prepare "$dir" || return 1
+  dir_device=$FMX_PRIVATE_ARTIFACT_DEVICE
   file="$dir/$rid.json"
   if { [ -e "$file" ] || [ -L "$file" ]; } \
     && ! fmx_single_link_file_mode_valid "$file" 600 "$dir_device"; then

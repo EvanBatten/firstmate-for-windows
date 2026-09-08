@@ -40,17 +40,20 @@ pe() { FM_HOME="$1" "$ROOT/bin/fm-procevent.sh" "${@:2}"; }
 # never completes outlives the suite unless it is retired explicitly - removing
 # the fixture directory does not stop an already-running child.
 PE_TRACKED=()
-# claim_runner_live <claim-root>: some claim file names a live runner pid. The
-# suite waits on this instead of a fixed sleep, because a fork costs an order of
-# magnitude more here than on the host these budgets were written for (issue #8).
+# claim_runner_live <claim-root> <source-id>: THAT source's claim names a live
+# runner pid. The suite waits on this instead of a fixed sleep, because a fork
+# costs an order of magnitude more here than on the host these budgets were
+# written for (issue #8).
+#
+# Scoped to the one source on purpose. The claim root is shared by every home in
+# the suite and holds still-blocking runners from earlier cases until they are
+# retired at the end, so a predicate that accepted any live claim would be true
+# on its first probe and leave the assertion below no window at all - the same
+# way a wait-until standing in for a settle window destroys it.
 claim_runner_live() {
-  local claim pid
-  for claim in "$1"/*.claim; do
-    [ -e "$claim" ] || continue
-    pid=$(sed -n '2p' "$claim" 2>/dev/null)
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-  done
-  return 1
+  local pid
+  pid=$(sed -n '2p' "$1/$2.claim" 2>/dev/null)
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 pe_register() {  # <home> <adapter> <source-id> -- <argv>...
@@ -887,7 +890,7 @@ HW="$TMP_ROOT/hw"; new_home "$HW"
 TRIGW="$TMP_ROOT/trigger-restart-cut"
 pe_register "$HW" lavish restart-cut-src -- "$BLOCKER" "$TRIGW" "restart cut payload" >/dev/null
 pe "$HW" reconcile >/dev/null
-fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" || true
+fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" restart-cut-src || true
 : > "$TRIGW"
 wait_for "$HW/state/.wake-queue" || fail "the restart-cut source published no event"
 assert_contains "$(wake_payloads "$HW")" "procevent lavish restart-cut-src 1" \
@@ -965,7 +968,7 @@ TRIG2="$TMP_ROOT/trigger-two"
 pe_register "$HA" lavish shared-src -- "$BLOCKER" "$TRIG2" "shared" >/dev/null
 pe_register "$HB" lavish shared-src -- "$BLOCKER" "$TRIG2" "shared" >/dev/null
 pe "$HA" reconcile >/dev/null
-fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" || true
+fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" shared-src || true
 out=$(pe "$HB" start shared-src)
 assert_contains "$out" "already owned" "a second home cannot own a source another home already owns"
 [ -z "$(wake_payloads "$HB")" ] || fail "the losing home published an event"
@@ -988,7 +991,7 @@ TRIG4="$TMP_ROOT/trigger-four"
 HZ="$TMP_ROOT/hz"; new_home "$HZ"
 pe_register "$HZ" lavish orphan-src -- "$BLOCKER" "$TRIG4" "orphan" >/dev/null
 pe "$HZ" reconcile >/dev/null
-fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" || true
+fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" orphan-src || true
 orphan_pid=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/orphan-src.claim" 2>/dev/null)
 if [ -z "$orphan_pid" ] || ! kill -0 "$orphan_pid" 2>/dev/null; then
   fail "orphan fixture runner did not start"

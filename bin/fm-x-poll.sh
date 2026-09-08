@@ -79,7 +79,7 @@ emit_error_once() {
 }
 
 clear_error() {
-  fmx_private_artifact_dir_device "$STATE" >/dev/null 2>&1 || return 0
+  fmx_private_artifact_dir_device "$STATE" 2>/dev/null || return 0
   rm -f "$ERROR_FILE" 2>/dev/null || true
 }
 
@@ -95,7 +95,7 @@ emit_claim_error_once() {
 }
 
 clear_claim_error() {
-  fmx_private_artifact_dir_device "$STATE" >/dev/null 2>&1 || return 0
+  fmx_private_artifact_dir_device "$STATE" 2>/dev/null || return 0
   rm -f "$CLAIM_ERROR_FILE" 2>/dev/null || true
 }
 

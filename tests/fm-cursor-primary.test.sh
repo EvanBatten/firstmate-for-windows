@@ -50,17 +50,20 @@ CURSOR_PAYLOAD='{"session_id":"sess-cursor","generation_id":"gen-1","loop_count"
 CLAUDE_STOP_PAYLOAD='{"session_id":"sess-claude","stop_hook_active":false}'
 
 install_scripts() {
-  local dir=$1 f
+  local dir=$1
   mkdir -p "$dir/bin" "$dir/docs"
-  for f in fm-turnend-guard-cursor.sh fm-turnend-guard.sh fm-sessionstart-cursor.sh \
-           fm-sessionstart-run.sh fm-sessionstart-nudge.sh fm-arm-pretool-check.sh \
-           fm-cd-pretool-check.sh fm-claude-stop-autoarm.sh fm-hook-host-lib.sh \
-           fm-primary-scope-lib.sh fm-supervision-lib.sh fm-wake-lib.sh \
-           fm-session-lock-lib.sh fm-cursor-lib.sh fm-operational-input.sh \
-           fm-supervision-instructions.sh fm-harness.sh fm-lock.sh \
-           fm-gate-refuse-lib.sh fm-proc-lib.sh fm-timing-lib.sh; do
-    cp "$ROOT/bin/$f" "$dir/bin/$f"
-  done
+  # The entrypoints this suite runs, plus every sibling they source: these are
+  # hooks, so a sibling missing from the fixture aborts them at source time
+  # before any assertion and with their protocol streams empty.
+  fm_test_install_bin "$dir/bin" \
+    fm-turnend-guard-cursor.sh fm-turnend-guard.sh fm-sessionstart-cursor.sh \
+    fm-sessionstart-run.sh fm-sessionstart-nudge.sh fm-arm-pretool-check.sh \
+    fm-cd-pretool-check.sh fm-claude-stop-autoarm.sh fm-hook-host-lib.sh \
+    fm-primary-scope-lib.sh fm-supervision-lib.sh fm-wake-lib.sh \
+    fm-session-lock-lib.sh fm-cursor-lib.sh fm-operational-input.sh \
+    fm-supervision-instructions.sh fm-harness.sh fm-lock.sh \
+    fm-gate-refuse-lib.sh fm-proc-lib.sh fm-timing-lib.sh \
+    || fail "could not stage the fixture bin for $dir"
   cp "$ROOT/bin/fm-arm-command-policy.mjs" "$dir/bin/fm-arm-command-policy.mjs"
   cp "$ROOT/bin/fm-cd-command-policy.mjs" "$dir/bin/fm-cd-command-policy.mjs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
