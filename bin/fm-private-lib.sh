@@ -98,13 +98,22 @@
 # at all. Nobody else can create a name in a directory they cannot write, which
 # is what makes the substitution impossible rather than unlikely.
 #
-# The guard costs the relaxation nothing on the mounts it exists for. A mount
-# that stores no mode synthesizes one from base 0755 for a directory and 0644
-# for a file, and a umask only CLEARS bits, so the 022 bits can never appear
-# there under any umask - the guard is unreachable on exactly those mounts. On a
-# mode-carrying filesystem a group-writable directory is the one whose check
-# must not be waived anyway, and declining to measure hands it the same verdict
-# the measurement would have: enforcing.
+# THE GUARD IS PROVED ON GIT BASH, AND ONLY THERE. On a Git Bash `noacl` mount
+# the synthesized mode is a fixed base - 0755 for a directory, 0644 for a file -
+# masked by the reading process's umask (measured, docs/windows/measurement.md
+# row 21), and a umask only CLEARS bits, so the 022 bits cannot appear under
+# any umask and the guard is unreachable there. On a mode-carrying filesystem a
+# group-writable directory is the one whose check must not be waived anyway,
+# and declining to measure hands it the same verdict the measurement would
+# have: enforcing.
+#
+# KNOWN GAP, NOT HANDLED. Nothing makes every mode-dropping filesystem
+# synthesize its mode the way Git Bash does. One that reports a directory as
+# group- or other-writable - from its mount options, say, rather than from the
+# reader's umask - trips this guard before any probe runs, so the strict branch
+# is reinstated there and every assertion routed through this owner REFUSES:
+# the misfire this library exists to remove, back on that filesystem. No such
+# filesystem has been measured here, and none is claimed as covered.
 #
 # What that defends is write access the mode SHOWS. An ACL that grants another
 # account write without appearing in the mode bits is not defended, and neither
@@ -130,10 +139,12 @@
 # entirely on the filesystem's own access control rather than on the mode bits.
 # That is what decision D6 settled for Git Bash, where the home and the temp
 # directory sit under the user's NTFS profile directory and Windows keeps them
-# private to that user by ACL. The capability is MEASURED and not
-# platform-gated, so the same silence covers any other mount that cannot carry
-# a mode - an exFAT, FAT or NFS FM_HOME or TMPDIR on a POSIX host - where the
-# claim is that mount's to make and the NTFS argument does not carry it.
+# private to that user by ACL. That is the only mode-dropping mount measured.
+# Because the capability is measured rather than platform-gated, a waiver on
+# any other mount that cannot carry a mode would be just as silent, and the
+# NTFS argument would not carry the privacy claim there. Whether such a mount
+# is relaxed at all is not claimed: the probe guard above can keep it strict
+# (the KNOWN GAP).
 
 if [ -n "${FM_PRIVATE_LIB_SOURCED:-}" ]; then
   return 0

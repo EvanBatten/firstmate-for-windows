@@ -142,14 +142,50 @@ fs_eval() {  # <fakebin> <script>
 
 # --- the probe --------------------------------------------------------------
 
+# "enforcing" is also what the probe's directory guard answers WITHOUT
+# measuring, so this verdict alone cannot tell a probe that watched the mode
+# move from one that never ran. Two things keep the guard from answering for
+# it. The directory is given a known mode through the fixture, so the ambient
+# umask - 022 on one host, 002 on another - cannot hand the guard a
+# group-writable directory. And the fixture's `stat` records every mode it
+# reads back off a probe file, so the case asserts the measurement itself: 644
+# after the probe's chmod 0644, then 600 after its chmod 0600. A probe that is
+# skipped, for any reason, leaves no readbacks and fails here.
 test_probe_measures_a_mount_that_carries_modes() {
-  local dir out
+  local dir fakebin out readbacks
   dir=$(case_dir probe-enforcing)
-  out=$(fs_eval "$(enforcing_fs "$dir")" "
+  fakebin=$(enforcing_fs "$dir")
+  mv "$fakebin/stat" "$fakebin/stat-enforcing"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'ENFORCING_STAT=%s\n' "$(printf '%q' "$fakebin/stat-enforcing")"
+    printf 'READBACKS=%s\n' "$(printf '%q' "$dir/probe-readbacks")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %a:*/.fm-private-probe.*|%Lp:*/.fm-private-probe.*)
+    answer=$("$ENFORCING_STAT" "$@") || exit 1
+    printf '%s\n' "$answer" >> "$READBACKS"
+    printf '%s\n' "$answer"
+    exit 0
+    ;;
+esac
+exec "$ENFORCING_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  out=$(fs_eval "$fakebin" "
+    chmod 0700 '$dir'
     fm_private_modes_enforcing '$dir' && echo enforcing || echo relaxed
   ")
   [ "$out" = enforcing ] \
     || fail "a mount whose chmod 0600 reads back 600 must measure as enforcing, got '$out'"
+  readbacks=$(cat "$dir/probe-readbacks" 2>/dev/null) || readbacks=
+  [ "$readbacks" = "644
+600" ] || fail "the enforcing verdict did not come from the probe watching its mode move 644 then 600, readbacks were '$readbacks'"
   pass "private-lib: the probe measures a mode-carrying mount as enforcing"
 }
 
