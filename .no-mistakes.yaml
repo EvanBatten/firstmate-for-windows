@@ -34,8 +34,11 @@ document:
 # .github/workflows/ci.yml owns broad regression (behavior suite, platform,
 # security, Herdr, tmux, and lifecycle coverage). A full-suite override here
 # would duplicate CI and defeat the targeted Test contract.
+# `bash` in front because no-mistakes hands this line to cmd.exe on Windows,
+# which cannot run a bare `bin/fm-lint.sh` (issue #20); a POSIX host resolves
+# `bash` to the same interpreter the shebang names, so nothing changes there.
 commands:
-  lint: 'bin/fm-lint.sh'
+  lint: 'bash bin/fm-lint.sh'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.
