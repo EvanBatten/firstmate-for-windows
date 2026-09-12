@@ -2448,6 +2448,38 @@ Two fixture timing budgets surfaced behind the fixed mode gate and were sized to
 Three of those five wait FOR a forked runner and became deadlines on that runner; the other two are windows for an ABSENCE, where there is nothing to wait for and a predicate that is already true would leave no window at all, so those stayed sleeps and were sized through `fm_test_settle`.
 `fm-procevent` still stops at a different timing-sensitive case from run to run on this box, at 23 to 30 of its 57, which is the spawn-cost family issue #8 owns and not this change.
 
+## Linux baseline: the lint job (issue #16)
+
+The first Linux CI run of the port (run 33382170838) lost its Lint job to exit 143 after about twelve minutes, with no finding printed, and the cause was memory rather than a cap.
+One root, `tests/fm-pending-reply.test.sh`, costs 15307 MiB under ShellCheck's extended analysis and 929 MiB without it, so at that size no sharding or worker count could have saved the job.
+Those two figures are quoted from the issue #16 bisect and were deliberately not re-measured: this host has 15 GiB of RAM against the runner's 16 GB, so a run of that file without the directive could only swap or be OOM-killed here and would have measured the host rather than the file.
+The fix is a file-wide `extended-analysis=false` directive on that one root; it gives up SC2317 and SC2329 there and nothing else, and the libraries it sources stay under full analysis as their own roots.
+
+Measured 2026-09-12 at `ef3ea22` on WSL2 Ubuntu (kernel 5.15.167.4, 16 vCPU, 15 GiB RAM, 4 GiB swap) with ShellCheck 0.11.0 and actionlint 1.7.12 pinned, GNU time reporting the largest descendant's maximum resident set.
+Every figure below is measured on that host unless the sentence says otherwise; wall times are this box's and do not transfer to the 4-vCPU runner.
+
+| run | commit | peak RSS | wall | outcome |
+| --- | --- | --- | --- | --- |
+| `bin/fm-lint.sh --jobs 1 tests/fm-pending-reply.test.sh`, before | not run here | not measured, see above | not measured | the runner's exit 143 |
+| the same, after | `ef3ea22` | 928 MiB | 35 s | clean, exit 0 |
+| `CI=true bin/fm-lint.sh` (full canonical set, two workers), after | `ef3ea22` | 8084 MiB largest worker, 12429 MiB both summed | 744 s | clean, exit 0 |
+| the same under `FM_LINT_JOBS=1` (the same two shards, one at a time) | `ef3ea22` | 8135 MiB largest worker, 12475 MiB both summed | 1333 s | clean, exit 0 |
+
+The job was budgeted 12 GiB, 12582912 KiB, which is the 16 GB runner less a share for its agent, the kernel and page cache, and the summed peak is over that.
+A one-second sampler of every live ShellCheck process shows the two shards really do hold their peaks together: its peak of 12727036 KiB lands within 136 KiB of the arithmetic sum of the two workers' maxima, and 270 of the run's 754 samples sit above the budget, so the job carries the overflow for about four and a half of its twelve minutes rather than touching it once.
+The overflow is 144124 KiB, 140.7 MiB, or 1.15 per cent.
+So the job is not proven to fit: what is proven is that the kill this section is about is fixed, since the worst root fell from 15307 MiB to under 1 GiB and no single worker now comes near the ceiling, while the headroom the budget asked for is not there.
+
+Ranking all 349 canonical roots individually names the whole of that overflow, and it is two scripts rather than a broad problem.
+`bin/fm-teardown.sh` costs 8289836 KiB, 7.91 GiB, and `bin/fm-watch.sh` costs 4441636 KiB, 4.24 GiB; added they come to within 0.03 per cent of the sampler's concurrent peak, and each matches its own shard's worker maximum to within 0.15 per cent.
+Only 15 of the 349 roots exceed 2 GiB, and `tests/fm-pending-reply.test.sh` now ranks 256th at 979536 KiB.
+A second directive on `bin/fm-teardown.sh` would suppress no finding that fires today, since that file is clean with flow analysis on and off, and it would take the file itself from 8315456 KiB to 645652 KiB; what it would cost is SC2317 and SC2329 permanently on the port's largest product script, 2928 lines and 85 functions, which at least ten other scripts source, and that is a heavier trade than the same directive on a test file, so it was not added.
+`FM_LINT_JOBS=1` is the other lever and is newly effective: before the fix one root exceeded the whole budget so worker count could not help, whereas now the peak is the sum of two shards, and serialising them would put it at `max_worker_rss_kib`, 7.95 GiB.
+Its cost is wall time, measured here as 744 s to 1333 s, a factor of 1.79, and the ratio rather than the absolute is what transfers, because two workers occupy only two of the runner's four cores, so the job's wall is the slower shard under two workers and the two shards added under one.
+
+The directive was proved live rather than assumed: a copy of the file with an unreachable command appended draws no SC2317 with the directive and draws it once that one line is removed, while SC2034 keeps firing in both halves, so the copy was being read and only the flow-graph family changed.
+No green Linux lint run exists yet, so the end-to-end proof is still outstanding, and the Lint job on the pull request carrying this change is what will supply it.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
@@ -2526,4 +2558,9 @@ printf '{"a":["w1","w7"]}' | jq -r '.a[]' | od -c            # w 1 \r \n w 7 \r 
 m=$(printf '{"a":["w1","w7"]}' | jq -r '.a[]'); printf '(%s)' "${m//$'\n'/ }" | od -c   # ( w 1 \r   w 7 )
 bash -c '. bin/backends/herdr.sh; fm_backend_herdr_jq_rows "$1" ".a[]"' _ '{"a":["w1","w7"]}' | od -c   # w 1 \n w 7 \n
 python -c "import socket; print(hasattr(socket,'AF_UNIX'))"   # False - why the eventwait smoke test is red
+
+# issue 16 (the lint kill; needs pinned ShellCheck 0.11.0, and about 16 GB free without the directive)
+/usr/bin/time -v shellcheck --norc --external-sources tests/fm-pending-reply.test.sh 2>&1 | grep -E 'Maximum resident|Elapsed'
+# the whole job as CI runs it, with a sampler that catches the two shards overlapping
+( while sleep 1; do ps -C shellcheck -o rss= | awk '{s+=$1} END {print s+0}'; done ) & CI=true bin/fm-lint.sh --telemetry /tmp/lint.tsv; kill %1
 ```
