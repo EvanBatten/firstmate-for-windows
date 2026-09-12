@@ -31,9 +31,13 @@ if [ "${FM_HERDR_VERSION_FLOOR_LIVE_E2E:-0}" != 1 ]; then
   exit 0
 fi
 
-for tool in herdr jq curl shasum; do
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
+
+for tool in herdr jq curl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
+fm_test_sha256_stdin </dev/null >/dev/null 2>&1 || { echo "skip: neither sha256sum nor shasum found"; exit 0; }
 [ -x "$LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $LAB_HELPER"; exit 0; }
 
 case "$(uname -s)/$(uname -m)" in
@@ -59,6 +63,7 @@ LAB_SESSION=$("$LAB_HELPER" name fm-herdr-version-floor)
 cleanup() {
   local status=$?
   rm -rf "$TMP_ROOT"
+  fm_test_cleanup
   exit "$status"
 }
 trap cleanup EXIT
@@ -117,7 +122,7 @@ while IFS=$'\t' read -r TAG VERSION_PREFIX EXPECTED MACOS_AARCH64_DIGEST MACOS_X
     "https://github.com/ogulcancelik/herdr/releases/download/$TAG/$ASSET"; then
     fail "could not download the pinned Herdr $TAG $ASSET asset; the floor mapping is unverified"
   fi
-  GOT_DIGEST=$(shasum -a 256 "$DIR/herdr" | awk '{print $1}')
+  GOT_DIGEST=$(fm_test_sha256 "$DIR/herdr")
   [ "$GOT_DIGEST" = "$DIGEST" ] \
     || fail "Herdr $TAG $ASSET digest changed (expected $DIGEST, got $GOT_DIGEST); re-measure the floor mapping before trusting it"
   chmod +x "$DIR/herdr"

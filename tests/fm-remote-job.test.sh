@@ -354,11 +354,7 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "the first delayed jo
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the second delayed job could not be reaped"
 pass "queued jobs receive a fresh bounded execution window"
 
-if command -v shasum >/dev/null 2>&1; then
-  EMPTY_SHA=$(: | shasum -a 256 | awk '{print $1}')
-else
-  EMPTY_SHA=$(: | sha256sum | awk '{print $1}')
-fi
+EMPTY_SHA=$(: | fm_test_sha256_stdin)
 mkdir -p "$REMOTE_HOME/state"
 REPLY_LOG_REL=state/parent-replies.status
 PREEMPT_SIDE_EFFECT="$TMP_ROOT/preempt-side-effect"

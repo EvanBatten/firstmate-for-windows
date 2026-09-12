@@ -261,11 +261,7 @@ PROTOCOL_HOME="$TMP_ROOT/protocol-home"
 mkdir -p "$PROTOCOL_HOME/config" "$PROTOCOL_HOME/data" "$PROTOCOL_HOME/state"
 : > "$TMP_ROOT/flag-payload"
 FLAG_BYTES=$(LC_ALL=C wc -c < "$TMP_ROOT/flag-payload" | tr -d ' ')
-if command -v shasum >/dev/null 2>&1; then
-  FLAG_HASH=$(shasum -a 256 "$TMP_ROOT/flag-payload" | awk '{print $1}')
-else
-  FLAG_HASH=$(sha256sum "$TMP_ROOT/flag-payload" | awk '{print $1}')
-fi
+FLAG_HASH=$(fm_test_sha256 "$TMP_ROOT/flag-payload")
 FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   put config/trace-context "$FLAG_BYTES" "$FLAG_HASH" 1 < "$TMP_ROOT/flag-payload" >/dev/null \
   || fail "the remote inherit receiver refused a declared inheritable item"

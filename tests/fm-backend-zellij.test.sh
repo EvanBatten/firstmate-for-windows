@@ -108,16 +108,11 @@ zellij_multi_tab_response() {  # <dir> <n> <tab1> <name1> [<tab2> <name2> ...]
 # build canned fixtures for the home-scoped tab titles this adapter now
 # creates and matches.
 zellij_expected_root_hash() {  # <root>
-  local root real
+  local root real digest
   root=$1
   real=$(cd "$root" && pwd -P) || return 1
-  if command -v shasum >/dev/null 2>&1; then
-    printf '%s' "$real" | shasum -a 256 | awk '{print substr($1,1,8)}'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    printf '%s' "$real" | sha256sum | awk '{print substr($1,1,8)}'
-  else
-    printf '%s' "$real" | cksum | awk '{printf "%08x", $1}'
-  fi
+  digest=$(printf '%s' "$real" | fm_test_sha256_stdin) || return 1
+  printf '%s\n' "${digest:0:8}"
 }
 
 zellij_expected_home_label() {  # [home] [root]

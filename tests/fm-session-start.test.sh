@@ -657,14 +657,9 @@ network_stage_report() {
 }
 
 hash_file_for_test() {
-  local file=$1
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$file" | awk '{print "sha256:" $1}'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print "sha256:" $1}'
-  else
-    cksum "$file" | awk '{print "cksum:" $1 ":" $2}'
-  fi
+  local digest
+  digest=$(fm_test_sha256 "$1") || return 1
+  printf 'sha256:%s\n' "$digest"
 }
 
 install_pi_turnend_extension_fixture() {

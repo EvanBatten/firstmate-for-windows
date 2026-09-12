@@ -279,10 +279,6 @@ remote_env() {
   "$@"
 }
 
-sha256_file() {
-  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
-}
-
 # The correlation token of the newest record in the remote secondmate's
 # steering inbox: a remote steer is delivered as a durable record there, so
 # the corr a reply must echo is read from the record body, never from typed
@@ -455,7 +451,7 @@ projects_snapshot() { # <dir>
     cd "$dir" 2>/dev/null || exit 0
     find . -print | LC_ALL=C sort | while IFS= read -r path; do
       if [ -f "$path" ] && [ ! -L "$path" ]; then
-        printf '%s %s\n' "$path" "$(sha256_file "$path")"
+        printf '%s %s\n' "$path" "$(fm_test_sha256 "$path")"
       else
         printf '%s\n' "$path"
       fi
@@ -667,7 +663,7 @@ PROTOCOL_HOME="$TMP_ROOT/protocol-home"
 mkdir -p "$PROTOCOL_HOME/config" "$PROTOCOL_HOME/data" "$PROTOCOL_HOME/state"
 printf 'complete inherited payload\n' > "$TMP_ROOT/inherit-complete"
 inherit_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/inherit-complete" | tr -d ' ')
-inherit_hash=$(sha256_file "$TMP_ROOT/inherit-complete")
+inherit_hash=$(fm_test_sha256 "$TMP_ROOT/inherit-complete")
 if printf 'complete' | FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   put config/crew-harness "$inherit_bytes" "$inherit_hash" 1 >/dev/null 2>&1; then
   fail "remote inheritance published a truncated payload"
@@ -678,7 +674,7 @@ FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   < "$TMP_ROOT/inherit-complete" >/dev/null
 printf 'stale inherited payload\n' > "$TMP_ROOT/inherit-stale"
 inherit_stale_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/inherit-stale" | tr -d ' ')
-inherit_stale_hash=$(sha256_file "$TMP_ROOT/inherit-stale")
+inherit_stale_hash=$(fm_test_sha256 "$TMP_ROOT/inherit-stale")
 if FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   put config/crew-harness "$inherit_stale_bytes" "$inherit_stale_hash" 1 \
   < "$TMP_ROOT/inherit-stale" >/dev/null 2>&1; then
