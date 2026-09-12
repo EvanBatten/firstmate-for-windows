@@ -15,7 +15,7 @@ set -u
 # shellcheck source=tests/herdr-test-safety.sh
 . "$(dirname "${BASH_SOURCE[0]}")/herdr-test-safety.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 77; }
 
 # These cases script a canned fake CLI; a Herdr pane identity leaked in from the
 # developer's own terminal would make the adapter resolve a launcher that this

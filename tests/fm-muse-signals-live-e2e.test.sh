@@ -118,7 +118,7 @@ fi
 
 if [ "${FM_MUSE_SIGNALS_LIVE:-0}" != 1 ]; then
   echo "skip: set FM_MUSE_SIGNALS_LIVE=1 to run the real Muse signal drift guard"
-  exit 0
+  exit 77
 fi
 
 [ -x "$MUSE_BIN" ] || fail "FM_MUSE_SIGNALS_LIVE=1 but no real muse executable is installed on PATH"

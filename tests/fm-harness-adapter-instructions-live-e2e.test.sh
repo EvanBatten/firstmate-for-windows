@@ -9,7 +9,7 @@ set -u
 
 if [ "${FM_HARNESS_ADAPTER_INSTRUCTION_EVAL:-0}" != 1 ]; then
   echo "skip: set FM_HARNESS_ADAPTER_INSTRUCTION_EVAL=1 and FM_HARNESS_ADAPTER_LOCAL_MODEL=<model> to run the local instruction evaluation"
-  exit 0
+  exit 77
 fi
 
 # shellcheck source=tests/lib.sh

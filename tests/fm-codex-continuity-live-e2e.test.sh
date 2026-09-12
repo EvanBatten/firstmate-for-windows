@@ -5,7 +5,7 @@ set -u
 
 if [ "${FM_CODEX_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_CODEX_LIVE_E2E=1 to run the Codex continuity regression"
-  exit 0
+  exit 77
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

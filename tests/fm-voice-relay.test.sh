@@ -23,7 +23,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; exit 0; }
+command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; exit 77; }
 
 TMP_ROOT=$(fm_test_tmproot fm-voice-relay)
 HOME_FIXTURE="$TMP_ROOT/home"

@@ -14,6 +14,12 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The adapter drives the same runner, so it stages its results through the
+# POSIX-only extension host too. See tests/fm-procevent.test.sh for the gate.
+command -v node >/dev/null 2>&1 || fm_test_gate_skip "node not found"
+fm_test_node_has_posix_uid \
+  || fm_test_gate_skip "extension host requires a POSIX user identity (process.getuid absent on this node)"
+
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_ROOT=$(fm_test_tmproot fm-procevent-when-tests)
 export FM_PROCEVENT_CLAIM_ROOT="$TMP_ROOT/claims"

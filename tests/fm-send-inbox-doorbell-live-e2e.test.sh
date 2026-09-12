@@ -32,7 +32,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [ "${FM_SEND_INBOX_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_SEND_INBOX_LIVE_E2E=1 to run the live steering-inbox doorbell guard"
-  exit 0
+  exit 77
 fi
 
 command -v tmux >/dev/null 2>&1 || { echo "not ok - FM_SEND_INBOX_LIVE_E2E=1 but tmux is not installed" >&2; exit 1; }

@@ -64,6 +64,14 @@ JS
 # ~52s loop period so a regression would emit a second follow-up.
 test_unacknowledged_recovery_is_announced_once_per_generation() {
   local repo home plugin fakebin out status lock_pid messages
+  # This case alone drives the Pi extension through the extension host, which is
+  # POSIX-only by upstream design (issue #36). The rest of the suite runs
+  # anywhere, so this is a per-case skip and the suite stays a pass: only a
+  # suite that runs none of its cases declares a gate skip.
+  if ! command -v node >/dev/null 2>&1 || ! fm_test_node_has_posix_uid; then
+    echo "skip: extension host requires a POSIX user identity (process.getuid absent on this node)"
+    return 0
+  fi
   repo="$TMP_ROOT/t1-root"
   home="$TMP_ROOT/t1-home"
   fakebin="$TMP_ROOT/t1-fakebin"

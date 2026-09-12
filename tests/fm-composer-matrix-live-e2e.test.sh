@@ -31,7 +31,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [ "${FM_COMPOSER_MATRIX_LIVE:-0}" != 1 ]; then
   echo "skip: set FM_COMPOSER_MATRIX_LIVE=1 to run the live composer-matrix guard"
-  exit 0
+  exit 77
 fi
 
 command -v tmux >/dev/null 2>&1 || { echo "not ok - FM_COMPOSER_MATRIX_LIVE=1 but tmux is not installed" >&2; exit 1; }

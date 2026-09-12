@@ -619,6 +619,41 @@ SH
   pass "a suite that skipped its first case and ran the rest is a pass"
 }
 
+# The rule above only tells the truth if every whole-suite gate declares itself.
+# A gate that still exits 0 is published green having run nothing, on every
+# platform, which is worse than the heuristic it replaced. So no suite may print
+# a skip: line and then exit 0. Heredoc bodies are fixtures, not this suite's
+# own gates, and are skipped: the cases above deliberately write one.
+test_no_suite_gates_with_exit_zero() {
+  local offenders
+  offenders=$(awk '
+    FNR == 1 { heredoc = ""; mark = 0 }
+    heredoc != "" {
+      if ($0 ~ "^[ \t]*" heredoc "[ \t]*$") heredoc = ""
+      next
+    }
+    /<<-?[ \t]*[^ \t]+[ \t]*$/ {
+      tag = $0
+      sub(/[ \t]+$/, "", tag)
+      sub(/^.*<<-?[ \t]*/, "", tag)
+      gsub(/[^A-Za-z0-9_]/, "", tag)
+      if (tag != "") { heredoc = tag; next }
+    }
+    /skip:/ && /(echo|printf)/ {
+      if ($0 ~ /skip:.*exit[ \t]+0([ \t]*[;}]|[ \t]*$)/) print FILENAME ":" FNR
+      mark = FNR
+      next
+    }
+    mark && FNR > mark && FNR <= mark + 4 {
+      if ($0 ~ /^[ \t]*exit[ \t]+0[ \t]*;?[ \t]*$/) { print FILENAME ":" FNR; mark = 0 }
+      else if ($0 ~ /^[ \t]*(fi|esac)[ \t]*$/) mark = 0
+    }
+  ' "$ROOT"/tests/*.test.sh)
+  [ -z "$offenders" ] \
+    || fail "these gates print skip: and then exit 0, so they are published as passes that ran nothing - use fm_test_gate_skip or exit 77: $(printf '%s' "$offenders" | tr '\n' ' ')"
+  pass "no suite gate-skips with exit 0"
+}
+
 test_fail_on_gate_skip_token() {
   local tmp skip_f out rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fail-skip.XXXXXX")
@@ -1213,6 +1248,7 @@ test_aggregate_exit_behavior
 test_gate_skip_accounting
 test_gate_skip_is_the_exit_status
 test_a_first_case_skip_is_not_a_gate_skip
+test_no_suite_gates_with_exit_zero
 test_fail_on_gate_skip_token
 test_exclude_family
 test_portable_shard_union_and_coverage_guard

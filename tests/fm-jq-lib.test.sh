@@ -26,7 +26,7 @@ set -u
 # Every case wraps a REAL jq: the library's contract is about what it does to
 # jq's own byte stream, and a scripted answer cannot prove a filter still means
 # what it meant.
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 
 TMP_ROOT=$(fm_test_tmproot fm-jq-lib-tests)
 

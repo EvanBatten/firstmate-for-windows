@@ -61,6 +61,17 @@ pass() {
   printf 'ok - %s\n' "$1"
 }
 
+# fm_test_gate_skip <reason>: this suite is running none of its cases because a
+# stated precondition is absent. Exit 77 is the declaration bin/fm-test-run.sh
+# counts as a gate skip; the printed line is the message a human reads and what
+# --fail-on-gate-skip greps. Only whole-suite gates use this. A single case that
+# cannot run prints "skip: ..." and returns 0: the suite still ran, so it is a
+# pass, and reporting it as a skip is what this rule replaced.
+fm_test_gate_skip() {
+  printf 'skip: %s\n' "$1"
+  exit 77
+}
+
 # --- self-cleaning temp root ------------------------------------------------
 #
 # fm_test_tmproot <prefix> echoes a fresh temp dir and registers it for removal

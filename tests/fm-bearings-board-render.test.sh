@@ -15,8 +15,8 @@ BOARD="$ROOT/bin/fm-bearings-board.sh"
 HARNESS="$ROOT/tests/assets/board-render-harness.mjs"
 TMP_ROOT=$(fm_test_tmproot fm-bearings-board-render)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
-command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
+command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 77; }
 
 make_home() {  # <name>
   local home="$TMP_ROOT/$1" fakebin

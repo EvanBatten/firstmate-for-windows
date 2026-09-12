@@ -20,8 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-command -v zellij >/dev/null 2>&1 || { echo "skip: zellij not found"; exit 0; }
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the zellij adapter)"; exit 0; }
+command -v zellij >/dev/null 2>&1 || { echo "skip: zellij not found"; exit 77; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the zellij adapter)"; exit 77; }
 
 # shellcheck source=tests/zellij-test-safety.sh
 . "$ROOT/tests/zellij-test-safety.sh"
