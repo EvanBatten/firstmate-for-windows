@@ -359,6 +359,96 @@ test_run_on_an_msys_userland_with_a_live_harness_still_reemits() {
   pass "run wrapper: an MSYS transport that keeps its harness parent keeps the run tier"
 }
 
+# A transport that keeps its harness parent asks the ancestry question TWICE in
+# one process: once to decide whether the run tier can take the helm at all,
+# and again through the lock library to decide whether a completed startup is
+# this owner's. On MSYS each of those costs a pwsh, and the memo that exists to
+# stop the second one lives inside a command substitution, where a subshell's
+# assignment is discarded. Both halves of the fix are needed to make this case
+# pass: without the idempotent prime the second call re-walks, and without the
+# caller-shell prime the first walk is thrown away.
+#
+# Counted at pwsh rather than at the wall clock, and against a stubbed digest:
+# the real bin/fm-session-start.sh walks through bin/fm-lock.sh as well, and on
+# a Windows host every walk in the suite roots at the same boundary pid, so a
+# per-root count could not tell the wrapper's walks from the digest's.
+test_run_compact_on_a_resolving_msys_transport_walks_once() {
+  local dir fakes log lock walks status=0
+  dir="$TMP_ROOT/run-msys-resolving-walks"
+  make_run_primary "$dir"
+  # The WHOLE bin directory: these entrypoints source siblings at load time,
+  # and a fixture missing one aborts the hook before any assertion.
+  rm -rf "$dir/bin"
+  cp -R "$ROOT/bin" "$dir/bin" || fail "could not stage the fixture bin directory"
+  cat > "$dir/bin/fm-session-start.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/digest-args"
+exit 0
+SH
+  chmod +x "$dir/bin/fm-session-start.sh"
+
+  fakes=$(fm_fakebin "$dir/fakebin")
+  cat > "$fakes/uname" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' MINGW64_NT-10.0-26200
+SH
+  # An MSYS ps: -o is rejected outright, so bin/fm-proc-lib.sh's capability
+  # probe selects the Win32 branch and the walk has to go through pwsh.
+  cat > "$fakes/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do
+  case "$a" in
+    -o) echo "ps: unknown option -- o" >&2; exit 1 ;;
+  esac
+done
+case "${1:-}" in
+  -W)
+    printf '%s\n' '      PID    PPID    PGID     WINPID  TTY   UID    STIME COMMAND'
+    printf '%s\n' '   273976       0       0      90888  ?       0 03:02:31 C:\Users\u\claude.exe'
+    ;;
+esac
+SH
+  # Rows rooted at whatever pid is asked for, so the same fake serves a Linux
+  # host - where the requested pid itself is the boundary, MSYS /proc having no
+  # row for it - and a Git Bash host, where the real /proc segment runs up to
+  # the suite's own fixture harness first. CRLF, as the real one prints.
+  cat > "$fakes/pwsh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "${FM_PROC_QUERY_PID:-}" >> "${FM_PWSH_LOG:-/dev/null}"
+printf '%s\t%s\t%s\r\n' "${FM_PROC_QUERY_PID:-0}" 90777 'C:\Program Files\Git\usr\bin\bash.exe'
+printf '%s\t%s\t%s\r\n' 90777 90888 'C:\Users\u\.local\bin\claude.exe'
+printf '%s\t%s\t%s\r\n' 90888 0 'C:\Program Files\nodejs\node.exe'
+SH
+  chmod +x "$fakes/uname" "$fakes/ps" "$fakes/pwsh"
+
+  log="$dir/pwsh.log"
+  : > "$log"
+  # The lock has to name the pid the library ITSELF resolves under these fakes,
+  # which differs by host: the fake harness above on Linux, the suite's own
+  # fixture harness on Git Bash, where the real /proc segment is walked first.
+  lock=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys PATH="$fakes:$RUN_PATH" FM_PWSH_LOG="$log" \
+    bash -c '. "$0"; fm_harness_ancestry_pid' "$dir/bin/fm-session-lock-lib.sh") \
+    || fail "the fixture ancestry named no harness, so this case would test the divert instead"
+  printf '%s\n' "$lock" > "$dir/state/.lock"
+  printf '%s\n' "$lock" > "$dir/state/.session-start-complete"
+
+  : > "$log"
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys PATH="$fakes:$RUN_PATH" FM_PWSH_LOG="$log" \
+    FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$dir" FM_HOME="$dir" \
+    "$dir/bin/fm-sessionstart-run.sh" --source compact </dev/null >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "run wrapper compact on a resolving MSYS transport"
+  assert_grep '--reemit' "$dir/digest-args" \
+    "the run tier was lost: a resolving MSYS compact must still reach the digest with --reemit"
+  walks=$(grep -c . "$log" || true)
+  [ "$walks" -eq 1 ] \
+    || fail "one session open asked its own ancestry twice and paid $walks pwsh walk(s) for it"
+  pass "run wrapper: a resolving MSYS compact resolves its ancestry once for the whole open"
+}
+
 test_run_clear_and_compact_reemit() {
   local root out source status
   for source in clear compact; do
@@ -1111,6 +1201,40 @@ test_run_resume_on_msys_delegates_without_walking_the_ancestry() {
   pass "run wrapper: an MSYS resume delegates to the nudge without walking the ancestry"
 }
 
+# A severed open walks its own ancestry to decide it cannot take the helm, then
+# hands the open to the nudge, which walks the SAME ancestry again to decide
+# whether the lock is this session's. That second walk can only ever repeat the
+# first one's answer: a live lock holder within the nudge's eight parents would
+# be a harness the wrapper's own sixteen-hop walk had already named, and the
+# wrapper would not have diverted. So the wrapper passes its answer down as an
+# argument and the nudge stops asking. The one case where the two could differ
+# is a pid Windows has reused, where the old check went silent for a lock that
+# was not this session's; firing the nudge there is the safer direction,
+# because bin/fm-lock.sh can then reclaim it.
+#
+# The `args=` assertion is what keeps the `ppid=` count honest: a fixture where
+# nothing walked at all would satisfy a ppid count on its own.
+test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once() {
+  local root="$TMP_ROOT/run-msys-foreign-lock" log out status=0 walks probes
+  make_run_primary "$root"
+  log="$root/ps-calls.log"
+  : > "$log"
+  # Alive for the nudge's liveness probe, and not an ancestor under a table
+  # where every parent is init: exactly the lock that used to cost the walk.
+  printf '%s\n' "$$" > "$root/state/.lock"
+  out=$(run_hook_counting "$root" "$log" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper startup on a severed MSYS ancestry with a live foreign lock"
+  [ "$out" = "$NUDGE_LINE" ] \
+    || fail "a severed MSYS open with a foreign lock printed something other than the nudge: $out"
+  walks=$(grep -c 'args=' "$log" 2>/dev/null) || walks=0
+  [ "$walks" -eq 1 ] \
+    || fail "the severed open must walk its ancestry exactly once, walked $walks time(s)"
+  probes=$(grep -c 'ppid=' "$log" 2>/dev/null) || probes=0
+  [ "$probes" -eq 1 ] \
+    || fail "the nudge repeated the wrapper's ancestry question: $probes parent lookups for one open"
+  pass "run wrapper: a diverted MSYS open hands its ancestry answer to the nudge instead of paying for it twice"
+}
+
 test_run_reads_source_from_the_hook_payload() {
   local root="$TMP_ROOT/run-payload" out status=0
   make_run_primary "$root"
@@ -1237,6 +1361,7 @@ test_run_startup_runs_the_full_digest
 test_run_on_an_msys_userland_nudges_instead_of_the_digest
 test_run_on_a_posix_userland_still_runs_the_digest
 test_run_on_an_msys_userland_with_a_live_harness_still_reemits
+test_run_compact_on_a_resolving_msys_transport_walks_once
 test_run_clear_and_compact_reemit
 test_run_rebuild_forwards_source_to_drifted_instruction_refresh
 test_run_compact_without_completion_refreshes_before_finishing_startup
@@ -1244,6 +1369,7 @@ test_run_clear_without_completion_finishes_startup
 test_run_clear_rejects_previous_owner_completion
 test_run_resume_delegates_to_the_nudge
 test_run_resume_on_msys_delegates_without_walking_the_ancestry
+test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
