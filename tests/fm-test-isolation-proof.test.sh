@@ -102,6 +102,7 @@ SH
 #!/usr/bin/env bash
 echo
 echo "skip: herdr not found"
+exit 77
 SH
   chmod +x "$proof" "$repo/bin/fm-test-run.sh" "$repo/tests/fm-proof-"*.test.sh
   set +e

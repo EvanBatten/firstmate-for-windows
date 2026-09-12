@@ -86,8 +86,12 @@
 # Exit status is non-zero if any selected script exits non-zero, a configured
 # --fail-on-gate-skip token appears, the measured duration exceeds
 # --max-wall-ms, timing-artifact finalization fails, or a concurrent worker
-# violates its isolation check. Other gate skips (first meaningful line
-# matching ^skip:) remain successful and are counted as skipped_gate.
+# violates its isolation check. A script that exits 77 declares a gate skip: it
+# ran none of its cases because a stated precondition was absent. That is the
+# only thing a gate skip is. It remains successful and is counted as
+# skipped_gate. Exit 0 is a pass whatever the script printed, so a suite whose
+# first case prints "skip:" and then runs the rest still counts as a pass.
+# The category is a declaration by the script, never an inference from output.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -312,6 +316,12 @@ family_for_basename() {
       ;;
   esac
 }
+
+# A script declares "I ran none of my cases, a stated precondition was absent"
+# by exiting with this status. 77 is the autotools and Meson SKIP convention;
+# bash reserves 126 and 127, the timeout wrapper uses 124, and nothing else in
+# bin/ or tests/ uses 77. tests/lib.sh fm_test_gate_skip is the writing end.
+GATE_SKIP_RC=77
 
 expected_gate_skip_for_family() {
   case "$1" in
@@ -1346,14 +1356,16 @@ select_changed() {
   fi
 }
 
-detect_gate_skip() {
-  # True when the first non-empty output line is a skip: gate message.
-  local file=$1 first
-  first=$(awk 'NF { print; exit }' "$file" 2>/dev/null || true)
-  case "$first" in
-    skip:*) return 0 ;;
-    *) return 1 ;;
+# Count output lines matching <pattern>. Informational only: these numbers make
+# a green that ran nothing visible without putting a heuristic back into the
+# gate-skip rule, which is the exit status alone.
+count_output_lines() {  # <file> <ere>
+  local file=$1 pattern=$2 n
+  n=$(grep -c -E "$pattern" "$file" 2>/dev/null || true)
+  case "$n" in
+    '' | *[!0-9]*) n=0 ;;
   esac
+  printf '%s\n' "$n"
 }
 
 # True when any output line contains "skip: <token>" (token may contain spaces).
@@ -1409,7 +1421,7 @@ with open(records_file, encoding="utf-8") as fh:
         line = line.rstrip("\n")
         if not line:
             continue
-        path, family, expected, exit_s, dur_s, gate = line.split("\t")
+        path, family, expected, exit_s, dur_s, gate, ok_s, skipped_s = line.split("\t")
         scripts.append({
             "path": path,
             "family": family,
@@ -1417,6 +1429,8 @@ with open(records_file, encoding="utf-8") as fh:
             "duration_ms": int(dur_s),
             "exit": int(exit_s),
             "gate_skip": gate == "true",
+            "cases_ok": int(ok_s),
+            "cases_skipped": int(skipped_s),
         })
 
 families = []
@@ -1904,7 +1918,7 @@ family_bump() {
 
 record_script_result() {
   local script=$1 rc=$2 duration=$3 out=$4 end_iso=$5
-  local base family expected gate_skip fail_delta
+  local base family expected gate_skip fail_delta cases_ok cases_skipped
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
@@ -1914,24 +1928,31 @@ record_script_result() {
     rc=1
   fi
 
+  # The gate skip is the exit status and nothing else. A script that exits 0 is
+  # a pass however much it printed, and one that exits 77 is a skip however
+  # little. The real exit is reported so a reader sees the declaration.
   gate_skip=false
-  if [ "$rc" -eq 0 ] && detect_gate_skip "$out"; then
+  if [ "$rc" -eq "$GATE_SKIP_RC" ]; then
     gate_skip=true
     SKIPPED_GATE=$((SKIPPED_GATE + 1))
   fi
 
-  printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s\n' \
-    "$end_iso" "$script" "$rc" "$duration" "$gate_skip"
+  cases_ok=$(count_output_lines "$out" '^ok -')
+  cases_skipped=$(count_output_lines "$out" '^skip:')
+
+  printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s cases_ok=%s cases_skipped=%s\n' \
+    "$end_iso" "$script" "$rc" "$duration" "$gate_skip" "$cases_ok" "$cases_skipped"
 
   fail_delta=0
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -ne 0 ] && [ "$gate_skip" != true ]; then
     FAILED=$((FAILED + 1))
     fail_delta=1
     AGG_RC=1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$script" "$family" "$expected" "$rc" "$duration" "$gate_skip" >>"$RECORDS"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$script" "$family" "$expected" "$rc" "$duration" "$gate_skip" \
+    "$cases_ok" "$cases_skipped" >>"$RECORDS"
   family_bump "$family" "$duration" "$fail_delta"
   TOTAL=$((TOTAL + 1))
 }
@@ -1986,7 +2007,7 @@ run_one_serial() {
     "$begin_iso" "$script" "$family" "$expected"
 
   set +e
-  # Stream live output while retaining a copy for gate-skip detection.
+  # Stream live output while retaining a copy for the token check and counts.
   run_script_bounded "$script" "$out" 1 "s$TOTAL"
   rc=$?
   set -e
@@ -2138,7 +2159,7 @@ fi
 # Slowest scripts (top 15) from records.
 if [ -s "$RECORDS" ]; then
   rank=1
-  sort -t$'\t' -k5,5nr "$RECORDS" | head -n 15 | while IFS=$'\t' read -r path _family _expected _rc duration _gate; do
+  sort -t$'\t' -k5,5nr "$RECORDS" | head -n 15 | while IFS=$'\t' read -r path _family _expected _rc duration _gate _ok _skipped; do
     printf 'FM_TEST_SLOWEST rank=%s script=%s duration_ms=%s\n' \
       "$rank" "$path" "$duration"
     rank=$((rank + 1))

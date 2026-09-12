@@ -462,7 +462,7 @@ SH
   [ "$end_n" -eq 1 ] || fail "expected one FM_TEST_END, got $end_n"
   grep -Eq '^FM_TEST_BEGIN .+ family=unclassified expected_gate_skip=none$' "$out" \
     || fail "BEGIN line missing family/expected_gate_skip: $(grep '^FM_TEST_BEGIN' "$out")"
-  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false$' "$out" \
+  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false cases_ok=[0-9]+ cases_skipped=[0-9]+$' "$out" \
     || fail "END line missing exit/duration/gate_skip: $(grep '^FM_TEST_END' "$out")"
   summary=$(grep '^FM_TEST_SUMMARY ' "$out" || true)
   assert_contains "$summary" "total=1" "summary total"
@@ -530,12 +530,12 @@ test_gate_skip_accounting() {
   cat >"$skip_f" <<'SH'
 #!/usr/bin/env bash
 echo "skip: herdr not found"
-exit 0
+exit 77
 SH
   chmod +x "$skip_f"
   "$RUNNER" --json "$json" "$skip_f" >"$out" 2>"$tmp/err.txt" \
     || fail "gate-skip fixture must exit 0 from the runner"
-  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true$' "$out" \
+  grep -Eq '^FM_TEST_END .+ exit=77 duration_ms=[0-9]+ gate_skip=true cases_ok=[0-9]+ cases_skipped=[0-9]+$' "$out" \
     || fail "END must mark gate_skip=true: $(grep '^FM_TEST_END' "$out")"
   grep -q 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=1' "$out" \
     || fail "summary must count skipped_gate=1: $(grep FM_TEST_SUMMARY "$out")"
@@ -550,6 +550,75 @@ assert doc["summary"]["failed"] == 0
   pass "gate-skip accounting is honest and non-failing"
 }
 
+# A gate skip is the exit status, not the shape of the output. tests/lib.sh
+# prints "# host time scale N" when it is sourced on a slow host, so a suite
+# that sources lib.sh and then gates prints that comment ahead of its skip line.
+# Carrying the comment here reproduces the Windows shape on every platform.
+test_gate_skip_is_the_exit_status() {
+  local tmp skip_f out json end summary
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-exit77.XXXXXX")
+  skip_f="$tmp/gated.test.sh"
+  out="$tmp/out.txt"
+  json="$tmp/timing.json"
+  cat >"$skip_f" <<'SH'
+#!/usr/bin/env bash
+echo "# host time scale 5 (about 20 ms per exec)"
+echo "skip: herdr not found"
+exit 77
+SH
+  chmod +x "$skip_f"
+  "$RUNNER" --json "$json" "$skip_f" >"$out" 2>"$tmp/err.txt" \
+    || { end=$(grep '^FM_TEST_END' "$out" || true); rm -rf "$tmp"
+         fail "a declared gate skip must not fail the runner: $end"; }
+  # Read the markers before the cleanup so a failure can name what it saw.
+  end=$(grep '^FM_TEST_END' "$out" || true)
+  summary=$(grep '^FM_TEST_SUMMARY ' "$out" || true)
+  printf '%s\n' "$end" \
+    | grep -Eq "^FM_TEST_END .+ exit=77 duration_ms=[0-9]+ gate_skip=true cases_ok=0 cases_skipped=1$" \
+    || { rm -rf "$tmp"; fail "exit 77 must be recorded as a gate skip: $end"; }
+  printf '%s\n' "$summary" | grep -q 'total=1 failed=0 skipped_gate=1' \
+    || { rm -rf "$tmp"; fail "summary must count exit 77 as a skip, not a failure: $summary"; }
+  python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert doc["scripts"][0]["gate_skip"] is True, doc["scripts"][0]
+assert doc["scripts"][0]["exit"] == 77, doc["scripts"][0]
+assert doc["summary"]["skipped_gate"] == 1
+assert doc["summary"]["failed"] == 0
+' "$json" || { rm -rf "$tmp"; fail "JSON must record the declared gate skip"; }
+  rm -rf "$tmp"
+  pass "a gate skip is exit 77, whatever the script printed before it"
+}
+
+# The other direction: a suite whose first case skips for want of an optional
+# package, and then runs the rest, is a pass. Reading the category off the first
+# printed line put two such suites in the skip column on Linux.
+test_a_first_case_skip_is_not_a_gate_skip() {
+  local tmp ran_f out end summary
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ran.XXXXXX")
+  ran_f="$tmp/ran.test.sh"
+  out="$tmp/out.txt"
+  cat >"$ran_f" <<'SH'
+#!/usr/bin/env bash
+echo "skip: installed pi package not found"
+echo "ok - one case"
+exit 0
+SH
+  chmod +x "$ran_f"
+  "$RUNNER" "$ran_f" >"$out" 2>"$tmp/err.txt" \
+    || { end=$(grep '^FM_TEST_END' "$out" || true); rm -rf "$tmp"
+         fail "a suite that ran a case must pass the runner: $end"; }
+  end=$(grep '^FM_TEST_END' "$out" || true)
+  summary=$(grep '^FM_TEST_SUMMARY ' "$out" || true)
+  printf '%s\n' "$end" \
+    | grep -Eq "^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false cases_ok=1 cases_skipped=1$" \
+    || { rm -rf "$tmp"; fail "a first-case skip must not be a gate skip: $end"; }
+  printf '%s\n' "$summary" | grep -q 'total=1 failed=0 skipped_gate=0' \
+    || { rm -rf "$tmp"; fail "summary must count the suite as a pass: $summary"; }
+  rm -rf "$tmp"
+  pass "a suite that skipped its first case and ran the rest is a pass"
+}
+
 test_fail_on_gate_skip_token() {
   local tmp skip_f out rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fail-skip.XXXXXX")
@@ -558,7 +627,7 @@ test_fail_on_gate_skip_token() {
   cat >"$skip_f" <<'SH'
 #!/usr/bin/env bash
 echo "skip: herdr not found"
-exit 0
+exit 77
 SH
   chmod +x "$skip_f"
   set +e
@@ -1032,7 +1101,7 @@ SH
   cat >"$repo/$d" <<'SH'
 #!/usr/bin/env bash
 echo "skip: herdr not found" >&2
-exit 0
+exit 77
 SH
   chmod +x "$repo/$d"
   set +e
@@ -1045,7 +1114,7 @@ SH
 
   "$runner" --jobs 2 "$d" >"$tmp/out6" 2>"$tmp/err6" \
     || { rm -rf "$tmp"; fail "ordinary parallel stderr gate skip must remain successful"; }
-  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true$' "$tmp/out6" \
+  grep -Eq '^FM_TEST_END .+ exit=77 duration_ms=[0-9]+ gate_skip=true cases_ok=[0-9]+ cases_skipped=[0-9]+$' "$tmp/out6" \
     || { rm -rf "$tmp"; fail "parallel stderr gate skip was not recorded"; }
   grep -q 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=1' "$tmp/out6" \
     || { rm -rf "$tmp"; fail "parallel stderr skip summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out6")"; }
@@ -1142,6 +1211,8 @@ test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior
 test_gate_skip_accounting
+test_gate_skip_is_the_exit_status
+test_a_first_case_skip_is_not_a_gate_skip
 test_fail_on_gate_skip_token
 test_exclude_family
 test_portable_shard_union_and_coverage_guard

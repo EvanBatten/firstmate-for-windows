@@ -47,8 +47,8 @@
 #   FM_ISOLATION_SUMMARY total=<n> failed=<n> concurrency=<n> duration_ms=<n>
 #
 # Exit status is the aggregate of candidate exits: non-zero if any candidate
-# fails, gate-skips (first meaningful line matching ^skip:), if isolation checks
-# fail, or if the candidate set is empty. A gate skip names the pool, candidate,
+# fails, gate-skips (exits 77), if isolation checks fail, or if the candidate
+# set is empty. A gate skip names the pool, candidate,
 # and missing prerequisite and cannot admit concurrency. A script that fails
 # only under concurrency must be removed from the candidate set and investigated;
 # this harness never retries a failure into green.
@@ -233,13 +233,11 @@ global_git_snapshot() {
   git config --global --list 2>/dev/null | LC_ALL=C sort || true
 }
 
-detect_gate_skip() {
-  local file=$1 first
-  first=$(awk 'NF { print; exit }' "$file" 2>/dev/null || true)
-  case "$first" in
-    skip:*) printf '%s\n' "$first" ;;
-    *) return 1 ;;
-  esac
+first_skip_line() {
+  # The human message behind a gate skip, for the log only. The category is the
+  # candidate's exit status; this never decides it.
+  local file=$1
+  awk '/^skip:/ { print; exit }' "$file" 2>/dev/null || true
 }
 
 write_json_artifact() {
@@ -428,7 +426,11 @@ wait_one_slot() {
   script=${CANDIDATES[$((idx - 1))]}
   rc=$(cat "$work/out/exit" 2>/dev/null || echo 1)
   duration=$(cat "$work/out/duration_ms" 2>/dev/null || echo 0)
-  if [ "$rc" -eq 0 ] && gate_skip=$(detect_gate_skip "$work/out/output"); then
+  # A candidate that declares a gate skip (exit 77) proved no concurrency, so
+  # the proof fails on it. The status is the declaration; the skip: line is only
+  # quoted so the log names the missing prerequisite.
+  if [ "$rc" -eq 77 ]; then
+    gate_skip=$(first_skip_line "$work/out/output")
     rc=1
     log "pool $POOL candidate gate-skipped without proving concurrency: $script: $gate_skip"
   fi
