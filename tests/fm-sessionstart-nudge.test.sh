@@ -378,7 +378,7 @@ test_run_compact_on_a_resolving_msys_transport_walks_once() {
   make_run_primary "$dir"
   # The WHOLE bin directory: these entrypoints source siblings at load time,
   # and a fixture missing one aborts the hook before any assertion.
-  rm -rf "$dir/bin"
+  rm -rf "${dir:?}/bin"
   cp -R "$ROOT/bin" "$dir/bin" || fail "could not stage the fixture bin directory"
   cat > "$dir/bin/fm-session-start.sh" <<SH
 #!/usr/bin/env bash
@@ -428,6 +428,7 @@ SH
   # The lock has to name the pid the library ITSELF resolves under these fakes,
   # which differs by host: the fake harness above on Linux, the suite's own
   # fixture harness on Git Bash, where the real /proc segment is walked first.
+  # shellcheck disable=SC2016 # $0 must expand in the child shell, not here.
   lock=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
     OSTYPE=msys PATH="$fakes:$RUN_PATH" FM_PWSH_LOG="$log" \
     bash -c '. "$0"; fm_harness_ancestry_pid' "$dir/bin/fm-session-lock-lib.sh") \
