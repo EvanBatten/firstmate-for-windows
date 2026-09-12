@@ -121,6 +121,61 @@ export FM_REMOTE_JOB_TIMEOUT=5
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$ROOT/bin/fm-remote-job-lib.sh"
 
+# Every ownership record the worker writes is a start identity read through
+# bin/fm-wake-lib.sh. This library used to spell it as `ps -o lstart=`, which
+# Git Bash's ps rejects, so no worker there could publish readiness. On Linux
+# and macOS the old spelling also passes the first half, which makes this a
+# Windows pin there; the second half is what keeps it from being vacuous
+# anywhere, because a comparator that cannot say no certifies nothing.
+PROC_START_SELF=$(fm_remote_job_process_start "$$") \
+  || fail "the remote job library could not read this shell's start identity"
+PROC_START_FRESH=$(fm_pid_start_identity "$$") \
+  || fail "the process identity owner could not read this shell's start identity"
+fm_pid_start_identity_equal "$PROC_START_FRESH" "$PROC_START_SELF" \
+  || fail "two reads of one live shell's start identity did not compare equal"$'\n'"recorded: $PROC_START_SELF"$'\n'"current:  $PROC_START_FRESH"
+sleep 30 &
+PROC_START_OTHER_PID=$!
+PROC_START_OTHER=$(fm_remote_job_process_start "$PROC_START_OTHER_PID") \
+  || fail "the remote job library could not read a child's start identity"
+kill "$PROC_START_OTHER_PID" 2>/dev/null || true
+wait "$PROC_START_OTHER_PID" 2>/dev/null || true
+if fm_pid_start_identity_equal "$PROC_START_OTHER" "$PROC_START_SELF"; then
+  fail "a different process's start identity compared equal to this shell's"$'\n'"this shell: $PROC_START_SELF"$'\n'"child:      $PROC_START_OTHER"
+fi
+pass "remote job start identities read on this host and tell two processes apart"
+
+# A job's group leader is recorded while it waits to be armed and only then
+# execs the job command, so what the worker records must still name it after
+# the exec. An exec rewrites the command line on every platform, which is why
+# the record is the start half of the identity and not all of it; on Linux the
+# start survives the exec. Git Bash backs an exec with a new Windows process
+# whose creation time is new as well, so no start recorded before an exec can
+# match after it there, and the case says so instead of asserting it.
+if [ "$FM_PROC_OS" = msys ]; then
+  printf '# skipped group leader start survives exec: an exec creates a new Windows process on this platform\n'
+else
+  PROC_EXEC_ARM="$TMP_ROOT/exec-arm"
+  ( while [ ! -f "$PROC_EXEC_ARM" ]; do sleep 0.01; done; exec sleep 30 ) &
+  PROC_EXEC_PID=$!
+  PROC_EXEC_BEFORE=$(fm_remote_job_process_start "$PROC_EXEC_PID") \
+    || fail "the remote job library could not read an unarmed group leader's start identity"
+  : > "$PROC_EXEC_ARM"
+  PROC_EXEC_ARGS=
+  for _ in $(seq 1 100); do
+    PROC_EXEC_ARGS=$(fm_remote_job_process_command "$PROC_EXEC_PID" 2>/dev/null || true)
+    case "$PROC_EXEC_ARGS" in sleep*) break ;; esac
+    sleep 0.05
+  done
+  case "$PROC_EXEC_ARGS" in sleep*) ;; *) fail "the armed group leader never exec'd its command (args: $PROC_EXEC_ARGS)" ;; esac
+  PROC_EXEC_AFTER=$(fm_remote_job_process_start "$PROC_EXEC_PID") \
+    || fail "the remote job library could not read an exec'd group leader's start identity"
+  kill "$PROC_EXEC_PID" 2>/dev/null || true
+  wait "$PROC_EXEC_PID" 2>/dev/null || true
+  fm_pid_start_identity_equal "$PROC_EXEC_AFTER" "$PROC_EXEC_BEFORE" \
+    || fail "a group leader's recorded start stopped naming it once it exec'd"$'\n'"before: $PROC_EXEC_BEFORE"$'\n'"after:  $PROC_EXEC_AFTER"
+  pass "a group leader's recorded start still names it after it execs"
+fi
+
 LOCAL_BIN_PARENT="$ACCOUNT_HOME/.local"
 LOCAL_BIN_TARGET="$TMP_ROOT/local-bin-target"
 mkdir -p "$LOCAL_BIN_PARENT" "$LOCAL_BIN_TARGET"

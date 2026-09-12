@@ -88,6 +88,26 @@
 # shellcheck source=bin/fm-private-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
 
+# bin/fm-wake-lib.sh owns process identity - how a pid's start and command
+# line read on each platform, and how two readings compare - and it sources
+# bin/fm-proc-lib.sh, which owns a pid's arguments and process group. This
+# library used to spell all three as `ps -o` fields, which Git Bash's ps
+# rejects, so no worker there could publish readiness or stage a job. It is
+# loaded once, here, because every reader below runs inside a command
+# substitution that would otherwise re-source it on every poll. The wake
+# library assigns FM_ROOT, FM_HOME, STATE and its queue paths and creates STATE
+# when sourced, and this library must leak none of them into the worker or the
+# remote entrypoint, so they are local to the load; STATE names this library's
+# own directory, which exists, so that mkdir creates nothing.
+_fm_remote_job_load_process_identity() {  # <bin-dir>
+  local FM_ROOT FM_HOME STATE FM_STATE_OVERRIDE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  command -v fm_pid_start_identity_equal >/dev/null 2>&1 && return 0
+  STATE=$1
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$1/fm-wake-lib.sh"
+}
+_fm_remote_job_load_process_identity "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 FM_REMOTE_JOB_LABEL=dev.firstmate.remote-job
 FM_REMOTE_JOB_MAX_BYTES=${FM_REMOTE_JOB_MAX_BYTES:-1048576}
 FM_REMOTE_JOB_QUEUE_TIMEOUT=${FM_REMOTE_JOB_QUEUE_TIMEOUT:-360}
@@ -773,7 +793,7 @@ fm_remote_job_stage_owner_alive() { # <stage-dir>
   [ "$pid" -gt 1 ] || return 1
   recorded_start=$(fm_remote_job_read_single_line "$stage/.owner-start" 256 2>/dev/null) || return 1
   actual_start=$(fm_remote_job_process_start "$pid" 2>/dev/null) || return 1
-  [ "$recorded_start" = "$actual_start" ]
+  fm_pid_start_identity_equal "$actual_start" "$recorded_start"
 }
 
 fm_remote_job_reap_stale() { # <account-home>
@@ -907,29 +927,30 @@ fm_remote_job_worker_ready_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.r
 fm_remote_job_worker_identity_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.identity"; }
 fm_remote_job_worker_lock_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.lock"; }
 
-fm_remote_job_process_start() {
-  local pid=$1 ps_bin value
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  value=$("$ps_bin" -p "$pid" -o lstart= 2>/dev/null) || return 1
-  [ -n "$value" ] || return 1
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  printf '%s\n' "$value"
+# The start identity every ownership record here holds (a lock's `start`, a
+# stage's `.owner-start`, a claim's `owner_start`, `supervisor_start` and
+# `group_start`), read from its owner, bin/fm-wake-lib.sh. It is the start half
+# of the process identity, not all of it, because a group leader is recorded
+# before it execs the job command and an exec rewrites the command line; the
+# lock pairs it with fm_remote_job_process_command itself. Compare two of these
+# only with fm_pid_start_identity_equal, never `=`. A record written by a build
+# that read `ps -o lstart=` never compares equal, so an upgrade reclaims each
+# live worker and job claim once.
+fm_remote_job_process_start() { # <pid>
+  fm_pid_start_identity "$1"
 }
 
-fm_remote_job_process_command() {
-  local pid=$1 ps_bin value
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  value=$("$ps_bin" -p "$pid" -o command= 2>/dev/null) || return 1
+fm_remote_job_process_command() { # <pid>
+  local value
+  value=$(fm_proc_args "$1" 2>/dev/null) || return 1
   [ -n "$value" ] || return 1
   case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
   printf '%s\n' "$value"
 }
 
 fm_remote_job_process_pgid() { # <pid>
-  local pid=$1 ps_bin value
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  value=$("$ps_bin" -p "$pid" -o pgid= 2>/dev/null) || return 1
-  value=$(printf '%s' "$value" | tr -d '[:space:]')
+  local value
+  value=$(fm_proc_pgid "$1" 2>/dev/null) || return 1
   case "$value" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "$value"
 }
@@ -1017,7 +1038,7 @@ fm_remote_job_lock_owner_matches_process() {
   [ "$pid" -gt 1 ] || return 1
   recorded_start=$(fm_remote_job_read_single_line "$lock/start" 256) || return 1
   actual_start=$(fm_remote_job_process_start "$pid") || return 1
-  [ "$recorded_start" = "$actual_start" ] || return 1
+  fm_pid_start_identity_equal "$actual_start" "$recorded_start" || return 1
   recorded_command=$(fm_remote_job_read_single_line "$lock/command" 8192) || return 1
   actual_command=$(fm_remote_job_process_command "$pid") || return 1
   [ "$recorded_command" = "$actual_command" ] || return 1
@@ -1025,7 +1046,7 @@ fm_remote_job_lock_owner_matches_process() {
 }
 
 fm_remote_job_worker_owned_alive() {
-  local root=$1 account_home=$2 lock pid pid_file identity_file command ps_bin
+  local root=$1 account_home=$2 lock pid pid_file identity_file command
   [ "${FM_REMOTE_JOB_ACTIVE:-}" != 1 ] || return 0
   fm_remote_job_prepare_state "$account_home" || return 1
   lock=$(fm_remote_job_worker_lock_path)
@@ -1044,8 +1065,7 @@ fm_remote_job_worker_owned_alive() {
   [ ! -e "$lock/pid" ] && [ ! -L "$lock/pid" ] &&
     [ ! -e "$lock/start" ] && [ ! -L "$lock/start" ] &&
     [ ! -e "$lock/command" ] && [ ! -L "$lock/command" ] || return 1
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  command=$("$ps_bin" -p "$pid" -o command= 2>/dev/null) || return 1
+  command=$(fm_remote_job_process_command "$pid") || return 1
   case "$command" in *"$root/bin/fm-remote-job-worker.sh"*) FM_REMOTE_JOB_OWNER_PID=$pid; return 0 ;; esac
   return 1
 }

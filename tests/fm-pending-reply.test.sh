@@ -140,6 +140,44 @@ test_normal_correlated_reply_resolves_once() {
   pass "normal correlated reply resolves once (idempotent)"
 }
 
+# A recovery send records who is sending, so a later tick can tell a live send
+# from a crashed one. That identity used to be `ps -o lstart= -o command=`,
+# which Git Bash's ps rejects, so the recovery path returned before it sent
+# anything there. On Linux and macOS the old spelling also reads, which makes
+# the first half a Windows pin; the stale-sender half keeps it from being
+# vacuous anywhere, because a comparator that cannot say no certifies nothing.
+test_recovery_sender_identity_reads_and_discriminates() {
+  local home state corr rec self_pid self_identity fresh other_pid other_identity
+  home=$(setup_parent sender-identity)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=1500
+  self_pid=${BASHPID:-$$}
+  self_identity=$(fm_pending_reply_pid_identity "$self_pid") \
+    || fail "the recovery sender's identity could not be read on this host"
+  fresh=$(fm_pid_identity "$self_pid") || fail "the process identity owner could not read this shell"
+  fm_pid_identity_equal "$fresh" "$self_identity" \
+    || fail "two reads of one live sender did not compare equal"$'\n'"recorded: $self_identity"$'\n'"current:  $fresh"
+  sleep 30 &
+  other_pid=$!
+  other_identity=$(fm_pending_reply_pid_identity "$other_pid") \
+    || fail "a child's identity could not be read on this host"
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "sender identity")
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$rec" recovery_sender_pid "$self_pid" || fail "sender pid commit failed"
+  fm_pending_reply_set "$rec" recovery_sender_identity "$self_identity" || fail "sender identity commit failed"
+  fm_pending_reply_sender_alive "$rec" || fail "a live recovery sender read as dead"
+  # The child's pid is live, but the recorded identity is this shell's: exactly
+  # the shape of a recycled pid, which must never read as the sender.
+  fm_pending_reply_set "$rec" recovery_sender_pid "$other_pid" || fail "reused pid commit failed"
+  if fm_pending_reply_sender_alive "$rec"; then
+    kill "$other_pid" 2>/dev/null || true
+    fail "a different live process read as the recorded recovery sender"$'\n'"sender: $self_identity"$'\n'"child:  $other_identity"
+  fi
+  kill "$other_pid" 2>/dev/null || true
+  wait "$other_pid" 2>/dev/null || true
+  pass "recovery sender identity reads on this host and tells two processes apart"
+}
+
 test_completed_turn_no_report_triggers_one_recovery() {
   local home state corr hook_log rec
   home=$(setup_parent one-recovery)
@@ -1261,6 +1299,7 @@ test_failed_send_discards_undelivered_expectation() {
 # --- run --------------------------------------------------------------------
 
 test_normal_correlated_reply_resolves_once
+test_recovery_sender_identity_reads_and_discriminates
 test_completed_turn_no_report_triggers_one_recovery
 test_recovery_attempt_is_never_reinjected
 test_recovery_reply_resolves_original

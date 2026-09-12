@@ -270,7 +270,30 @@ _fm_proc_createtime_ms() {
 }
 
 fm_pid_identity() {
-  local pid=$1 out proc_root stat_line starttime cmdline_hex identity_key
+  _fm_pid_identity_read "$1" with-command
+}
+
+# fm_pid_start_identity <pid>: the start half of fm_pid_identity alone - the
+# same dialect and the same `key=value`, with no command line after it.
+#
+# It exists for a record taken of a process that has not yet exec'd what it is
+# going to run: a remote job's group leader is recorded while it waits to be
+# armed (bin/fm-remote-job-worker.sh). An exec rewrites the command line on
+# every platform, so a whole identity recorded before it never compares equal
+# after it, while Linux's starttime and macOS's lstart survive it. What it
+# gives up is the command line's guard against a reused pid that started at
+# the same instant, so a caller that can afford the whole identity uses it.
+# It is no cure on Git Bash, where an exec is a new Windows process with a new
+# creation time: there no start recorded before an exec survives it.
+#
+# Its strings are compared only by fm_pid_start_identity_equal, never with `=`,
+# for the reason given there.
+fm_pid_start_identity() {
+  _fm_pid_identity_read "$1" start-only
+}
+
+_fm_pid_identity_read() {  # <pid> <with-command|start-only>
+  local pid=$1 part=$2 out proc_root stat_line starttime cmdline_hex identity_key
   local -a stat_fields
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
@@ -318,6 +341,10 @@ fm_pid_identity() {
         identity_key=proc-starttime
       fi
     fi
+    if [ "$part" = start-only ]; then
+      printf '%s=%s\n' "$identity_key" "$starttime"
+      return 0
+    fi
     cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
     [ -n "$cmdline_hex" ] || return 1
     printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
@@ -326,12 +353,17 @@ fm_pid_identity() {
   # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
   # written under one locale but re-read under the machine's ambient locale, which
   # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
-  out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+  if [ "$part" = start-only ]; then
+    out=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+  else
+    out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+  fi
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
 }
 
-# The single owner of every comparison of two fm_pid_identity strings. Nothing
+# The single owner of every comparison of two fm_pid_identity strings (and,
+# directly below it, fm_pid_start_identity_equal of two start halves). Nothing
 # in this repo may compare them with `=` or `!=` directly, because one of the
 # dialects above is not exact: `proc-createtime-ms` is a clock reading carrying
 # a bounded per-read jitter (see _fm_proc_createtime_ms), so a recorder and a
@@ -390,6 +422,26 @@ fm_pid_identity_equal() {  # <current> <recorded>
   [ "$current_rest" = "$recorded_rest" ] || return 1
   case "$current_rest" in cmdline-hex=*) ;; *) return 1 ;; esac
   case "${current_rest#cmdline-hex=}" in ''|*[!0-9a-f]*) return 1 ;; esac
+  delta=$(( 10#$current_ms - 10#$recorded_ms ))
+  [ "$delta" -ge 0 ] || delta=$(( -delta ))
+  [ "$delta" -le "$FM_PID_IDENTITY_TOLERANCE_MS" ]
+}
+
+# The same comparison for two fm_pid_start_identity strings, and the only one
+# allowed for them. Only `proc-createtime-ms` may differ, by the same tolerance
+# and for the same reason; every other dialect is compared byte for byte. The
+# value must be all digits, so a whole identity, which carries its command line
+# after the value, is never taken for a start identity that differs from it.
+fm_pid_start_identity_equal() {  # <current> <recorded>
+  local current=$1 recorded=$2 current_ms recorded_ms delta
+  [ -n "$current" ] && [ -n "$recorded" ] || return 1
+  [ "$current" != "$recorded" ] || return 0
+  [ "${current%%=*}" = proc-createtime-ms ] || return 1
+  [ "${recorded%%=*}" = proc-createtime-ms ] || return 1
+  current_ms=${current#*=}
+  recorded_ms=${recorded#*=}
+  case "$current_ms" in ''|*[!0-9]*) return 1 ;; esac
+  case "$recorded_ms" in ''|*[!0-9]*) return 1 ;; esac
   delta=$(( 10#$current_ms - 10#$recorded_ms ))
   [ "$delta" -ge 0 ] || delta=$(( -delta ))
   [ "$delta" -le "$FM_PID_IDENTITY_TOLERANCE_MS" ]
