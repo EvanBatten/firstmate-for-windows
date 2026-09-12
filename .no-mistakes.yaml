@@ -34,9 +34,19 @@ document:
 # .github/workflows/ci.yml owns broad regression (behavior suite, platform,
 # security, Herdr, tmux, and lifecycle coverage). A full-suite override here
 # would duplicate CI and defeat the targeted Test contract.
-# `bash` in front because no-mistakes hands this line to cmd.exe on Windows,
-# which cannot run a bare `bin/fm-lint.sh` (issue #20); a POSIX host resolves
-# `bash` to the same interpreter the shebang names, so nothing changes there.
+# Routed through `git` because no-mistakes hands this line to cmd.exe on
+# Windows, which cannot run a bare `bin/fm-lint.sh` (issue #20). A plain `bash`
+# prefix only resolves when the daemon happened to inherit Git's `usr/bin` on
+# PATH: on the default Machine+User PATH, `C:\WINDOWS\system32` comes before
+# `C:\Program Files\Git\cmd`, and that is the only Git directory on it and
+# ships no `bash.exe`, so `bash` finds the WSL launcher and the gate lints a
+# different file set under Linux while still looking like it ran. `git.exe` is
+# the one shell-bearing Git executable on that default PATH, and git runs a `!`
+# alias through its own bundled `sh` from the repository toplevel, so the
+# relative script path resolves whatever the caller's directory. The same line
+# is correct on Linux and macOS, where git runs the alias through `/bin/sh` and
+# the script is tracked mode 100755. Double quotes, not single, because cmd.exe
+# treats `'` as an ordinary character rather than a quote.
 #
 # One worker, for the reason `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1`
 # on its own lint step: the two default workers hold their peaks together, a
@@ -50,7 +60,7 @@ document:
 # `FM_LINT_JOBS=1` prefix, because cmd.exe cannot read a POSIX VAR=value
 # prefix any more than it can run the bare script.
 commands:
-  lint: 'bash bin/fm-lint.sh --jobs 1'
+  lint: 'git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.

@@ -610,17 +610,29 @@ SH
 }
 
 run_watcher_bounded() {
-  local home=$1 fakebin=$2 check_interval=${FM_TEST_CHECK_INTERVAL:-0} watch_root=${FM_TEST_WATCH_ROOT:-$ROOT} budget
+  local home=$1 fakebin=$2 check_interval=${FM_TEST_CHECK_INTERVAL:-0} watch_root=${FM_TEST_WATCH_ROOT:-$ROOT} budget check_timeout
   shift 2
   # A hang net, not an assertion: no case asserts the 124. The watcher's
   # startup and first cycle cost one exec after another, so the bound has to be
   # sized for this host, and generously, since a busy host's real cost runs
-  # ahead of the scale measured when the suite started. FM_CHECK_TIMEOUT stays
-  # at one Linux second: test_static_poll_contract depends on that timing out.
+  # ahead of the scale measured when the suite started.
   budget=$(fm_test_seconds 30)
+  # The per-check bound is sized for the host for the same reason, and is a
+  # per-call value so a case that wants a different one says so. An unscaled
+  # second was a coin toss here: bin/fm-pr-poll.sh measured 242 ms to 1013 ms
+  # per run on this Git Bash host, two of eight runs over the second. A check
+  # killed at that bound is silent - run_check drops its stderr and ignores the
+  # status - so the cycle ended rc 0 with the poll still armed, which is how
+  # test_valid_recording_and_merge_derivation failed at assert_poll_absent on
+  # one run and passed on the next. Every case that reaches this helper needs
+  # its check to finish. The one case that depends on a check timing out,
+  # test_static_poll_contract, spells its literal unscaled second on its own
+  # direct run_check call and does not come through here.
+  check_timeout=${FM_TEST_CHECK_TIMEOUT:-$(fm_test_seconds 1)}
   perl -e 'my $budget = shift; my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm $budget; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
     "$budget" \
-    env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" FM_CHECK_TIMEOUT=1 \
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" \
+      FM_CHECK_TIMEOUT="$check_timeout" \
       FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 PATH="$fakebin:$BASE_PATH" "$WATCH" "$@"
 }
 

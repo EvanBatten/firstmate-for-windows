@@ -578,18 +578,27 @@ agents_baseline_drifted() {  # <rebuilding-session-pid>
 # Only run-tier source pairs with both a stale native instruction cache and a
 # working Firstmate delivery path arrive here. Claude fresh-reads on reset, and
 # Codex has no tracked interactive reset delivery path.
-agents_refresh_required() {  # <rebuilding-session-pid>
-  local lock_pid=$1
+agents_refresh_required() {
+  local lock_pid
   case "$PRIMARY_HARNESS:$SESSION_SOURCE" in
     pi:compact|pi-signed:compact) ;;
     *) return 1 ;;
   esac
+  # The rebuilding session's pid is resolved AFTER that guard, because the
+  # ancestry walk behind it is the most expensive thing this stage does on Git
+  # Bash - about 12 s on a loaded host - and only these two source pairs ever
+  # read the answer, so every other session open was paying for a value it then
+  # discarded. Same shape as fm_session_lock_owned_by_self, which parses the
+  # lock file before it walks. The prime sits in this script's own shell, as
+  # bin/fm-proc-lib.sh asks of every caller, rather than only inside the
+  # substitution below, where it would be discarded with the subshell.
+  fm_proc_chain_prime "$$"
+  lock_pid=$(fm_harness_ancestry_pid 2>/dev/null || true)
   agents_baseline_drifted "$lock_pid"
 }
 
-print_agents_refresh_if_required() {  # <rebuilding-session-pid>
-  local lock_pid=$1
-  agents_refresh_required "$lock_pid" || return 0
+print_agents_refresh_if_required() {
+  agents_refresh_required || return 0
   section "CURRENT AGENTS.md - INSTRUCTION REFRESH"
   if [ -f "$FM_ROOT/AGENTS.md" ]; then
     cat <<'EOF'
@@ -642,8 +651,7 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
   }
 fi
-REBUILDING_SESSION_PID=$(fm_harness_ancestry_pid 2>/dev/null || true)
-print_agents_refresh_if_required "$REBUILDING_SESSION_PID"
+print_agents_refresh_if_required
 
 if [ "$READ_ONLY" -eq 0 ]; then
   if [ "$REEMIT" -eq 0 ]; then
