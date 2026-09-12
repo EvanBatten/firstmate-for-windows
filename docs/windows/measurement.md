@@ -2501,6 +2501,47 @@ Spelled as the script's own `--jobs` option, not an environment prefix, because 
 The directive was proved live rather than assumed: a copy of the file with an unreachable command appended draws no SC2317 with the directive and draws it once that one line is removed, while SC2034 keeps firing in both halves, so the copy was being read and only the flow-graph family changed.
 No green Linux lint run exists yet, so the end-to-end proof is still outstanding, and the Lint job on the pull request carrying this change is what will supply it.
 
+## How a skipped suite is counted, and the two results that change category
+
+A gate skip is now exit status 77 and nothing else.
+`bin/fm-test-run.sh` used to decide the category by reading a script's first non-empty output line and asking whether it started with `skip:`.
+That is an inference about a decision only the script can make, and it was measurably wrong in both directions on both platforms.
+
+On this box, `tests/lib.sh` prints `# host time scale N` when it is sourced on a slow host, so a suite that sources the library before it gates prints that comment first and its real gate never reached the first line.
+Two suites were probed through the runner here on 2026-09-12 and both were published as passes having run nothing:
+
+```
+# host time scale 40 (about 312 ms per exec)
+skip: set FM_AFK_PI_HERDR_E2E=1 to run the real Pi/Herdr away-return regression
+FM_TEST_END 2026-09-12T19:38:33Z tests/fm-afk-pi-herdr-return-e2e.test.sh exit=0 duration_ms=18160 gate_skip=false
+# host time scale 40 (about 266 ms per exec)
+skip: set FM_SEND_MARKER_HERDR_E2E=1 to run the real Pi/Herdr secondmate-marker regression
+FM_TEST_END 2026-09-12T19:38:52Z tests/fm-send-secondmate-marker-herdr-e2e.test.sh exit=0 duration_ms=15959 gate_skip=false
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=42991
+```
+
+On Linux the same rule erred the other way, because a suite whose *first case* skips looks identical to a suite that gated.
+Run 34178916846 (2026-09-08) published `total=166 failed=0 skipped_gate=27`.
+Two of those 27 had run cases: `tests/fm-pi-branch-extension.test.sh` ran 29 green and `tests/fm-calm-pi-extension.test.sh` ran 2 green, both verified from the serial 1 and serial 3 job logs, and both skipped their first case only because the pi package is absent on the runner.
+
+So exactly two results change category with this rule, on every platform that runs them, and both are named here:
+
+| Suite | Before | After |
+| --- | --- | --- |
+| `tests/fm-pi-branch-extension.test.sh` | gate-skip | pass, 29 cases ran |
+| `tests/fm-calm-pi-extension.test.sh` | gate-skip | pass, 2 cases ran |
+
+The Linux aggregate therefore goes from 27 gate-skips to 25, and its green count rises by 2.
+That is the truth being restored rather than a number being moved: the 25 remaining are real whole-suite gates (opt-in env, no cmux, no zellij, no herdr lab helper, no pi).
+The rule can only move a result from skip to pass, never the reverse, because it only reclassifies scripts that exited 0, and a script that exits 0 keeps doing so until its own gate is converted.
+
+No published Windows number is currently wrong.
+The parallel lanes' 19 green / 4 red / 1 gate-skip is exact: the scale comment appears there, but the single gate-skip is `tests/fm-pi-primary-types.test.sh`, which does not source `tests/lib.sh`, so its skip line was still first.
+The serial lane's slice 11 count, `total=135 failed=65 skipped_gate=26`, was measured 2026-08-30 and the scale comment landed 2026-09-05 in `63987a0`, so that count predates the hazard and no serial lane has been published since.
+It was armed, though: a serial re-run here at that commit would have published the two probed suites above as green.
+
+`FM_TEST_END` and the JSON artifact now also carry `cases_ok` and `cases_skipped` per script, so a green that ran nothing stays visible without returning a heuristic to the category rule.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
