@@ -1,0 +1,53 @@
+## environment: default Machine+User PATH, Git Bash variables removed
+> where bash
+  C:\Windows\System32\bash.exe
+  C:\Users\ebatt\AppData\Local\Microsoft\WindowsApps\bash.exe
+> where git
+  C:\Program Files\Git\cmd\git.exe
+> where sh
+  INFO: Could not find files for the given pattern(s).
+> cmd.exe /d /c bash -c "uname -sr"
+  Linux 5.15.167.4-microsoft-standard-WSL2
+> cmd.exe /d /c git -c alias.u="!uname -sr" u
+  MINGW64_NT-10.0-26200 3.5.7-463ebcdc.x86_64
+
+## previous spelling (3de6307): commands.lint = bash bin/fm-lint.sh --jobs 1
+> cmd.exe /d /c bash bin/fm-lint.sh --jobs 1 --list-files
+bin/fm-afk-launch.sh
+bin/fm-afk-return.sh
+bin/fm-afk-start.sh
+bin/fm-arm-pretool-check.sh
+bin/fm-backend-hometag-lib.sh
+... (351 lines total)
+exit code: 0
+
+## target spelling (3922aac): commands.lint = git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint
+> cmd.exe /d /c git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint --list-files
+bin/backends/cmux.sh
+bin/backends/herdr.sh
+bin/fm-afk-launch.sh
+bin/fm-afk-start.sh
+bin/fm-arm-pretool-check.sh
+... (141 lines total)
+exit code: 0
+
+## target spelling passes arguments through to the script (an invalid --jobs is refused by fm-lint.sh itself)
+> cmd.exe /d /c git -c alias.fmlint="!bin/fm-lint.sh --jobs 3" fmlint
+fm-lint.sh: jobs must be 1 or 2, got 3.
+exit code: 2
+
+## target spelling from a subdirectory (cmd.exe cwd = tests\): git runs the alias from the repository toplevel
+> cmd.exe /d /c git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint --list-files
+bin/backends/cmux.sh
+bin/backends/herdr.sh
+bin/fm-afk-launch.sh
+bin/fm-afk-start.sh
+bin/fm-arm-pretool-check.sh
+... (141 lines total)
+exit code: 0
+
+
+## comparison against the Git Bash baseline (bash bin/fm-lint.sh --jobs 1 --list-files run from this Git Bash shell, same moment)
+Git Bash baseline: 141 lines
+target spelling on default PATH: 141 lines, identical to baseline: yes
+previous spelling on default PATH: 351 lines, identical to baseline: no (it ran under WSL Linux and listed the full canonical set, including untracked tests/fm-zz-onecase-* copies this test step had staged, instead of the branch diff)

@@ -1,0 +1,24 @@
+# tests/fm-session-start.test.sh AGENTS-refresh cases on this Git Bash host
+
+## 3922aac (target), one-case copy of the three refresh cases
+# host time scale 40 (about 252 ms per exec)
+not ok - true startup did not record an AGENTS baseline
+exit=1 61s
+
+## why: the startup digest the case captured (3922aac), lock section
+
+LOCK
+--------------------------------------------------------------------------------
+error: cannot locate harness process in ancestry
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  READ-ONLY SESSION - FLEET LOCK OWNERSHIP WAS NOT VERIFIED
+●  error: cannot locate harness process in ancestry
+●  Skipping every mutating step: stale Herdr child cleanup,
+state/ after the open: 0 entries (no .lock, no .session-start-complete, no baseline)
+
+## 3de6307 (previous commit; tests/fm-session-start.test.sh, tests/lib.sh, tests/fixtures.sh, bin/fm-lock.sh, bin/fm-session-lock-lib.sh, bin/fm-proc-lib.sh identical to 3922aac), same debug copy
+not ok - true startup did not record an AGENTS baseline
+error: cannot locate harness process in ancestry
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  READ-ONLY SESSION - FLEET LOCK OWNERSHIP WAS NOT VERIFIED
+●  error: cannot locate harness process in ancestry

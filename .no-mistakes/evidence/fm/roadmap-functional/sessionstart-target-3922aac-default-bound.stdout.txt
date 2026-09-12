@@ -1,0 +1,19 @@
+
+================================================================================
+SESSION START - /tmp/fm-e2e-ss-target-3922aac-default-bound.o2JcuT
+================================================================================
+
+LOCK
+--------------------------------------------------------------------------------
+lock acquired: harness pid 55120
+
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  STARTUP TRUNCATED - SESSION START HIT ITS 120s RUNTIME BOUND
+●  It stopped during the "lock" stage, so everything above is COMPLETE
+●  only up to that point.
+●  RECONCILE these stages before acting on anything they would have shown:
+●    lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step
+●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates
+●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that
+●  cannot finish inside the bound is a fleet problem, not a reporting detail.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

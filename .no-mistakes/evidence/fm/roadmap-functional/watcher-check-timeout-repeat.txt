@@ -1,0 +1,12 @@
+### run 1: test_valid_recording_and_merge_derivation (default, host-scaled check bound)
+# host time scale 40 (about 209 ms per exec)
+ok - valid direct and merge flows record exact metadata and reject multiline head metadata
+exit=0 1308s
+### run 2: test_valid_recording_and_merge_derivation (default, host-scaled check bound)
+# host time scale 40 (about 380 ms per exec)
+ok - valid direct and merge flows record exact metadata and reject multiline head metadata
+exit=0 1293s
+### run 3: test_valid_recording_and_merge_derivation (default, host-scaled check bound)
+# host time scale 40 (about 243 ms per exec)
+ok - valid direct and merge flows record exact metadata and reject multiline head metadata
+exit=0 1155s

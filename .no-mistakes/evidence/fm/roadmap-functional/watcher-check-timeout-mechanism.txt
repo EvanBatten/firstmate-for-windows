@@ -1,0 +1,12 @@
+### slow check (2 s) under the OLD literal one-second bound: FM_TEST_CHECK_TIMEOUT=1 FM_TEST_GH_SLEEP=2
+# host time scale 40 (about 199 ms per exec)
+not ok - retired poll left task-a.check.sh
+exit=1 539s
+### slow check (2 s) under the NEW default host-scaled bound: FM_TEST_GH_SLEEP=2
+# host time scale 33 (about 131 ms per exec)
+ok - valid direct and merge flows record exact metadata and reject multiline head metadata
+exit=0 1323s
+### test_static_poll_contract (needs its direct run_check to time out at a literal 1 s)
+# host time scale 40 (about 223 ms per exec)
+ok - static poll is silent except for one merged line and remains watcher-bounded
+exit=0 285s

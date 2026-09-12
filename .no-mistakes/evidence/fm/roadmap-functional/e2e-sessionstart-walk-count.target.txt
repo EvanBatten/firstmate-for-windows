@@ -1,0 +1,33 @@
+## target-3922aac (3922aac)
+harness claude.exe pid (CLAUDE_PID): 55120
+registered SessionStart command:
+  [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; "$CLAUDE_PROJECT_DIR"/bin/fm-sessionstart-run.sh; exit 0
+hook exit code: 0 (elapsed 241s)
+hook stdout: 137 line(s) injected as session context
+--- first 12 lines of hook stdout
+
+================================================================================
+SESSION START - /tmp/fm-e2e-ss-target-3922aac.Wtn396
+================================================================================
+
+LOCK
+--------------------------------------------------------------------------------
+lock acquired: harness pid 55120
+
+BOOTSTRAP
+--------------------------------------------------------------------------------
+NOTICE: auto-detected herdr runtime (HERDR_ENV=1) - spawning into the EXPERIMENTAL herdr backend. Set config/backend or pass --backend tmux to opt out.
+--- lock / read-only lines in hook stdout
+6:LOCK
+8:lock acquired: harness pid 55120
+21:- Lock: held by this session; this session owns normal supervision unless away mode says otherwise.
+44:   [`watcher-continuity.md`](../watcher-continuity.md) owns the exact session-lock recovery boundary.
+122:data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)
+133:Follow the supervision operating instructions block above for harness 'claude'.
+--- state/.lock after the hook
+state/.lock = 55120
+=> the fleet lock is held by this session's claude.exe (55120)
+--- Win32 ancestry walks (pwsh processes) this session open paid: 3
+  1 x bash C:/Users/ebatt/AppData/Local/Temp/<home>/bin/fm-sessionstart-run.sh 
+  1 x bash /tmp/<home>/bin/fm-startup-network.sh start --locked 1 --harvest-pid 43644 
+  1 x bash /tmp/<home>/bin/fm-lock.sh 

@@ -1,0 +1,30 @@
+# Red/green one-case runs on this Git Bash host (MSYS=winsymlinks:nativestrict), each suite copy keeping every helper and one invocation
+
+## tests/fm-backlog-handoff.test.sh test_pre_move_crash_does_not_wake_until_move_lands (issue #28)
+### fixture at base c533483 (fake runs the real mv after the kill), product at 3de6307
+tests/fm-zz-onecase-handoff-basefixture.test.sh: line 338: 34166 Killed                  FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design pre-move-crash > "$TMP_ROOT/pre-move-crash.out" 2>&1
+not ok - unrelated handoff changed the prepared batch's source item
+exit=1 67s
+### fixture at 3de6307
+tests/fm-zz-onecase-handoff.test.sh: line 338: 28953 Killed                  FM_REAL_TASKS_AXI="$real_tasks" PATH="$fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design pre-move-crash > "$TMP_ROOT/pre-move-crash.out" 2>&1
+ok - a pre-move crash wakes only after retry makes the item durable
+ALL TESTS PASSED
+exit=0 169s
+
+## tests/fm-pr-check-security.test.sh test_merged_poll_retires_once (issue #33)
+### run_watcher_bounded with the old literal 'alarm 10'
+not ok - merged retirement watcher failed: 
+exit=1 62s
+### run_watcher_bounded at 3de6307 (budget=$(fm_test_seconds 30))
+ok - validated merged polls notify once and retire before the next watcher cycle
+exit=0 330s
+
+## tests/fm-private-lib.test.sh (new suite), full run
+21 ok lines, exit 0
+
+## tests/fm-pr-merge.test.sh test_merge_reaches_the_forge_where_a_mode_cannot_be_represented (issue #3, case ax)
+### product bin at base c533483 (target tests/lib.sh + leaf bin/fm-private-lib.sh copied in)
+not ok - noacl-mount: the poll registration must not refuse a mode the mount cannot represent
+### product at 3de6307
+ok - fm-pr-merge records pr= and pr_head= for a verified GitHub merge
+ok - fm-pr-merge reaches the forge and records its metadata where a mode cannot be represented

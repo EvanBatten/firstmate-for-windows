@@ -1,0 +1,32 @@
+# default FM_SESSION_START_TIMEOUT (120 s), what a Claude session on this loaded host receives; one watcher-suite lane still running alongside
+## target-3922aac-default-bound (3922aac)
+harness claude.exe pid (CLAUDE_PID): 55120
+registered SessionStart command:
+  [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; "$CLAUDE_PROJECT_DIR"/bin/fm-sessionstart-run.sh; exit 0
+hook exit code: 0 (elapsed 150s)
+hook stdout: 19 line(s) injected as session context
+--- first 12 lines of hook stdout
+
+================================================================================
+SESSION START - /tmp/fm-e2e-ss-target-3922aac-default-bound.o2JcuT
+================================================================================
+
+LOCK
+--------------------------------------------------------------------------------
+lock acquired: harness pid 55120
+
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━�
+●  STARTUP TRUNCATED - SESSION START HIT ITS 120s RUNTIME BOUND
+●  It stopped during the "lock" stage, so everything above is COMPLETE
+--- lock / read-only lines in hook stdout
+6:LOCK
+8:lock acquired: harness pid 55120
+12:●  It stopped during the "lock" stage, so everything above is COMPLETE
+15:●    lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step
+--- state/.lock after the hook
+state/.lock = 55120
+=> the fleet lock is held by this session's claude.exe (55120)
+--- Win32 ancestry walks (pwsh processes) this session open paid: 3
+  1 x bash C:/Users/ebatt/AppData/Local/Temp/<home>/bin/fm-sessionstart-run.sh 
+  1 x bash /tmp/<home>/bin/fm-startup-network.sh start --locked 1 --harvest-pid 50607 
+  1 x bash /tmp/<home>/bin/fm-lock.sh 

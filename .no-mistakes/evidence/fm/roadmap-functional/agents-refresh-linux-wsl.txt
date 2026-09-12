@@ -1,0 +1,7 @@
+## Linux (WSL2 Ubuntu 5.15.167.4-microsoft-standard-WSL2, bash 5.2.21(1)-release), checkout of 3922aac
+## tests/fm-session-start.test.sh: the pi/codex AGENTS refresh cases plus the ancestry headroom case, one-case copy
+ok - true-start AGENTS baselines stay immutable while every drifted Pi compact re-emits the current contract
+ok - read-only Pi compact refreshes against the rebuilding session identity without mutation
+ok - Codex reset sources do not claim an unavailable instruction-refresh channel
+ok - the runtime bound leaves enough ancestry headroom for a deeply nested session to take the lock
+exit=0 133s

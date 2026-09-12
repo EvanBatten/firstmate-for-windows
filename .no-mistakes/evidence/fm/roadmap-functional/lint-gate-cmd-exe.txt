@@ -1,0 +1,22 @@
+## cmd.exe resolves 'bash' to:
+C:\Program Files\Git\usr\bin\bash.exe
+
+## base .no-mistakes.yaml commands.lint = 'bin/fm-lint.sh' (as cmd.exe runs it; --list-files appended so ShellCheck never starts)
+> bin/fm-lint.sh --list-files
+'bin' is not recognized as an internal or external command,
+operable program or batch file.
+exit code: 1
+
+## target .no-mistakes.yaml commands.lint = 'bash bin/fm-lint.sh --jobs 1'
+> bash bin/fm-lint.sh --jobs 1 --list-files
+bin/backends/cmux.sh
+bin/backends/herdr.sh
+bin/fm-afk-launch.sh
+bin/fm-afk-start.sh
+bin/fm-arm-pretool-check.sh
+... (140 changed lint roots listed)
+exit code: 0
+
+> bash bin/fm-lint.sh --jobs 3 --list-files   (the option is really parsed and validated)
+fm-lint.sh: jobs must be 1 or 2, got 3.
+exit code: 2

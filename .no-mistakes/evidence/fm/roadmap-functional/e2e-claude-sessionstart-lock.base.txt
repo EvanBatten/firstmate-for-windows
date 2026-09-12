@@ -1,0 +1,11 @@
+## base-c533483 (c5334836657f21d986d1cd4cc241793c74eb0df6)
+harness claude.exe pid (CLAUDE_PID): 88488
+registered SessionStart command:
+  [ -z "${GROK_AGENT:-}${GROK_HOOK_EVENT:-}" ] || exit 0; exec "$CLAUDE_PROJECT_DIR"/bin/fm-sessionstart-run.sh
+hook exit code: 0 (elapsed 12s)
+hook stdout: 1 line(s) injected as session context
+--- first 12 lines of hook stdout
+⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+--- lock / read-only lines in hook stdout
+--- state/.lock after the hook
+state/.lock absent => the hook did not take the fleet lock

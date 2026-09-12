@@ -1,0 +1,24 @@
+# host time scale 40 (about 157 ms per exec)
+ok - private-lib: the probe measures a mode-carrying mount as enforcing
+ok - private-lib: the probe measures a mount that drops modes as not representable
+ok - private-lib: a umask that flatters the readback does not fool the probe
+ok - private-lib: the probe removes the temp file it measures
+ok - private-lib: the probe draws no conclusion from a file this user does not own
+ok - private-lib: the probe draws no conclusion from a file swapped mid-measurement
+ok - private-lib: the probe never chmods through a name another account could replace
+ok - private-lib: a probe that cannot run does not relax anything
+ok - private-lib: creation carries 700 and 600 where modes are enforcing
+ok - private-lib: creation succeeds and records the waiver where a mode is not representable
+ok - private-lib: creating a private directory still refuses one that exists, on both mounts
+ok - private-lib: the assertion refuses a symlink on both mounts
+ok - private-lib: the assertion refuses a file on another device on both mounts
+ok - private-lib: the assertion refuses a file with a second hard link on both mounts
+ok - private-lib: a genuinely wrong mode is still refused where modes are enforcing
+ok - private-lib: the mode check gives way and records the waiver where a mode is not representable
+ok - private-lib: a setter that fails for a reason other than the mode still fails, on both mounts
+ok - private-lib: a script staged alone through the shared installer still finds its siblings
+ok - private-lib: the capture helper compares modes exactly until the owner says the mount cannot carry one
+ok - private-lib: the capture helper relaxes only the filesystem the owner measured as unable to carry a mode
+# skipped the ownership half: every directory on this host reports the current user as its owner
+ok - private-lib: the relaxation waives the mode comparison and leaves every other refusal standing
+exit=0

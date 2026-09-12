@@ -1,0 +1,15 @@
+## Linux (WSL2 Ubuntu, Linux 5.15.167.4-microsoft-standard-WSL2), git 2.43.0, fresh checkout of 3922aac
+commands.lint = git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint
+tracked mode of bin/fm-lint.sh: 100755
+> /bin/sh -c "$line --list-files"
+bin/fm-afk-launch.sh
+bin/fm-afk-return.sh
+bin/fm-afk-start.sh
+... (349 lines total)
+exit code: 0
+> (cd tests && /bin/sh -c "$line --list-files")
+... (349 lines total, identical to toplevel run: yes)
+exit code: 0
+> /bin/sh -c "$(echo $line | sed s/--jobs.1/--jobs.3/)"
+fm-lint.sh: jobs must be 1 or 2, got 3.
+exit code: 2

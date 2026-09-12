@@ -1,0 +1,57 @@
+## base-c533483: code root /tmp/fm-e2e-base.BfvcoQ
+$ mount | grep ' on /tmp '
+C:/Users/ebatt/AppData/Local/Temp on /tmp type ntfs (binary,noacl,posix=0,usertemp)
+$ FM_HOME=/tmp/fm-e2e-merge-base-c533483.bfLkSh/home bin/fm-pr-merge.sh task-x1 https://github.com/example/repo/pull/24
+exit code: 1
+--- stdout
+--- stderr
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: could not prepare PR poll
+--- forge calls (gh-axi)
+--- state/task-x1.meta
+window=fm-task-x1
+worktree=/tmp/fm-e2e-merge-base-c533483.bfLkSh/wt
+project=/tmp/fm-e2e-merge-base-c533483.bfLkSh/project
+kind=ship
+mode=no-mistakes
+--- state/ listing (stat mode as this mount reports it)
+644 task-x1.meta
+
+## target-3de6307: code root 3de6307
+$ mount | grep ' on /tmp '
+C:/Users/ebatt/AppData/Local/Temp on /tmp type ntfs (binary,noacl,posix=0,usertemp)
+$ FM_HOME=/tmp/fm-e2e-merge-target-3de6307.3sym1s/home bin/fm-pr-merge.sh task-x1 https://github.com/example/repo/pull/24
+exit code: 0
+--- stdout
+armed: state/task-x1.check.sh
+verified: https://github.com/example/repo/pull/24 is merged (state=MERGED, merged=true, isInMergeQueue=false)
+--- stderr
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--- forge calls (gh-axi)
+pr merge 24 --repo example/repo --squash
+--- state/task-x1.meta
+window=fm-task-x1
+worktree=/tmp/fm-e2e-merge-target-3de6307.3sym1s/wt
+project=/tmp/fm-e2e-merge-target-3de6307.3sym1s/project
+kind=ship
+mode=no-mistakes
+pr=https://github.com/example/repo/pull/24
+pr_head=7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c
+--- state/ listing (stat mode as this mount reports it)
+755 task-x1.check.sh
+644 task-x1.meta
+644 task-x1.pr-poll
+644 task-x1.pr-poll-merge-notified
+644 task-x1.pr-poll-registration
