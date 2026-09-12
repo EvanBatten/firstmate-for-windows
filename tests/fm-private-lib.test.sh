@@ -513,12 +513,13 @@ test_a_script_staged_alone_can_still_source_its_siblings() {
 
 # bin/fm-procevent-extension-capture.pl asserts the same private-state modes
 # this library owns, in another language and in another process, so the owner's
-# verdict has to REACH it: the helper measures nothing itself and
-# bin/fm-procevent.sh hands it `--private-modes enforcing|unenforceable` from
-# fm_private_modes_enforcing. These cases run the helper the way that caller
-# runs it - registry, inbox and capture reservation root arrive as inherited
-# descriptors 9, 8 and 6, everything else as argv - and read the line it prints,
-# which is the contract bin/fm-procevent.sh parses.
+# verdict has to REACH it: the helper measures nothing itself, and
+# bin/fm-procevent.sh hands it the owner's answer for each filesystem its
+# assertions land on, as `--private-modes <device>=enforcing|unenforceable`
+# pairs read from fm_private_modes_enforcing. These cases run the helper the way
+# that caller runs it - registry, inbox and capture reservation root arrive as
+# inherited descriptors 9, 8 and 6, everything else as argv - and read the line
+# it prints, which is the contract bin/fm-procevent.sh parses.
 CAPTURE_HELPER="$ROOT/bin/fm-procevent-extension-capture.pl"
 CAPTURE_DIGEST="sha256:$(printf '%064d' 0)"
 
@@ -533,6 +534,14 @@ capture_home() {  # <state-dir>
   local state=$1
   mkdir -p "$state/procevent" "$state/procevent-inbox" "$state/procevent-capture-reservations"
   chmod 0755 "$state/procevent" "$state/procevent-inbox" "$state/procevent-capture-reservations"
+}
+
+# A verdict answers for ONE filesystem and names it, so the argument is built
+# the way the owner's own cache is keyed: by device. Everything a case stages
+# under one root shares that root's device, which is what makes a single pair
+# enough here.
+capture_verdict() {  # <path> <verdict>
+  printf '%s=%s\n' "$(fm_private_stat_device "$1")" "$2"
 }
 
 run_capture_helper() {  # <registry> <inbox> <reservations> <source-id> [option...]
@@ -570,8 +579,8 @@ test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check() {
   status=0
   capture_home "$dir/relaxed"
   out=$(run_capture_helper "$dir/relaxed/procevent" "$dir/relaxed/procevent-inbox" \
-    "$dir/relaxed/procevent-capture-reservations" relaxed-source --private-modes unenforceable) \
-    || status=$?
+    "$dir/relaxed/procevent-capture-reservations" relaxed-source \
+    --private-modes "$(capture_verdict "$dir/relaxed" unenforceable)") || status=$?
   expect_code 0 "$status" "the capture helper on a mount that cannot carry a mode"
   case "$out" in
     captured*relaxed-source.1.result*) ;;
@@ -582,6 +591,63 @@ test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check() {
   [ "$(cat "$dir/relaxed/procevent-inbox/relaxed-source.1.result")" = "captured body" ] \
     || fail "the published result is not the output the source produced"
   pass "private-lib: the capture helper compares modes exactly until the owner says the mount cannot carry one"
+}
+
+# One verdict standing in for every path the helper checks relaxes filesystems
+# nobody measured. The claim file is what proves it: it does not live under the
+# home's state at all - it resolves through the claim-root override, then the
+# XDG state home, then the home directory - so a verdict read off the state
+# volume was being applied to a file that may sit on storage which carries modes
+# perfectly well, waiving the very comparison that exists to refuse a 0644
+# claim. So a verdict names the filesystem it answers for, and a filesystem it
+# does not name is compared exactly.
+test_the_capture_helper_relaxes_only_the_filesystem_the_owner_measured() {
+  local dir device out status=0
+  dir=$(case_dir capture-helper-per-filesystem)
+  device=$(fm_private_stat_device "$dir") || device=
+  case "$device" in
+    ''|*[!0-9-]*) fail "could not read the device of the staged capture root" ;;
+  esac
+
+  # A verdict for another filesystem must leave this one strict. This is the
+  # defect itself: one measurement, applied to every path.
+  capture_home "$dir/elsewhere"
+  out=$(run_capture_helper "$dir/elsewhere/procevent" "$dir/elsewhere/procevent-inbox" \
+    "$dir/elsewhere/procevent-capture-reservations" elsewhere-source \
+    --private-modes "$((device + 1))=unenforceable") || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a verdict measured on another filesystem relaxed this one, got '$out'"
+  case "$out" in
+    *"unsafe registry directory"*) ;;
+    *) fail "the refusal did not come from the mode comparison: '$out'" ;;
+  esac
+  assert_absent "$dir/elsewhere/procevent-inbox/elsewhere-source.1.result" \
+    "a capture refused for another filesystem's verdict published a result anyway"
+
+  # A verdict that names no filesystem is the unscoped spelling, and unscoped is
+  # what the defect was, so it relaxes nothing either.
+  status=0
+  capture_home "$dir/unscoped"
+  out=$(run_capture_helper "$dir/unscoped/procevent" "$dir/unscoped/procevent-inbox" \
+    "$dir/unscoped/procevent-capture-reservations" unscoped-source \
+    --private-modes unenforceable) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a verdict that names no filesystem relaxed this one, got '$out'"
+  assert_absent "$dir/unscoped/procevent-inbox/unscoped-source.1.result" \
+    "a capture refused on an unscoped verdict published a result anyway"
+
+  # And this same filesystem, measured as mode-carrying, stays strict: the
+  # verdict decides, not the presence of the option.
+  status=0
+  capture_home "$dir/enforcing"
+  out=$(run_capture_helper "$dir/enforcing/procevent" "$dir/enforcing/procevent-inbox" \
+    "$dir/enforcing/procevent-capture-reservations" enforcing-source \
+    --private-modes "$(capture_verdict "$dir/enforcing" enforcing)") || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a filesystem the owner measured as mode-carrying was relaxed anyway, got '$out'"
+  assert_absent "$dir/enforcing/procevent-inbox/enforcing-source.1.result" \
+    "a capture refused on a mode-carrying filesystem published a result anyway"
+  pass "private-lib: the capture helper relaxes only the filesystem the owner measured as unable to carry a mode"
 }
 
 # The waiver covers the mode comparison and nothing beside it. The two refusals
@@ -596,8 +662,8 @@ test_the_capture_helpers_other_refusals_survive_the_relaxation() {
   capture_home "$dir/planted"
   ln -s "$dir/outside" "$dir/planted/procevent/planted-source.runner"
   out=$(run_capture_helper "$dir/planted/procevent" "$dir/planted/procevent-inbox" \
-    "$dir/planted/procevent-capture-reservations" planted-source --private-modes unenforceable) \
-    || status=$?
+    "$dir/planted/procevent-capture-reservations" planted-source \
+    --private-modes "$(capture_verdict "$dir/planted" unenforceable)") || status=$?
   [ "$status" -ne 0 ] \
     || fail "the relaxation waived the helper's no-follow refusal, got '$out'"
   case "$out" in
@@ -620,8 +686,8 @@ test_the_capture_helpers_other_refusals_survive_the_relaxation() {
   else
     status=0
     out=$(run_capture_helper "$foreign" "$dir/foreign/procevent-inbox" \
-      "$dir/foreign/procevent-capture-reservations" foreign-source --private-modes unenforceable) \
-      || status=$?
+      "$dir/foreign/procevent-capture-reservations" foreign-source \
+      --private-modes "$(capture_verdict "$foreign" unenforceable)") || status=$?
     [ "$status" -ne 0 ] \
       || fail "the relaxation waived the helper's ownership refusal for $foreign, got '$out'"
     case "$out" in
@@ -650,4 +716,5 @@ test_assertion_accepts_the_same_wrong_mode_where_modes_are_not_representable
 test_a_setter_that_fails_for_a_real_reason_still_fails
 test_a_script_staged_alone_can_still_source_its_siblings
 test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check
+test_the_capture_helper_relaxes_only_the_filesystem_the_owner_measured
 test_the_capture_helpers_other_refusals_survive_the_relaxation
