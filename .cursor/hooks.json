@@ -4,7 +4,7 @@
     "sessionStart": [
       {
         "type": "command",
-        "command": "\"$CURSOR_PROJECT_DIR\"/bin/fm-sessionstart-cursor.sh --source startup",
+        "command": "\"$CURSOR_PROJECT_DIR\"/bin/fm-sessionstart-cursor.sh --source startup; exit 0",
         "timeout": 180
       }
     ],
