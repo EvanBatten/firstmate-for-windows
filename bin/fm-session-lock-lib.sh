@@ -146,6 +146,12 @@ fm_harness_ancestry_pids() {
 # innermost match unchanged.
 fm_harness_ancestry_pid() {
   local pids pid outermost=''
+  # fm_harness_ancestry_pids primes too, but it runs below inside command
+  # substitution, where the assignment is discarded when the subshell exits.
+  # The memo has to be filled in the CALLER's shell to survive, and filling it
+  # here means a process that also asks fm_session_lock_owned_by_self - which
+  # one session open does - pays for one walk rather than two.
+  fm_proc_chain_prime "$$"
   pids=$(fm_harness_ancestry_pids) || return 1
   while IFS= read -r pid; do
     [ -n "$pid" ] && outermost=$pid
@@ -180,6 +186,10 @@ fm_session_lock_owned_by_self() {
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
+  # After the cheap lock-file parse, so a missing or malformed lock still costs
+  # nothing, and in THIS shell rather than in the substitution below, where the
+  # prime inside fm_harness_ancestry_pids is discarded with the subshell.
+  fm_proc_chain_prime "$$"
   pids=$(fm_harness_ancestry_pids) || return 1
   while IFS= read -r pid; do
     [ "$pid" = "$lock_pid" ] && return 0

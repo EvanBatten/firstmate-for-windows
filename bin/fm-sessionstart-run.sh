@@ -174,7 +174,12 @@ msys_severed_ancestry_delegates() {
     *) return 0 ;;
   esac
   fm_harness_ancestry_pid >/dev/null 2>&1 && return 0
-  "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
+  # Hand the walk's answer down rather than let the nudge repeat it: it just
+  # established that no harness is in this process's ancestry, so the nudge's
+  # own ownership check can only reach the same verdict, at the price of a
+  # second walk and the `ps -W` scan its liveness probe runs first. Passed as
+  # an argument, never exported: the nudge's header says why.
+  "$SCRIPT_DIR/fm-sessionstart-nudge.sh" --no-harness-ancestry || true
   exit 0
 }
 
