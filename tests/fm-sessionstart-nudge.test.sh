@@ -1182,6 +1182,49 @@ test_run_reports_a_failed_session_start_as_digest_text() {
   pass "run wrapper: a session start that cannot take the lock still opens the session and says so"
 }
 
+# The run tier can only take the helm when this process can prove which harness
+# session it belongs to, and on MSYS that proof is the parent chain: exec there
+# starts a NEW Win32 process and exits the old one, so a registration that ends
+# in the wrapper leaves it with a dead parent and no ancestry to walk
+# (docs/windows/measurement.md C4b). The tracked registration therefore ends in
+# a builtin, which no correct shell may fold away: exec-ing the wrapper would
+# hand the harness the wrapper's exit status, while `; exit 0` pins the hook's
+# status to 0 whatever the wrapper does. That status pin is the second half of
+# the contract - a Claude SessionStart exit 2 blocks session initialization.
+#
+# Asserted on the process tree rather than on the JSON bytes: the registration
+# is EXECUTED here the way the harness executes it, so any future spelling that
+# keeps a live parent and pins the status passes, and any that severs fails.
+test_claude_registration_keeps_the_hook_parent_alive() {
+  local dir cmd parent status=0
+  command -v jq >/dev/null 2>&1 \
+    || fail "this case reads the tracked registration with jq, which is not installed"
+  dir="$TMP_ROOT/claude-registration-parent"
+  mkdir -p "$dir/bin"
+  cmd=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/.claude/settings.json") \
+    || fail "could not read the tracked Claude SessionStart registration"
+  [ -n "$cmd" ] && [ "$cmd" != null ] \
+    || fail "the tracked Claude SessionStart registration has no command"
+  # Exiting non-zero is deliberate: it pins that the registration returns 0
+  # regardless of what the wrapper does.
+  cat > "$dir/bin/fm-sessionstart-run.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$PPID" > "$(dirname "$0")/../parent"
+exit 7
+SH
+  chmod +x "$dir/bin/fm-sessionstart-run.sh"
+  # NOT inside $(...) or a pipeline: either would add a subshell of its own and
+  # the recorded parent would stop meaning what this case reads it to mean.
+  env -u GROK_AGENT -u GROK_HOOK_EVENT CLAUDE_PROJECT_DIR="$dir" \
+    bash -c "$cmd" </dev/null >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "the tracked Claude SessionStart registration"
+  assert_present "$dir/parent" "the tracked Claude SessionStart registration never reached the wrapper"
+  parent=$(cat "$dir/parent")
+  [ "$parent" != "$$" ] \
+    || fail "the wrapper's parent $parent is the test process: the registration exec'd it and a hook launched this way has no ancestry to walk"
+  pass "claude registration: the session-open wrapper keeps a live parent and the hook's status is pinned to 0"
+}
+
 test_genuine_primary_nudges
 test_gate_env_is_silent
 test_gate_common_dir_is_silent
@@ -1205,6 +1248,7 @@ test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
 test_run_reports_a_failed_session_start_as_digest_text
+test_claude_registration_keeps_the_hook_parent_alive
 test_pi_startup_classifies_cli_continuations
 test_pi_sessionstart_generation_prerequisite
 test_pi_reload_releases_sessionstart_exit_listener

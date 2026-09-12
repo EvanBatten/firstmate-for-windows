@@ -655,6 +655,46 @@ test_tracked_registration_covers_the_primary_events() {
   pass "cursor registration: covers every primary event with a bounded stop loop"
 }
 
+# The Cursor adapter calls bin/fm-sessionstart-run.sh, whose run tier can only
+# take the helm when this process can prove which harness session it belongs
+# to, and on MSYS that proof is the parent chain. A registration whose command
+# is the shell's final one is exec'd there, which starts a new Win32 process
+# and exits the old one, leaving no ancestry to walk
+# (docs/windows/measurement.md C4b). Ending it in a builtin removes the
+# question, and no correct shell may fold the builtin away: exec-ing the
+# adapter would hand Cursor the adapter's exit status, while `; exit 0` pins
+# the hook's status to 0. The adapter already exits 0 on every path, so the pin
+# changes nothing observable on macOS or Linux.
+#
+# Asserted on the process tree rather than on the JSON bytes: the registration
+# is EXECUTED here the way Cursor executes it.
+test_tracked_registration_keeps_the_sessionstart_parent_alive() {
+  local dir cmd parent status=0
+  dir="$TMP_ROOT/cursor-registration-parent"
+  mkdir -p "$dir/bin"
+  cmd=$(jq -r '.hooks.sessionStart[0].command' "$ROOT/.cursor/hooks.json") \
+    || fail "could not read the tracked Cursor sessionStart registration"
+  [ -n "$cmd" ] && [ "$cmd" != null ] \
+    || fail "the tracked Cursor sessionStart registration has no command"
+  # Exiting non-zero is deliberate: it pins that the registration returns 0
+  # regardless of what the adapter does.
+  cat > "$dir/bin/fm-sessionstart-cursor.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$PPID" > "$(dirname "$0")/../parent"
+exit 7
+SH
+  chmod +x "$dir/bin/fm-sessionstart-cursor.sh"
+  # NOT inside $(...) or a pipeline: either would add a subshell of its own and
+  # the recorded parent would stop meaning what this case reads it to mean.
+  env CURSOR_PROJECT_DIR="$dir" bash -c "$cmd" </dev/null >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "the tracked Cursor sessionStart registration"
+  assert_present "$dir/parent" "the tracked Cursor sessionStart registration never reached the adapter"
+  parent=$(cat "$dir/parent")
+  [ "$parent" != "$$" ] \
+    || fail "the adapter's parent $parent is the test process: the registration exec'd it and a hook launched this way has no ancestry to walk"
+  pass "cursor registration: the session-open adapter keeps a live parent and the hook's status is pinned to 0"
+}
+
 # The two bounds must nest, and the only honest way to prove it is to run the
 # adapter at Cursor's own registered limit with its DEFAULT ceiling: firstmate's
 # bound must already have stopped the loop by then, so Cursor's hard ceiling is
@@ -699,4 +739,5 @@ test_park_ignores_malformed_payload
 test_sessionstart_emits_additional_context
 test_sessionstart_silent_in_child_worktree
 test_tracked_registration_covers_the_primary_events
+test_tracked_registration_keeps_the_sessionstart_parent_alive
 test_default_ceiling_bites_before_the_registered_loop_limit
