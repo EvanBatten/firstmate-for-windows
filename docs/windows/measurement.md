@@ -2468,7 +2468,7 @@ Every figure below is measured on that host unless the sentence says otherwise; 
 The job was budgeted 12 GiB, 12582912 KiB, which is the 16 GB runner less a share for its agent, the kernel and page cache, and the summed peak is over that.
 A one-second sampler of every live ShellCheck process shows the two shards really do hold their peaks together: its peak of 12727036 KiB lands within 136 KiB of the arithmetic sum of the two workers' maxima, and 270 of the run's 754 samples sit above the budget, so the job carries the overflow for about four and a half of its twelve minutes rather than touching it once.
 The overflow is 144124 KiB, 140.7 MiB, or 1.15 per cent.
-So the job is not proven to fit: what is proven is that the kill this section is about is fixed, since the worst root fell from 15307 MiB to under 1 GiB and no single worker now comes near the ceiling, while the headroom the budget asked for is not there.
+So the job is not proven to fit with the default two workers: what is proven is that the kill this section is about is fixed, since the worst root fell from 15307 MiB to under 1 GiB and no single worker now comes near the ceiling, while the headroom the budget asked for is not there.
 
 Ranking all 349 canonical roots individually names the whole of that overflow, and it is two scripts rather than a broad problem.
 `bin/fm-teardown.sh` costs 8289836 KiB, 7.91 GiB, and `bin/fm-watch.sh` costs 4441636 KiB, 4.24 GiB; added they come to within 0.03 per cent of the sampler's concurrent peak, and each matches its own shard's worker maximum to within 0.15 per cent.
@@ -2476,6 +2476,8 @@ Only 15 of the 349 roots exceed 2 GiB, and `tests/fm-pending-reply.test.sh` now 
 A second directive on `bin/fm-teardown.sh` would suppress no finding that fires today, since that file is clean with flow analysis on and off, and it would take the file itself from 8315456 KiB to 645652 KiB; what it would cost is SC2317 and SC2329 permanently on the port's largest product script, 2928 lines and 85 functions, which at least ten other scripts source, and that is a heavier trade than the same directive on a test file, so it was not added.
 `FM_LINT_JOBS=1` is the other lever and is newly effective: before the fix one root exceeded the whole budget so worker count could not help, whereas now the peak is the sum of two shards, and serialising them would put it at `max_worker_rss_kib`, 7.95 GiB.
 Its cost is wall time, measured here as 744 s to 1333 s, a factor of 1.79, and the ratio rather than the absolute is what transfers, because two workers occupy only two of the runner's four cores, so the job's wall is the slower shard under two workers and the two shards added under one.
+That lever was taken: `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1` on the lint step, which makes the job's peak the largest single root rather than the sum of two, 7.95 GiB against the 12 GiB budget.
+A reliably green gate was judged worth more than the extra ten minutes, and unlike the second directive it gives up no coverage anywhere.
 
 The directive was proved live rather than assumed: a copy of the file with an unreachable command appended draws no SC2317 with the directive and draws it once that one line is removed, while SC2034 keeps firing in both halves, so the copy was being read and only the flow-graph family changed.
 No green Linux lint run exists yet, so the end-to-end proof is still outstanding, and the Lint job on the pull request carrying this change is what will supply it.
