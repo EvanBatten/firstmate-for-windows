@@ -108,7 +108,9 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 # creates nothing.
 _fm_pending_reply_load_process_identity() {
   local FM_ROOT FM_HOME STATE FM_STATE_OVERRIDE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
-  command -v fm_pid_identity_equal >/dev/null 2>&1 && return 0
+  # declare -F asks about functions only; `command -v` would search PATH for
+  # the name when it is not yet defined (see bin/fm-remote-job-lib.sh).
+  declare -F fm_pid_identity_equal >/dev/null && return 0
   STATE=$_FM_PENDING_REPLY_LIB_DIR
   # shellcheck source=bin/fm-wake-lib.sh
   . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"

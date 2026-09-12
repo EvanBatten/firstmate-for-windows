@@ -103,7 +103,11 @@
 # own directory, which exists, so that mkdir creates nothing.
 _fm_remote_job_load_process_identity() {  # <bin-dir>
   local FM_ROOT FM_HOME STATE FM_STATE_OVERRIDE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
-  command -v fm_pid_start_identity_equal >/dev/null 2>&1 && return 0
+  # declare -F asks about functions only. `command -v` would search PATH for
+  # the name whenever it is not yet defined, which is the common case here,
+  # and that search cost over a second per source on WSL, whose PATH carries
+  # the Windows directories, turning every lane launch into a timeout.
+  declare -F fm_pid_start_identity_equal >/dev/null && return 0
   STATE=$1
   # shellcheck source=bin/fm-wake-lib.sh
   . "$1/fm-wake-lib.sh"
