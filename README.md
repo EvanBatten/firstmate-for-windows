@@ -26,7 +26,7 @@ Launching a supported harness inside it instantiates your first mate - and makes
 ## What the port changes
 
 Windows is not a hostile platform for this codebase so much as an unmeasured one.
-The whole port is seven areas, each fixed behind a capability check rather than a `uname` test, so macOS and Linux behavior is unchanged:
+The whole port is eight areas, each fixed behind a capability check rather than a `uname` test, so macOS and Linux behavior is unchanged:
 
 - **Line endings at checkout.** Without a `.gitattributes`, the Git for Windows default rewrites all 151 `bin/*.sh` to CRLF, and a shebang ending `#!/usr/bin/env bash\r` names no interpreter. Nothing else in the port is measurable until this is fixed.
 - **Process identity and liveness.** MSYS `ps` has no `-o`, a bash spawned by a native process reports PPID 1, and `kill -0` cannot see a Win32 pid. `bin/fm-proc-lib.sh` puts "what process is this, and is it alive" behind one library so harness ancestry and every liveness probe stop answering "dead".
@@ -35,6 +35,9 @@ The whole port is seven areas, each fixed behind a capability check rather than 
 - **Path form comparisons.** `git rev-parse --show-toplevel` answers `C:/...` while `pwd -P` answers `/c/...`, and the two disagree about case as well. `bin/fm-path-lib.sh` owns that comparison for every caller.
 - **Test fixtures.** Four fixture assumptions made the suite unrunnable here, two of which were wrong on Linux too.
 - **Session-lock identity.** MSYS cannot implement POSIX `exec`, so a hook's ancestry walk names no harness and tokenless watcher continuity never fires. The lock now records the harness session id beside the pid.
+- **Private state.** Every Git Bash mount is `noacl`, so no POSIX mode is ever stored: `mkdir -m 700` creates a 755 directory and exits 1, and `chmod 600` reads back 644.
+  `bin/fm-private-lib.sh` owns "this path must be private" for the shell scripts and the Perl capture helper.
+  It measures whether the filesystem under a path can carry a mode, keeps the exact check where it can, and records a waiver where it cannot, so the guarded PR merge path can now arm its merge poll.
 
 The findings ledger behind every one of those rows, with the exact command and output, is in [docs/windows/measurement.md](docs/windows/measurement.md).
 [docs/windows/README.md](docs/windows/README.md) is the entry point to the port's own documentation.
@@ -52,9 +55,7 @@ There is no `lsof`, so the stale git-lock proof refuses rather than guesses.
 Presentation workspace ordering and the wedge-alarm notifier are best-effort.
 
 **Still open.**
-Every Git Bash mount is `noacl`, so POSIX modes are not representable: `mkdir -m 700` creates a 755 directory and exits 1, and `chmod 600` reads back 644.
-33 of 151 `bin/*.sh` create or assert mode-700/600 private state, and each of those checks misfires.
-That is the largest remaining gap, and it is what stops the guarded PR merge path from arming a merge poll.
+The extension host, `bin/fm-extension.mjs`, still asserts exact modes and is outside that owner, so extension capture refuses at the node host on a `noacl` mount ([#36](https://github.com/EvanBatten/firstmate-for-windows/issues/36)).
 The open rows are tracked in the findings ledger rather than hidden.
 
 Verified suite counts on the merged tree, and the classification of everything still red, are in [docs/windows/measurement.md](docs/windows/measurement.md) under "Integration".
