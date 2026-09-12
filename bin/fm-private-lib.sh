@@ -94,11 +94,22 @@
 # force: an unwritable directory or an unreadable `stat` never relaxes a
 # mode-carrying host.
 #
-# HOW THE RELAXATION IS SURFACED. Every waiver records the path in
-# FM_PRIVATE_MODE_UNENFORCEABLE, and nothing here writes to stderr. These
-# helpers run inside hooks whose stdout and stderr are a protocol, so a line of
-# prose from a library is a defect. A caller that wants to tell the operator
-# reads the variable at a point where it owns its own output.
+# WHAT A WAIVER LEAVES BEHIND, AND WHO READS IT TODAY: NOBODY. Every waiver
+# records the path in FM_PRIVATE_MODE_UNENFORCEABLE, and nothing here writes to
+# stderr - these helpers run inside hooks whose stdout and stderr are a
+# protocol, so a line of prose from a library is a defect. That variable and
+# `fm_private_mode_unenforceable` are an OUTPUT for a caller that owns its own
+# output, and no such caller exists yet: nothing under bin/ reads either one,
+# and tests/fm-private-lib.test.sh is the only reader in the tree. So on a
+# mount that cannot carry a mode, every mode check routed through this owner is
+# waived with no operator-visible signal anywhere, and the privacy claim rests
+# entirely on the filesystem's own access control rather than on the mode bits.
+# That is what decision D6 settled for Git Bash, where the home and the temp
+# directory sit under the user's NTFS profile directory and Windows keeps them
+# private to that user by ACL. The capability is MEASURED and not
+# platform-gated, so the same silence covers any other mount that cannot carry
+# a mode - an exFAT, FAT or NFS FM_HOME or TMPDIR on a POSIX host - where the
+# claim is that mount's to make and the NTFS argument does not carry it.
 
 if [ -n "${FM_PRIVATE_LIB_SOURCED:-}" ]; then
   return 0

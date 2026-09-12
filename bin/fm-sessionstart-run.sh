@@ -185,7 +185,7 @@ msys_severed_ancestry_delegates() {
 
 case "$SOURCE" in
   resume|reload|fork)
-    exec "$SCRIPT_DIR/fm-sessionstart-nudge.sh"
+    "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
     ;;
   clear|compact)
     msys_severed_ancestry_delegates

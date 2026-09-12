@@ -2478,6 +2478,9 @@ A second directive on `bin/fm-teardown.sh` would suppress no finding that fires 
 Its cost is wall time, measured here as 744 s to 1333 s, a factor of 1.79, and the ratio rather than the absolute is what transfers, because two workers occupy only two of the runner's four cores, so the job's wall is the slower shard under two workers and the two shards added under one.
 That lever was taken: `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1` on the lint step, which makes the job's peak the largest single root rather than the sum of two, 7.95 GiB against the 12 GiB budget.
 A reliably green gate was judged worth more than the extra ten minutes, and unlike the second directive it gives up no coverage anywhere.
+The pre-push gate takes the same lever for the same reason: `.no-mistakes.yaml` runs `bash bin/fm-lint.sh --jobs 1`.
+It is the same gate in the other place, and it has less headroom rather than more - this box has 15 GiB against the runner's 16 GB - while its changed-file set on any branch that touches both `bin/fm-teardown.sh` and `bin/fm-watch.sh` carries the whole of that summed peak.
+Spelled as the script's own `--jobs` option, not an environment prefix, because no-mistakes hands `commands.lint` to cmd.exe on Windows, which can read a POSIX `FM_LINT_JOBS=1` prefix no more than it can run the bare script (issue #20).
 
 The directive was proved live rather than assumed: a copy of the file with an unreachable command appended draws no SC2317 with the directive and draws it once that one line is removed, while SC2034 keeps firing in both halves, so the copy was being read and only the flow-graph family changed.
 No green Linux lint run exists yet, so the end-to-end proof is still outstanding, and the Lint job on the pull request carrying this change is what will supply it.

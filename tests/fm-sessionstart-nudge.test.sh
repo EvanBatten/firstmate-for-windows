@@ -1202,6 +1202,59 @@ test_run_resume_on_msys_delegates_without_walking_the_ancestry() {
   pass "run wrapper: an MSYS resume delegates to the nudge without walking the ancestry"
 }
 
+# Delegating is not the same as getting out of the way. The nudge decides
+# whether to stay silent by walking THIS process's ancestry for the lock owner,
+# so the open that hands it the session has to hand it the live parent chain the
+# tracked registrations end in `; exit 0` to keep. `exec` hands the wrapper's
+# process over instead of keeping it, and the nudge then walks from whatever
+# that exec left behind - on MSYS a new Win32 process whose parent is already
+# dead (docs/windows/measurement.md C4b). A walk that cannot reach the lock
+# owner fires the nudge at a session that already holds the lock, and the agent
+# runs a second full digest over a context that was just restored, which is the
+# one case the resume row exists to keep quiet. So the nudge is CALLED here, as
+# it is on the divert branch and as the digest is on the others, and the wrapper
+# stays the live parent of the process doing the walking.
+#
+# The call is what keeps the status pin too: under `exec` the nudge's status IS
+# the hook's, so a nudge that cannot even parse would reach Claude as the
+# SessionStart exit 2 that blocks a session from opening, while a call leaves
+# the trailing `exit 0` in charge. The stub exits 2 for exactly that reason.
+#
+# Asserted on the process tree, so any future spelling that keeps the parent
+# passes and any that severs it fails: the stub records the parent it really
+# has, and the case compares it against the WRAPPER's own pid rather than
+# against the test's, which a subshell between them would also satisfy.
+test_run_resume_keeps_the_hook_parent_alive_for_the_nudge() {
+  local dir wrapper parent status=0
+  dir="$TMP_ROOT/run-resume-nudge-parent"
+  make_run_primary "$dir"
+  fm_test_install_bin "$dir/bin" fm-sessionstart-run.sh \
+    || fail "could not stage the fixture bin closure for the run wrapper"
+  cat > "$dir/bin/fm-sessionstart-nudge.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$PPID" > "$(dirname "$0")/../nudge-parent"
+exit 2
+SH
+  chmod +x "$dir/bin/fm-sessionstart-nudge.sh"
+  # Backgrounded rather than run in $(...) or a pipeline: `env` execs the
+  # wrapper, so $! IS the wrapper's pid and the recorded parent can be compared
+  # against it, while a command substitution would put a subshell in between.
+  # The userland named is the one whose exec severs, though this branch reads it
+  # for nothing: it delegates before the divert's own question is asked.
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$dir" FM_HOME="$dir" \
+    PATH="$RUN_PATH" "$dir/bin/fm-sessionstart-run.sh" --source resume \
+    </dev/null >/dev/null 2>&1 &
+  wrapper=$!
+  wait "$wrapper" || status=$?
+  expect_code 0 "$status" "run wrapper resume whose nudge exits 2"
+  assert_present "$dir/nudge-parent" "a resume open never reached the nudge at all"
+  parent=$(cat "$dir/nudge-parent")
+  [ "$parent" = "$wrapper" ] \
+    || fail "the nudge's parent is $parent, not the wrapper $wrapper: resume exec'd the wrapper's process away instead of keeping it alive as the parent the nudge's ownership check walks from"
+  pass "run wrapper: resume delegates with the hook's parent alive and the hook's status still pinned to 0"
+}
+
 # A severed open walks its own ancestry to decide it cannot take the helm, then
 # hands the open to the nudge, which walks the SAME ancestry again to decide
 # whether the lock is this session's. That second walk can only ever repeat the
@@ -1370,6 +1423,7 @@ test_run_clear_without_completion_finishes_startup
 test_run_clear_rejects_previous_owner_completion
 test_run_resume_delegates_to_the_nudge
 test_run_resume_on_msys_delegates_without_walking_the_ancestry
+test_run_resume_keeps_the_hook_parent_alive_for_the_nudge
 test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
