@@ -37,7 +37,7 @@ cleanup_remote_job_fixture() {
 trap cleanup_remote_job_fixture EXIT
 
 cp "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
-  "$ROOT/bin/fm-remote-delta-read.sh" "$REMOTE_ROOT/bin/"
+  "$ROOT/bin/fm-remote-delta-read.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$REMOTE_ROOT/bin/"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
 cat > "$REMOTE_ROOT/bin/fm-probe-job.sh" <<'SH'
 #!/bin/bash
@@ -715,7 +715,7 @@ RESTART_STATE="$TMP_ROOT/restart-state"
 RESTART_CHILD_LOG="$TMP_ROOT/restart-children"
 mkdir -p "$RESTART_ROOT/bin" "$RESTART_HOME"
 cp "$ROOT/bin/fm-private-lib.sh" "$RESTART_ROOT/bin/"
-cp "$ROOT/bin/fm-remote-job-lib.sh" "$RESTART_ROOT/bin/"
+cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$RESTART_ROOT/bin/"
 cp "$ROOT/bin/fm-remote-job-worker.sh" "$RESTART_ROOT/bin/fm-remote-job-supervisor-under-test.sh"
 printf 'fixture\n' > "$RESTART_ROOT/AGENTS.md"
 cat > "$RESTART_ROOT/bin/fm-remote-job-worker.sh" <<'SH'

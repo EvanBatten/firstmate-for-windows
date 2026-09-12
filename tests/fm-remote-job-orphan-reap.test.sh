@@ -68,7 +68,8 @@ wait_child() { # <pid> <seconds>
 build_remote_root() {
   local root=$1
   mkdir -p "$root/bin"
-  cp "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" "$root/bin/"
+  cp "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
+    "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$root/bin/"
   chmod +x "$root/bin"/*.sh
   printf 'fixture\n' > "$root/AGENTS.md"
   git -C "$root" init -q -b main
