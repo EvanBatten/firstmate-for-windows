@@ -509,6 +509,129 @@ test_a_script_staged_alone_can_still_source_its_siblings() {
   pass "private-lib: a script staged alone through the shared installer still finds its siblings"
 }
 
+# --- the capture helper across the language boundary ------------------------
+
+# bin/fm-procevent-extension-capture.pl asserts the same private-state modes
+# this library owns, in another language and in another process, so the owner's
+# verdict has to REACH it: the helper measures nothing itself and
+# bin/fm-procevent.sh hands it `--private-modes enforcing|unenforceable` from
+# fm_private_modes_enforcing. These cases run the helper the way that caller
+# runs it - registry, inbox and capture reservation root arrive as inherited
+# descriptors 9, 8 and 6, everything else as argv - and read the line it prints,
+# which is the contract bin/fm-procevent.sh parses.
+CAPTURE_HELPER="$ROOT/bin/fm-procevent-extension-capture.pl"
+CAPTURE_DIGEST="sha256:$(printf '%064d' 0)"
+
+# The staged directories are 0755 and not 0700 deliberately: that is what a
+# mount which stores no mode REPORTS for the 0700 directory its own caller just
+# made, because `stat` there synthesizes the mode from the reading process's
+# umask (docs/windows/measurement.md row 21). A Git Bash host presents it with
+# no help at all; a host that carries modes has to be asked for it, which is
+# what this chmod does. Either way the helper sees exactly the readback the
+# relaxation exists for.
+capture_home() {  # <state-dir>
+  local state=$1
+  mkdir -p "$state/procevent" "$state/procevent-inbox" "$state/procevent-capture-reservations"
+  chmod 0755 "$state/procevent" "$state/procevent-inbox" "$state/procevent-capture-reservations"
+}
+
+run_capture_helper() {  # <registry> <inbox> <reservations> <source-id> [option...]
+  local registry=$1 inbox=$2 reservations=$3 id=$4
+  shift 4
+  (
+    exec 9<"$registry" || exit 97
+    exec 8<"$inbox" || exit 97
+    exec 6<"$reservations" || exit 97
+    exec perl "$CAPTURE_HELPER" "$@" 9 8 6 "$id" ext-capture org.example.capture 1.0.0 1 \
+      "$CAPTURE_DIGEST" "$CAPTURE_DIGEST" capture-token "$id.runner" ".$id.output" \
+      "$$" capture-identity 1024 -- /bin/printf 'captured body'
+  ) 2>&1
+}
+
+test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check() {
+  local dir out status=0
+  dir=$(case_dir capture-helper-verdict)
+
+  # No option at all is the strict mode, and it has to stay the strict mode:
+  # this half is what would go green if the relaxation ever leaked into a
+  # caller that did not ask for it.
+  capture_home "$dir/strict"
+  out=$(run_capture_helper "$dir/strict/procevent" "$dir/strict/procevent-inbox" \
+    "$dir/strict/procevent-capture-reservations" strict-source) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a helper told nothing about this mount must still compare modes exactly, got '$out'"
+  case "$out" in
+    *"unsafe registry directory"*) ;;
+    *) fail "the strict refusal did not come from the mode comparison: '$out'" ;;
+  esac
+  assert_absent "$dir/strict/procevent-inbox/strict-source.1.result" \
+    "a refused capture published a result anyway"
+
+  status=0
+  capture_home "$dir/relaxed"
+  out=$(run_capture_helper "$dir/relaxed/procevent" "$dir/relaxed/procevent-inbox" \
+    "$dir/relaxed/procevent-capture-reservations" relaxed-source --private-modes unenforceable) \
+    || status=$?
+  expect_code 0 "$status" "the capture helper on a mount that cannot carry a mode"
+  case "$out" in
+    captured*relaxed-source.1.result*) ;;
+    *) fail "the owner's verdict did not reach the helper's mode comparison: '$out'" ;;
+  esac
+  assert_present "$dir/relaxed/procevent-inbox/relaxed-source.1.result" \
+    "the accepted capture published no result"
+  [ "$(cat "$dir/relaxed/procevent-inbox/relaxed-source.1.result")" = "captured body" ] \
+    || fail "the published result is not the output the source produced"
+  pass "private-lib: the capture helper compares modes exactly until the owner says the mount cannot carry one"
+}
+
+# The waiver covers the mode comparison and nothing beside it. The two refusals
+# below are the ones a single-user runner can actually stage: a planted symlink,
+# which the helper's O_CREAT|O_EXCL|O_NOFOLLOW open must still refuse, and a
+# directory this user does not own, which exists on a POSIX host and does not on
+# a mount that synthesizes ownership along with the mode - there the case says
+# so rather than pretending to have asserted it.
+test_the_capture_helpers_other_refusals_survive_the_relaxation() {
+  local dir out status=0 foreign
+  dir=$(case_dir capture-helper-confinement)
+  capture_home "$dir/planted"
+  ln -s "$dir/outside" "$dir/planted/procevent/planted-source.runner"
+  out=$(run_capture_helper "$dir/planted/procevent" "$dir/planted/procevent-inbox" \
+    "$dir/planted/procevent-capture-reservations" planted-source --private-modes unenforceable) \
+    || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "the relaxation waived the helper's no-follow refusal, got '$out'"
+  case "$out" in
+    *"cannot create planted-source.runner"*) ;;
+    *) fail "the planted symlink was refused for some other reason: '$out'" ;;
+  esac
+  assert_absent "$dir/outside" "the helper wrote through a planted symlink out of its registry"
+
+  capture_home "$dir/foreign"
+  foreign=$(perl -e '
+    for my $candidate (@ARGV) {
+      my @st = lstat($candidate);
+      next unless @st && -d _ && !-l _;
+      next if $st[4] == $<;
+      print $candidate;
+      last;
+    }' /usr/share /usr/lib /usr /etc / 2>/dev/null) || foreign=
+  if [ -z "$foreign" ]; then
+    printf '# skipped the ownership half: every directory on this host reports the current user as its owner\n'
+  else
+    status=0
+    out=$(run_capture_helper "$foreign" "$dir/foreign/procevent-inbox" \
+      "$dir/foreign/procevent-capture-reservations" foreign-source --private-modes unenforceable) \
+      || status=$?
+    [ "$status" -ne 0 ] \
+      || fail "the relaxation waived the helper's ownership refusal for $foreign, got '$out'"
+    case "$out" in
+      *"unsafe registry directory"*) ;;
+      *) fail "a registry directory this user does not own was refused for some other reason: '$out'" ;;
+    esac
+  fi
+  pass "private-lib: the relaxation waives the mode comparison and leaves every other refusal standing"
+}
+
 test_probe_measures_a_mount_that_carries_modes
 test_probe_measures_a_mount_that_drops_modes
 test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback
@@ -526,3 +649,5 @@ test_assertion_refuses_a_wrong_mode_where_modes_are_enforcing
 test_assertion_accepts_the_same_wrong_mode_where_modes_are_not_representable
 test_a_setter_that_fails_for_a_real_reason_still_fails
 test_a_script_staged_alone_can_still_source_its_siblings
+test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check
+test_the_capture_helpers_other_refusals_survive_the_relaxation

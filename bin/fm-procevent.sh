@@ -220,6 +220,19 @@ cleanup_extension_registration_invocations_locked() {  # <source-id>
   esac
 }
 
+# bin/fm-private-lib.sh is the one owner of "can the filesystem under this path
+# carry a POSIX mode". The capture helper measures nothing of its own, so the
+# owner's verdict travels to it as an explicit argument, and any invocation that
+# omits it leaves the helper comparing modes exactly.
+CAPTURE_PRIVATE_MODES=enforcing
+capture_private_modes() {  # -> CAPTURE_PRIVATE_MODES
+  if fm_private_modes_enforcing "$STATE"; then
+    CAPTURE_PRIVATE_MODES=enforcing
+  else
+    CAPTURE_PRIVATE_MODES=unenforceable
+  fi
+}
+
 # Invoke one captured result through its exact extension owner. The immutable
 # sidecar, not the current adapter name alone, supplies every expected binding
 # field, so replacing a binding cannot reinterpret old evidence.
@@ -255,10 +268,12 @@ extension_result_command() {  # <adapter> <operation> <result-file>
       extension_lifecycle_lock_release
       return 1
     fi
+    capture_private_modes
     FM_EXTENSION_RETIREMENT_MODE=process-event \
       FM_EXTENSION_LIFECYCLE_LOCK="$EXTENSION_LIFECYCLE_LOCK" \
       FM_EXTENSION_LIFECYCLE_OWNER="$owner" \
-      perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" handoff \
+      perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" \
+        --private-modes "$CAPTURE_PRIVATE_MODES" handoff \
         8 6 "$claim_path" "$CLAIM_HOME" "$CLAIM_ID" "$CLAIM_TOKEN" "$CLAIM_PID" \
         "$CLAIM_IDENTITY" "$FM_PROCEVENT_RESULT_EXTENSION_BINDING_DIGEST" "$reservation" \
         "$operation" "$result" "$EXTENSION_HOST" -- "${command[@]:1}"
@@ -731,7 +746,9 @@ cmd_start() {
   # sentinel defined while sharing the no-result branch below under `set -u`.
   local truncated=0 capture_state='' durable='' reservation_terminal='' reservation_silent=''
   if [ "$extension_owner" -eq 1 ]; then
+    capture_private_modes
     capture_state=$(perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" \
+      --private-modes "$CAPTURE_PRIVATE_MODES" \
       9 8 6 "$id" "$adapter" "$FM_PROCEVENT_EXTENSION_ID" \
       "$FM_PROCEVENT_EXTENSION_VERSION" "$FM_PROCEVENT_EXTENSION_CAPABILITY_VERSION" \
       "$FM_PROCEVENT_EXTENSION_PACKAGE_DIGEST" "$FM_PROCEVENT_EXTENSION_BINDING_DIGEST" \
