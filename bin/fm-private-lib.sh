@@ -87,6 +87,30 @@
 # MOVE cannot be fooled that way: no umask makes one file read 644 after a
 # chmod 0644 and 600 after a chmod 0600 unless the chmod is real.
 #
+# THE PROBE NEVER RUNS WHERE ANOTHER ACCOUNT COULD REPLACE IT. `chmod` has no
+# portable no-follow. If the probe's own name could be unlinked and replaced
+# with a symlink between the ownership check and the `chmod 0644` below, that
+# chmod would FOLLOW it and change the mode of whatever it named - a file this
+# user owns somewhere else entirely - and no re-check afterwards can undo that,
+# because the widening has already happened by the time anything looks again.
+# So the window is not narrowed, it is removed: the probe directory is read
+# first, and a directory whose mode carries group- or other-write is not probed
+# at all. Nobody else can create a name in a directory they cannot write, which
+# is what makes the substitution impossible rather than unlikely.
+#
+# The guard costs the relaxation nothing on the mounts it exists for. A mount
+# that stores no mode synthesizes one from base 0755 for a directory and 0644
+# for a file, and a umask only CLEARS bits, so the 022 bits can never appear
+# there under any umask - the guard is unreachable on exactly those mounts. On a
+# mode-carrying filesystem a group-writable directory is the one whose check
+# must not be waived anyway, and declining to measure hands it the same verdict
+# the measurement would have: enforcing.
+#
+# What that defends is write access the mode SHOWS. An ACL that grants another
+# account write without appearing in the mode bits is not defended, and neither
+# is root; this library has no no-follow primitive to defend them with, and a
+# probe cannot be written in portable shell that does.
+#
 # The verdict is cached per DEVICE, so a process that touches two mounts
 # measures each, and the cache lives in a plain shell variable that is
 # deliberately not exported, so a child on a different mount measures its own.
@@ -217,16 +241,14 @@ _fm_private_probe_dir() {  # <path>
 }
 
 # The probe is only evidence about the filesystem if the file it reads is the
-# file it made. The one directory the probe cannot avoid writing into is the
-# very directory whose mode is in question, and the case that reaches the probe
-# at all is the case where that mode has already been found wrong - so on a
-# mode-carrying host the probe can be running inside a genuinely
-# group-writable directory. There, another account can unlink the probe and
-# leave a 644 file of the same name in its place, and a probe that believed it
-# would report "modes are not representable here" and waive the very check that
-# was catching the directory. It cannot forge OWNERSHIP, so that is what is
-# checked: a probe that is not a plain, singly-linked file belonging to this
-# user is not evidence, and the strict branch stands.
+# file it made. The directory it writes into is the one whose mode is in
+# question, and it only ever gets there because that mode was already found
+# wrong. The guard above means no other account can put anything in that
+# directory, so what is left for this check to catch is a swap by another
+# process of this user's own, and any write access the directory's mode did not
+# show. Such a swap cannot forge OWNERSHIP, so that is what is checked: a probe
+# that is not a plain, singly-linked file belonging to this user is not
+# evidence, and the strict branch stands.
 #
 # This is asked BEFORE and AFTER the two readbacks, because a swap between the
 # check and the reading is exactly the swap that matters, and the probe's own
@@ -246,7 +268,7 @@ _fm_private_probe_is_ours() {  # <probe>
 # 0 yes (the strict branch), 1 no. An unmeasurable answer is yes: a probe that
 # could not run has not shown that anything is wrong with the host.
 fm_private_modes_enforcing() {  # <path>
-  local dir device probe wide narrow
+  local dir device mode probe wide narrow
   dir=$(_fm_private_probe_dir "${1-}")
   device=$(fm_private_stat_device "$dir") || device=
   [ -n "$device" ] || return 0
@@ -254,6 +276,9 @@ fm_private_modes_enforcing() {  # <path>
     *" $device=0 "*) return 0 ;;
     *" $device=1 "*) return 1 ;;
   esac
+  mode=$(fm_private_stat_mode "$dir") || mode=
+  case "$mode" in ''|*[!0-7]*) return 0 ;; esac
+  [ $((8#$mode & 8#022)) -eq 0 ] || return 0
   probe=$(mktemp "$dir/.fm-private-probe.XXXXXX" 2>/dev/null) || probe=
   [ -n "$probe" ] || return 0
   wide=

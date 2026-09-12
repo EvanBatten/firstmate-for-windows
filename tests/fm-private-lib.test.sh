@@ -110,8 +110,10 @@ shift
 # nowhere to live, so the record drops it the way stat would.
 while :; do case "$mode" in 0?*) mode=${mode#0} ;; *) break ;; esac; done
 rc=0
+# -L because the real chmod above followed any symlink it was given, so the
+# mode it set belongs to the TARGET's inode. A plain path is unaffected.
 for p in "$@"; do
-  key=$("$REAL_STAT" "$FMT_FLAG" "$KEY_FMT" "$p" 2>/dev/null) || { rc=1; continue; }
+  key=$("$REAL_STAT" -L "$FMT_FLAG" "$KEY_FMT" "$p" 2>/dev/null) || { rc=1; continue; }
   printf '%s\n' "$mode" > "$DB/$key" || rc=1
 done
 exit "$rc"
@@ -294,6 +296,82 @@ SH
   [ "$out" = "refused
 []" ] || fail "a probe swapped after its ownership check must not waive anything, got '$out'"
   pass "private-lib: the probe draws no conclusion from a file swapped mid-measurement"
+}
+
+# The two cases above defend the VERDICT against a swapped probe. They say
+# nothing about the file the probe's own `chmod` lands on, and that is the other
+# half: `chmod` follows symlinks and has no portable no-follow, so a probe
+# sitting in a directory another account can write hands that account a way to
+# change the mode of a file this user owns somewhere else - unlink the probe
+# between its ownership check and the first `chmod 0644`, leave a symlink of the
+# same name, and the chmod goes to the symlink's target. The verdict is not what
+# breaks there; the post-readback ownership check still discards the
+# measurement. So this case asserts the TARGET, which is the thing that was
+# damaged, and the verdict beside it.
+#
+# A real substitution needs a second account and a suite has one, so it is
+# staged through the fixture's own `stat`: the wrapper performs exactly the
+# unlink-and-symlink another account would, at the moment it would - the
+# ownership question - and answers that question truthfully so the probe carries
+# on. The mount is the mode-carrying fixture, so the target's mode is recorded
+# state on any host rather than a Git Bash synthesis.
+test_the_probe_never_chmods_through_a_name_another_account_could_replace() {
+  local dir fakebin out
+  dir=$(case_dir probe-substitution)
+  mkdir -p "$dir/work"
+  # Without symlinks the staging below cannot express the attack at all, and a
+  # case that cannot express its attack must say so rather than pass.
+  ln -s "$dir/victim" "$dir/link-check" \
+    || fail "this host cannot stage the substitution: ln -s failed"
+  [ -L "$dir/link-check" ] \
+    || fail "this host cannot stage the substitution: ln -s made no symlink"
+  rm -f -- "$dir/link-check"
+
+  fakebin=$(enforcing_fs "$dir")
+  mv "$fakebin/stat" "$fakebin/stat-enforcing"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'ENFORCING_STAT=%s\n' "$(printf '%q' "$fakebin/stat-enforcing")"
+    printf 'VICTIM=%s\n' "$(printf '%q' "$dir/victim")"
+    printf 'SWAPPED=%s\n' "$(printf '%q' "$dir/swapped")"
+    printf 'OUR_UID=%s\n' "$(printf '%q' "$(id -u)")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %u:*/.fm-private-probe.*)
+    if [ ! -e "$SWAPPED" ]; then
+      : > "$SWAPPED"
+      rm -f -- "$ARG_PATH"
+      ln -s "$VICTIM" "$ARG_PATH"
+    fi
+    printf '%s\n' "$OUR_UID"
+    exit 0
+    ;;
+esac
+exec "$ENFORCING_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  # 0777 on the probe's directory is the precondition the whole attack needs,
+  # and 0644 on the file under test is what sends the assertion to the probe in
+  # the first place. The target starts at 0700, a mode the probe's two chmods
+  # would both destroy.
+  out=$(fs_eval "$fakebin" "
+    : > '$dir/victim'
+    chmod 0700 '$dir/victim'
+    : > '$dir/work/f'
+    chmod 0644 '$dir/work/f'
+    chmod 0777 '$dir/work'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+    fm_private_stat_mode '$dir/victim'
+  ")
+  [ "$out" = "refused
+700" ] || fail "a probe in a directory another account can write must refuse and must not touch a file outside it, got '$out'"
+  pass "private-lib: the probe never chmods through a name another account could replace"
 }
 
 test_probe_cannot_relax_a_directory_it_cannot_write() {
@@ -704,6 +782,7 @@ test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback
 test_probe_leaves_nothing_behind
 test_probe_refuses_to_conclude_from_a_file_it_does_not_own
 test_probe_refuses_to_conclude_from_a_probe_swapped_mid_measurement
+test_the_probe_never_chmods_through_a_name_another_account_could_replace
 test_probe_cannot_relax_a_directory_it_cannot_write
 test_creation_carries_700_and_600_where_modes_are_enforcing
 test_creation_succeeds_and_is_recorded_where_modes_are_not_representable

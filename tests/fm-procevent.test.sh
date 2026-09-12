@@ -197,7 +197,8 @@ RESULT=$(first_result "$H1" src-one || true)
 [ -n "$RESULT" ] || fail "no durable result was captured"
 # bin/fm-private-lib.sh owns whether a mode is carried here: on a filesystem
 # that cannot represent one, "is it 600" is not a question about the product.
-fm_private_mode_ok "$RESULT" 600 || fail "the captured result is private"
+fm_private_mode_ok "$RESULT" 600 \
+  || fail "the captured result is not mode 0600: $(fm_private_stat_mode "$RESULT")"
 assert_grep 'payload one' "$RESULT" "the captured result holds the source output verbatim"
 assert_grep 'lavish' "${RESULT%.result}.adapter" "the captured result retains its immutable adapter"
 assert_absent "${RESULT%.result}.handled" "publication alone never marks a result handled"
@@ -349,7 +350,7 @@ assert_absent "$HPRIVATE/state/procevent-inbox/private-src.1.handled" "failed mo
 private_out=$(umask 000; pe "$HPRIVATE" handled private-src 1)
 assert_contains "$private_out" "handled: private-src 1" "handling succeeds after private mode enforcement recovers"
 fm_private_mode_ok "$HPRIVATE/state/procevent-inbox/private-src.1.handled" 600 \
-  || fail "the handled marker is private under a permissive caller umask"
+  || fail "the handled marker written under a permissive caller umask is not mode 0600: $(fm_private_stat_mode "$HPRIVATE/state/procevent-inbox/private-src.1.handled")"
 pass "handled acknowledgement creation is private and fails safely"
 
 # --- a terminal result retires its source, on the adapter's verdict alone ----
