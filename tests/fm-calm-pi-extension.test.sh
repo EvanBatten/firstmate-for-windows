@@ -3505,7 +3505,7 @@ JS
   done
   assert_contains "$(cat "$active_hidden_snapshot")" "Warning: CALM_TRANSIENT_DIAGNOSTIC" "operational arrival lost its preceding transient diagnostic"
   assert_contains "$(cat "$active_hidden_snapshot")" " Error:" "operational delivery did not produce a transient provider diagnostic"
-  hash_before=$(shasum -a 256 "$session_file" | awk '{print $1}')
+  hash_before=$(fm_test_sha256 "$session_file")
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/export $export_file"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
@@ -3627,7 +3627,7 @@ JS
   assert_contains "$(cat "$restored_snapshot")" "I will run one command." "second /calm did not restore the mid-turn assistant working note"
   assert_contains "$(cat "$restored_snapshot")" "escape to interrupt" "/calm changed the active Ctrl+O expansion state"
 
-  hash_after=$(shasum -a 256 "$session_file" | awk '{print $1}')
+  hash_after=$(fm_test_sha256 "$session_file")
   [ "$hash_before" = "$hash_after" ] || fail "/calm changed the persisted session or context data"
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/calm"
