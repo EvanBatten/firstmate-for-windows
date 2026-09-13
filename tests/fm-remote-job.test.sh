@@ -401,6 +401,32 @@ wait "$OTHER_PID" 2>/dev/null || true
 OTHER_PID=
 pass "stale ownership is reclaimed without signaling a reused pid"
 
+# The previous build recorded the lock owner's start as `ps -o lstart=`, which
+# this build never compares equal, and its live worker keeps the heartbeat
+# fresh, so the lock is never free to take. Upgrading the code under that
+# worker must replace it exactly once and then serve the next command.
+PREDECESSOR_PID=$(cat "$STATE_ROOT/worker.pid")
+PREDECESSOR_PGID=$(fm_remote_job_process_pgid "$PREDECESSOR_PID") \
+  || fail "the upgrade fixture could not resolve the live worker's process group"
+printf 'Sun Sep 13 02:17:13 2026\n' > "$STATE_ROOT/worker.lock/start"
+printf '\n' >> "$REMOTE_ROOT/bin/fm-remote-job-worker.sh"
+fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
+  || fail "$FM_REMOTE_JOB_ERROR"
+UPGRADED_PID=$(cat "$STATE_ROOT/worker.pid")
+[ "$UPGRADED_PID" != "$PREDECESSOR_PID" ] || fail "ensure kept the previous build's worker after the code changed"
+! kill -0 -- "-$PREDECESSOR_PGID" 2>/dev/null \
+  || fail "the previous build's worker tree survived its replacement"
+fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
+  || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_REPAIRED" -eq 0 ] && [ "$(cat "$STATE_ROOT/worker.pid")" = "$UPGRADED_PID" ] \
+  || fail "the upgraded worker was reclaimed a second time"
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh < /dev/null > /dev/null
+JOB_ID=$FM_REMOTE_JOB_ID
+fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the upgraded worker did not serve the next command"
+fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the post-upgrade probe could not be reaped"
+pass "a live worker whose lock the previous build wrote is replaced once, then serves"
+
 FM_REMOTE_JOB_TIMEOUT=1
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-timeout-job.sh < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID

@@ -535,14 +535,17 @@ test_installer_rejects_unsupported_platform() {
 
 # Prove the no-mistakes/local owner (bin/fm-lint.sh with no paths) catches a
 # self-broken ci.yml. Copy the lint scripts into a fake repo so the default
-# workflow root is the fixture, not this worktree.
+# workflow root is the fixture, not this worktree. The default path also runs
+# the repository invariants; a passing stub stands in for them so the exit
+# status is the workflow lint's alone.
 test_fm_lint_default_path_catches_broken_ci_yml() {
   local tmp fakebin log diff_file out rc
   tmp=$(fm_test_tmproot fm-lint-wf-default)
   mkdir -p "$tmp/bin" "$tmp/.github/workflows"
   cp "$LINT" "$tmp/bin/fm-lint.sh"
   cp "$LINT_WF" "$tmp/bin/fm-lint-workflows.sh"
-  chmod +x "$tmp/bin/fm-lint.sh" "$tmp/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/bin/fm-repo-invariants.sh"
+  chmod +x "$tmp/bin/fm-lint.sh" "$tmp/bin/fm-lint-workflows.sh" "$tmp/bin/fm-repo-invariants.sh"
   write_col0_heredoc_workflow "$tmp/.github/workflows/ci.yml"
 
   fakebin=$(fm_fakebin "$tmp")

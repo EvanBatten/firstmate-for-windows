@@ -2605,7 +2605,16 @@ The first guard was `command -v`, which searches PATH for a name that is not a f
 Sourcing `bin/fm-remote-job-lib.sh` there went from 62 ms for five sources to 6512 ms, and `fm-remote-job` went from 3 of 3 green to 3 of 3 red, each run on a different start or readiness bound.
 The guard is `declare -F` now, which asks about functions only: 115 ms for five sources and 3 of 3 green with 28 cases.
 
-Upgrade cost: a record written by the previous build holds a `ps` string that never compares equal, so each live worker and job claim is reclaimed once, and a recovery in flight is reconciled once.
+### A live Linux worker from the previous build wedged the upgrade
+
+The previous build recorded the worker lock owner's start as `ps -o lstart=`, which this build never compares equal.
+That worker keeps its heartbeat fresh, so its lock is never free to take, and the replacement path stopped only a worker whose lock record matched.
+Measured on WSL Ubuntu with a worker started from base `c0113c0`, then this build's files moved into its root in place: `ensure` failed after 68 s with `remote job worker did not report ready after startup`, the old worker kept running, and five supervisors that could never take the lock were left behind.
+`fm_remote_job_worker_owned_alive` now falls back when the lock record does not match, the same way it already handled a lock that records no owner: the live worker is `worker.pid`, which has to be the pid the lock records, is alive under a fresh heartbeat, and runs this root's worker.
+The same run after the fix: `ensure` succeeded in 1 s, stopped the old worker, and rewrote the lock start as `linux-starttime=`; a second `ensure` repaired nothing, the next job ran, and one supervisor remained.
+`fm-remote-job`'s upgrade case writes that previous-build start into a live worker's lock and changes the code under it. Before the fix that case failed with the same error; after it, the suite passes on WSL with 29 ok.
+
+Upgrade cost: a record written by the previous build holds a `ps` string that never compares equal, so the live worker is stopped and replaced once (the code change forces that replacement anyway), each job claim is reclaimed once, and a recovery in flight is reconciled once.
 
 ## Three operational defects filed as timing
 

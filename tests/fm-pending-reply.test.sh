@@ -157,6 +157,12 @@ test_recovery_sender_identity_reads_and_discriminates() {
   fresh=$(fm_pid_identity "$self_pid") || fail "the process identity owner could not read this shell"
   fm_pid_identity_equal "$fresh" "$self_identity" \
     || fail "two reads of one live sender did not compare equal"$'\n'"recorded: $self_identity"$'\n'"current:  $fresh"
+  # The child must start more than one identity unit after this shell, or its
+  # pre-exec read is this shell's own identity on macOS, where `ps -o lstart=`
+  # has whole-second resolution. At SECONDS 2 more than a second has passed.
+  while [ "$SECONDS" -lt 2 ]; do
+    sleep 0.1
+  done
   sleep 30 &
   other_pid=$!
   other_identity=$(fm_pending_reply_pid_identity "$other_pid") \

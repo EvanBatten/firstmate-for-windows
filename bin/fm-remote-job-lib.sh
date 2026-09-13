@@ -974,7 +974,9 @@ fm_remote_job_worker_lock_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.lo
 # lock pairs it with fm_remote_job_process_command itself. Compare two of these
 # only with fm_pid_start_identity_equal, never `=`. A record written by a build
 # that read `ps -o lstart=` never compares equal, so an upgrade reclaims each
-# live worker and job claim once.
+# job claim once, and fm_remote_job_worker_owned_alive identifies a live worker
+# whose lock that build wrote through worker.pid, so the code change stops and
+# replaces it once.
 fm_remote_job_process_start() { # <pid>
   fm_pid_start_identity "$1"
 }
@@ -1084,6 +1086,12 @@ fm_remote_job_lock_owner_matches_process() {
   FM_REMOTE_JOB_OWNER_PID=$pid
 }
 
+# The live worker a replacement may trust or stop. The lock's owner record names
+# it when the record matches the live process. When it does not - the lock
+# records no owner, or a previous build recorded a start this build never
+# compares equal - the worker is worker.pid, provided the lock records that same
+# pid if it records one, the heartbeat is fresh, and the process runs this
+# root's worker.
 fm_remote_job_worker_owned_alive() {
   local root=$1 account_home=$2 lock pid pid_file identity_file command
   [ "${FM_REMOTE_JOB_ACTIVE:-}" != 1 ] || return 0
@@ -1101,9 +1109,12 @@ fm_remote_job_worker_owned_alive() {
     [ "$pid" = "$FM_REMOTE_JOB_OWNER_PID" ] || return 1
     return 0
   fi
-  [ ! -e "$lock/pid" ] && [ ! -L "$lock/pid" ] &&
+  if [ -e "$lock/pid" ] || [ -L "$lock/pid" ]; then
+    [ "$(fm_remote_job_read_single_line "$lock/pid" 64 2>/dev/null)" = "$pid" ] || return 1
+  else
     [ ! -e "$lock/start" ] && [ ! -L "$lock/start" ] &&
-    [ ! -e "$lock/command" ] && [ ! -L "$lock/command" ] || return 1
+      [ ! -e "$lock/command" ] && [ ! -L "$lock/command" ] || return 1
+  fi
   command=$(fm_remote_job_process_command "$pid") || return 1
   case "$command" in *"$root/bin/fm-remote-job-worker.sh"*) FM_REMOTE_JOB_OWNER_PID=$pid; return 0 ;; esac
   return 1
