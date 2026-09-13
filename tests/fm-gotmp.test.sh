@@ -76,6 +76,9 @@ make_fake_root() {
   # rooted". fm-proc-lib.sh is the leaf fm-wake-lib.sh sources for liveness.
   ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
   ln -s "$ROOT/bin/fm-proc-lib.sh" "$fake/bin/fm-proc-lib.sh"
+  # fm-private-lib.sh: the leaf that owns "this path must be private", sourced
+  # by teardown itself and by four of the libraries symlinked here.
+  ln -s "$ROOT/bin/fm-private-lib.sh" "$fake/bin/fm-private-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
@@ -173,6 +176,9 @@ test_teardown_skips_gracefully_without_tasktmp() {
   # rooted". fm-proc-lib.sh is the leaf fm-wake-lib.sh sources for liveness.
   ln -s "$ROOT/bin/fm-path-lib.sh" "$fake/bin/fm-path-lib.sh"
   ln -s "$ROOT/bin/fm-proc-lib.sh" "$fake/bin/fm-proc-lib.sh"
+  # fm-private-lib.sh: the leaf that owns "this path must be private", sourced
+  # by teardown itself and by four of the libraries symlinked here.
+  ln -s "$ROOT/bin/fm-private-lib.sh" "$fake/bin/fm-private-lib.sh"
   # fm-gate-refuse-lib.sh: teardown sources it before any fleet mutation.
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.

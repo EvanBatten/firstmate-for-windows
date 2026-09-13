@@ -67,6 +67,11 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 FM_INACTIVE_RECONCILE_SECS=${FM_INACTIVE_RECONCILE_SECS:-900}
 case "$FM_INACTIVE_RECONCILE_SECS" in
   ''|*[!0-9]*|0)
@@ -139,7 +144,7 @@ record_phase_set() {
     printf '%s\n' "$line" >> "$tmp" || { rm -f "$tmp"; return 1; }
   done < "$record"
   printf 'phase=%s\n' "$phase" >> "$tmp" || { rm -f "$tmp"; return 1; }
-  chmod 600 "$tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$tmp" || true
   mv -f "$tmp" "$record"
 }
 
@@ -152,7 +157,7 @@ record_field_set() {
     printf '%s\n' "$line" >> "$tmp" || { rm -f "$tmp"; return 1; }
   done < "$record"
   printf '%s=%s\n' "$key" "$value" >> "$tmp" || { rm -f "$tmp"; return 1; }
-  chmod 600 "$tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$tmp" || true
   mv -f "$tmp" "$record"
 }
 
@@ -184,7 +189,7 @@ ensure_record() { # <fingerprint> <task> <incarnation> <state> <outcome-key> <or
     printf 'created_epoch=%s\n' "$(reconcile_now)"
     printf 'notice_emitted=0\n'
   } > "$tmp" || { rm -f "$tmp"; return 1; }
-  chmod 600 "$tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$tmp" || true
   mv -f "$tmp" "$RECORD_PENDING" || { rm -f "$tmp"; return 1; }
 }
 
@@ -260,7 +265,7 @@ write_scan_marker() { # <cursor>
     printf 'epoch=%s\n' "$(reconcile_now)"
     printf 'cursor=%s\n' "$cursor"
   } > "$marker_tmp" || { rm -f "$marker_tmp"; return 1; }
-  chmod 600 "$marker_tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$marker_tmp" || true
   mv -f "$marker_tmp" "$SCAN_MARKER" || { rm -f "$marker_tmp"; return 1; }
 }
 

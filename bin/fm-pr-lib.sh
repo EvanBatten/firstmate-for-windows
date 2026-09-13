@@ -17,6 +17,11 @@
 # The receipt binds the terminal observation to the canonical registration and
 # lets a restart finish fixed-path removal without executing state-file bytes.
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode a private
+# artifact is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
 FM_PR_PROVIDER=
 FM_PR_URL=
 FM_PR_HOST=
@@ -265,10 +270,7 @@ fm_pr_sha256() {
 
 fm_pr_private_file_valid() {
   local path=$1 mode=$2 device=$3
-  [ -f "$path" ] && [ ! -L "$path" ] || return 1
-  [ "$(fm_pr_file_mode "$path")" = "$mode" ] || return 1
-  [ "$(fm_pr_file_device "$path")" = "$device" ] || return 1
-  [ "$(fm_pr_file_link_count "$path")" = 1 ]
+  fm_private_file_valid "$path" "$mode" "$device"
 }
 
 fm_pr_regular_destination_or_absent() {
@@ -484,7 +486,7 @@ fm_pr_poll_prepare() {
   }
 
   if ! printf '%s\n%s\n%s\n%s\n%s\n' "$provider" "$url" "$host" "$path" "$number" > "$FM_PR_POLL_DATA_TMP" \
-    || ! chmod 0600 "$FM_PR_POLL_DATA_TMP" \
+    || ! fm_private_chmod 0600 "$FM_PR_POLL_DATA_TMP" \
     || ! fm_pr_private_file_valid "$FM_PR_POLL_DATA_TMP" 600 "$FM_PR_POLL_STATE_DEVICE" \
     || ! fm_pr_poll_data_parse "$FM_PR_POLL_DATA_TMP" \
     || [ "$FM_PR_DATA_PROVIDER" != "$provider" ] \
@@ -493,7 +495,7 @@ fm_pr_poll_prepare() {
     || [ "$FM_PR_DATA_PATH" != "$path" ] \
     || [ "$FM_PR_DATA_NUMBER" != "$number" ] \
     || ! cp "$template" "$FM_PR_POLL_CHECK_TMP" \
-    || ! chmod 0600 "$FM_PR_POLL_CHECK_TMP" \
+    || ! fm_private_chmod 0600 "$FM_PR_POLL_CHECK_TMP" \
     || ! fm_pr_private_file_valid "$FM_PR_POLL_CHECK_TMP" 600 "$FM_PR_POLL_STATE_DEVICE" \
     || ! cmp -s "$template" "$FM_PR_POLL_CHECK_TMP"; then
     fm_pr_poll_cleanup
@@ -508,7 +510,7 @@ fm_pr_poll_prepare() {
       "$FM_PR_POLL_EXPECT_DATA_HASH" "$FM_PR_POLL_EXPECT_TEMPLATE_HASH" \
       "$FM_PR_POLL_EXPECT_DATA_IDENTITY" "$FM_PR_POLL_EXPECT_CHECK_IDENTITY" \
       > "$FM_PR_POLL_REG_TMP" \
-    || ! chmod 0600 "$FM_PR_POLL_REG_TMP" \
+    || ! fm_private_chmod 0600 "$FM_PR_POLL_REG_TMP" \
     || ! fm_pr_private_file_valid "$FM_PR_POLL_REG_TMP" 600 "$FM_PR_POLL_STATE_DEVICE" \
     || ! fm_pr_poll_registration_parse "$FM_PR_POLL_REG_TMP" \
     || [ "$FM_PR_REG_ID" != "$id" ] \
@@ -873,7 +875,7 @@ fm_pr_poll_retirement_publish() {
       "$FM_PR_POLL_SNAPSHOT_REG_HASH" \
       "$FM_PR_POLL_SNAPSHOT_REG_IDENTITY" \
       merged > "$tmp" \
-    || ! chmod 0600 "$tmp" \
+    || ! fm_private_chmod 0600 "$tmp" \
     || ! fm_pr_private_file_valid "$tmp" 600 "$state_device" \
     || ! fm_pr_poll_retirement_parse "$tmp" \
     || [ "$FM_PR_RETIRE_ID" != "$id" ] \
@@ -992,7 +994,7 @@ fm_pr_poll_merge_mark_notified() {  # <state> <id> <provider> <host> <path> <num
   tmp=$(mktemp "$state/.fm-pr-poll-merge-notified.XXXXXX") || return 1
   if ! printf '%s\n%s\n%s\n%s\n%s\n' \
       fm-pr-poll-merge-notified-v1 "$provider" "$host" "$path" "$number" > "$tmp" \
-    || ! chmod 0600 "$tmp" \
+    || ! fm_private_chmod 0600 "$tmp" \
     || ! fm_pr_poll_merge_marker_matches "$tmp" "$state_device" \
       "$provider" "$host" "$path" "$number" \
     || ! fm_pr_regular_destination_on_device_or_absent "$marker" "$state_device" \

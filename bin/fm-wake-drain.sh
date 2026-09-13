@@ -20,6 +20,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 DRAIN_TMP=
 DRAIN_VIEW_TMP=
 DRAIN_LOCK_HELD=false
@@ -94,7 +99,7 @@ write_rows_file_locked() { # <target> <source>
     rm -f -- "$target"
     return
   fi
-  chmod 0600 "$source" || return 1
+  fm_private_chmod 0600 "$source" || return 1
   _fm_atomic_replace "$source" "$target"
 }
 
@@ -435,7 +440,7 @@ if [ -n "$ACK_THROUGH" ]; then
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
   DRAIN_LOCK_HELD=true
   DRAIN_TMP=$(mktemp "$STATE/.wake-queue.ack.XXXXXX") || exit 1
-  chmod 0600 "$DRAIN_TMP" || exit 1
+  fm_private_chmod 0600 "$DRAIN_TMP" || exit 1
   if [ "$ACTOR" = branch ]; then
     require_branch_eligible_rows || exit 1
     # Delete a row only when its sequence is <= cutoff AND it is named in the

@@ -118,6 +118,11 @@ RUN_STARTED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RUN_STARTED_MS=$(now_ms)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$ROOT/bin/fm-private-lib.sh"
 cd "$ROOT" || exit 1
 
 MODE=
@@ -2028,14 +2033,11 @@ else
     if [ -s "$out" ]; then
       cat "$out"
     fi
-    mode=$(stat -c %a "$work" 2>/dev/null || stat -f %Lp "$work" 2>/dev/null || echo unknown)
-    case "$mode" in
-      700|0700) ;;
-      *)
-        log "isolation failure: worker root mode is $mode, expected 0700 ($work)"
-        rc=1
-        ;;
-    esac
+    if ! fm_private_mode_ok "$work" 700; then
+      mode=$(stat -c %a "$work" 2>/dev/null || stat -f %Lp "$work" 2>/dev/null || echo unknown)
+      log "isolation failure: worker root mode is $mode, expected 0700 ($work)"
+      rc=1
+    fi
     record_script_result "$script" "$rc" "$duration" "$out" "$end_iso"
   }
 
@@ -2072,7 +2074,7 @@ else
     worker_n=$((worker_n + 1))
     work="$RUN_TMP/w$worker_n"
     mkdir -p "$work/tmp"
-    chmod 0700 "$work" "$work/tmp" || die "could not chmod 0700 worker root $work"
+    fm_private_chmod 0700 "$work" "$work/tmp" || die "could not chmod 0700 worker root $work"
     base=$(basename "$script")
     family=$(family_for_basename "$base")
     expected=$(expected_gate_skip_for_family "$family")

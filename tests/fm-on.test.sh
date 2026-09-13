@@ -21,7 +21,7 @@ SSH_LOG="$TMP_ROOT/ssh.log"
 SSH_COUNT="$TMP_ROOT/ssh.count"
 mkdir -p "$LOCAL_HOME/data" "$REMOTE_ROOT/bin" "$REMOTE_HOME"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
-cp "$ROOT/bin/fm-remote-entrypoint.sh" "$ROOT/bin/fm-remote-job-lib.sh" \
+cp "$ROOT/bin/fm-remote-entrypoint.sh" "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" \
   "$ROOT/bin/fm-remote-job-worker.sh" "$REMOTE_ROOT/bin/"
 
 cat > "$REMOTE_ROOT/bin/fm-probe-one.sh" <<'SH'
@@ -58,6 +58,7 @@ cp "$ROOT/bin/fm-remote-doctor.sh" "$ROOT/bin/fm-tasks-axi-lib.sh" \
   "$ROOT/bin/fm-backend.sh" "$REMOTE_ROOT/bin/"
 mkdir -p "$REMOTE_ROOT/bin/backends"
 cp "$ROOT/bin/backends/herdr.sh" "$REMOTE_ROOT/bin/backends/herdr.sh"
+cp "$ROOT/bin/fm-private-lib.sh" "$REMOTE_ROOT/bin/fm-private-lib.sh"
 # The herdr adapter sources this at load time, resolved against the FIXTURE root.
 cp "$ROOT/bin/fm-jq-lib.sh" "$REMOTE_ROOT/bin/fm-jq-lib.sh"
 cat > "$REMOTE_ROOT/bin/fm-mutate.sh" <<'SH'
@@ -446,6 +447,7 @@ set -e
 assert_contains "$out" 'doctor does not match the trusted bootstrap identity' \
   "an altered doctor did not fail closed when git was unavailable"
 cp "$ROOT/bin/fm-remote-doctor.sh" "$REMOTE_ROOT/bin/fm-remote-doctor.sh"
+cp "$ROOT/bin/fm-private-lib.sh" "$REMOTE_ROOT/bin/fm-private-lib.sh"
 chmod +x "$REMOTE_ROOT/bin/fm-remote-doctor.sh"
 pass "doctor bootstrap remains authenticated when git is unavailable"
 

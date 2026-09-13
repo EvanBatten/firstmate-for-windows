@@ -105,12 +105,18 @@ The `fm_pid_identity` and `fm_pid_identity_equal` headers in `bin/fm-wake-lib.sh
 
 ## What these PRs do not fix
 
-**The cross-cutting one, which is a decision rather than a patch.**
-Every Git Bash mount is `noacl`, so POSIX modes are not representable: `mkdir -m 700` creates a 755 directory *and exits 1*, and `chmod 600` reads back 644.
+**The cross-cutting one, which was a decision rather than a patch.**
+Every Git Bash mount is `noacl`, so POSIX modes are not representable: `mkdir -m 700` creates a 755 directory *and exits 1*, and `chmod` exits 0 and does nothing.
 33 of 151 `bin/*.sh` create or assert mode-700/600 private state, and every one of those checks misfires.
-That is three of the four still-red test scripts, and it is what stops `fm-pr-check.sh` from preparing a PR poll at all.
-A process-local `mount -o binary,posix=0,acl` made `mkdir -m 700` succeed with `stat` reporting 700 and the mode was inherited by a child bash, so a per-machine `/etc/fstab` mount is one real option; a shared "is this state private" helper with a platform-aware answer is the other.
-The second is upstream's to design, and this is the question I would most like an opinion on before writing it.
+That was three of the four still-red test scripts, and it is what stopped `fm-pr-check.sh` from preparing a PR poll at all.
+This is now written on the fork as `bin/fm-private-lib.sh`, and the decision behind it is the part worth an opinion.
+A per-machine `/etc/fstab` `acl` mount is a real option and it still works where someone has one, but it cannot be the answer: it makes every Windows install perform an administrator step, or else the tooling misbehaves in silence, and nothing in the tooling can rely on a step taken on someone else's machine.
+So the fork has one leaf that owns "this path must be private" and MEASURES the filesystem under the path in hand, because a single machine has both kinds of mount and neither `uname` nor the mount table can be asked.
+Each helper is the expression it replaced, at the same cost: the setter is `chmod` and never probes at all, and the ASSERTION is the one place that decides whether a mode is enforceable, reaching the probe only when its comparison disagrees, so on a filesystem that carries modes a genuinely group-readable file is refused exactly as before.
+The measurement that shaped it is worth carrying upstream even if the helper is not wanted: **a `noacl` mount stores no mode at all, and `stat` synthesizes one from the umask of the process doing the READING** - 0644 & ~umask for a file, 0755 & ~umask for a directory.
+One file reads 644 under `umask 022` and 600 under `umask 077`, and a directory reads 755 and 700 the same way.
+So a probe that only asks "chmod 0600, is it 600?" reports that modes are enforced, on that mount, for any caller that set `umask 077` first - which `fm_pr_poll_prepare` does, in the exact code path this is for.
+The probe has to watch the mode MOVE (`chmod 0644`, read, `chmod 0600`, read), which no umask can fake.
 
 ## Also on the fork, held back deliberately
 

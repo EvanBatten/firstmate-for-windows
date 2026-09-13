@@ -141,6 +141,11 @@ fi
 FM_STATE_OVERRIDE="$PROVISION_LOCK_STATE"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
 PROVISION_LOCK="$STATE/.remote-home-provision-$HOME_LOCK_KEY.lock"
 fm_lock_acquire_wait "$PROVISION_LOCK"
 PROVISION_LOCK_HELD=1
@@ -240,7 +245,7 @@ EOF
 done < <(grep '^project=' "$TMP/manifest")
 
 cp "$TMP/charter" "$FM_HOME/data/charter.md.tmp.$$"
-chmod 600 "$FM_HOME/data/charter.md.tmp.$$"
+fm_private_chmod 600 "$FM_HOME/data/charter.md.tmp.$$"
 mv -f -- "$FM_HOME/data/charter.md.tmp.$$" "$FM_HOME/data/charter.md"
 cp "$PROJECT_REG" "$FM_HOME/data/projects.md.tmp.$$"
 mv -f -- "$FM_HOME/data/projects.md.tmp.$$" "$FM_HOME/data/projects.md"

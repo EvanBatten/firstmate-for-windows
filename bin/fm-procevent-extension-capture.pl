@@ -1,9 +1,56 @@
+# fm-procevent-extension-capture.pl - the helper bin/fm-procevent.sh runs for an
+# extension-owned source: it executes the source under inherited, pinned
+# descriptors, stages the output, publishes the captured result, and hands that
+# result to the extension host.
+#
+# THE PRIVATE-STATE MODE QUESTION IS NOT ASKED HERE. bin/fm-private-lib.sh is
+# the one owner of "can the filesystem under this path carry a POSIX mode", it
+# answers that PER FILESYSTEM, and this helper never measures it. The paths
+# asserted below do not all share one filesystem: the registry, the inbox, the
+# published result and the capture reservation root are the home's state, while
+# the claim file resolves through the claim-root override, then the XDG state
+# home, then the home directory, so it can sit on different storage with a
+# different answer. So bin/fm-procevent.sh asks the owner about each of them and
+# passes the answers down as `--private-modes <device>=enforcing|unenforceable`,
+# comma separated, and every comparison below looks its own verdict up by the
+# device it just stat'ed. A device the list does not name, an unparsable entry,
+# a value that is not `unenforceable`, or no option at all is the strict mode,
+# so a caller that forgets one filesystem gets today's exact comparison there
+# rather than a silent relaxation, and nothing this process reads from its own
+# environment or off the filesystem can turn the relaxation on.
+#
+# ONLY MODE EQUALITY RELAXES. `unenforceable` waives `== 0700` and `== 0600` and
+# nothing else. The owning-uid comparison, the symlink refusal, the directory
+# and regular-file type checks, the group/other-writable test, the link counts,
+# the size bound and the O_CREAT|O_EXCL|O_NOFOLLOW open flags all refuse exactly
+# as they do on a mount that carries modes, and every file created here is still
+# created asking for 0600. A mount that stores no mode makes `stat` synthesize
+# one from the READING process's umask, so a directory the caller made under
+# `umask 077` reads back 0755 and a 0600 file reads back 0644
+# (docs/windows/measurement.md row 21). That readback is the whole of what the
+# waiver covers; decision D6 leaves the privacy claim on such a mount to the
+# filesystem's own access control.
 use strict;
 use warnings;
 use Cwd qw(getcwd);
 use Fcntl qw(O_CREAT O_EXCL O_NOFOLLOW O_RDONLY O_RDWR);
 use JSON::PP qw(encode_json);
 use POSIX qw(dup2);
+
+my %private_modes_unenforceable;
+if (@ARGV >= 2 && $ARGV[0] eq '--private-modes') {
+  for my $entry (split(/,/, $ARGV[1])) {
+    next unless $entry =~ /\A(-?[0-9]+)=unenforceable\z/;
+    $private_modes_unenforceable{$1} = 1;
+  }
+  splice(@ARGV, 0, 2);
+}
+
+sub mode_private_ok {
+  my ($device, $mode, $want) = @_;
+  return 1 if ($mode & 07777) == $want;
+  return defined $device && $private_modes_unenforceable{$device} ? 1 : 0;
+}
 
 if (@ARGV && $ARGV[0] eq 'handoff') {
   shift @ARGV;
@@ -29,15 +76,15 @@ if (@ARGV && $ARGV[0] eq 'handoff') {
   chdir($inbox) or die "cannot enter inbox\n";
   my $inbox_root = getcwd();
   my @inbox_stat = lstat('.');
-  die "unsafe inbox\n" unless @inbox_stat && -d _ && !-l _ && $inbox_stat[4] == $< && ($inbox_stat[2] & 07777) == 0700;
+  die "unsafe inbox\n" unless @inbox_stat && -d _ && !-l _ && $inbox_stat[4] == $< && mode_private_ok($inbox_stat[0], $inbox_stat[2], 0700);
   sysopen(my $result, "$id.$sequence.result", O_RDONLY | O_NOFOLLOW) or die "cannot open result\n";
   my @result_stat = lstat($result_name);
   die "unsafe result\n" unless @result_stat && -f _ && !-l _ && $result_stat[4] == $<
-    && ($result_stat[2] & 07777) == 0600 && $result_stat[3] == 1;
+    && mode_private_ok($result_stat[0], $result_stat[2], 0600) && $result_stat[3] == 1;
   sysopen(my $claim, $claim_path, O_RDONLY | O_NOFOLLOW) or die "cannot open claim\n";
   my @claim_stat = stat($claim);
   die "unsafe claim\n" unless @claim_stat && -f _ && $claim_stat[4] == $<
-    && ($claim_stat[2] & 07777) == 0600 && $claim_stat[3] == 1 && $claim_stat[7] <= 4096;
+    && mode_private_ok($claim_stat[0], $claim_stat[2], 0600) && $claim_stat[3] == 1 && $claim_stat[7] <= 4096;
   my $claim_bytes = '';
   while (1) {
     my $read = sysread($claim, my $buffer, 4096);
@@ -63,7 +110,7 @@ if (@ARGV && $ARGV[0] eq 'handoff') {
   open(my $reservation, "<&=$reservation_fd") or die "cannot retain reservation root\n";
   chdir($reservation) or die "cannot enter reservation root\n";
   my @reservation_stat = lstat('.');
-  die "unsafe reservation root\n" unless @reservation_stat && -d _ && !-l _ && $reservation_stat[4] == $< && ($reservation_stat[2] & 07777) == 0700;
+  die "unsafe reservation root\n" unless @reservation_stat && -d _ && !-l _ && $reservation_stat[4] == $< && mode_private_ok($reservation_stat[0], $reservation_stat[2], 0700);
   dup2(fileno($reservation), 7) >= 0 or die "cannot reserve capability descriptor\n";
   my $capability_name = ".extension-capture-capability-$claim_token.$reservation_token";
   sysopen(my $capability, $capability_name, O_CREAT | O_EXCL | O_NOFOLLOW | O_RDWR, 0600) or die "cannot create capability\n";
@@ -106,7 +153,7 @@ sub safe_dir {
   my @st = lstat($path);
   return 0 unless @st && -d _ && !-l _ && $st[4] == $<;
   return 0 unless ($st[2] & 0022) == 0;
-  return 0 if defined $mode && ($st[2] & 07777) != $mode;
+  return 0 if defined $mode && !mode_private_ok($st[0], $st[2], $mode);
   return 1;
 }
 sub open_new {

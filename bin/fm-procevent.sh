@@ -170,6 +170,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 REG=$(fm_procevent_registry_dir "$STATE")
 MAX_OUTPUT_BYTES=${FM_PROCEVENT_MAX_OUTPUT_BYTES:-1048576}
 EXTENSION_HOST="$SCRIPT_DIR/fm-extension.mjs"
@@ -215,6 +220,34 @@ cleanup_extension_registration_invocations_locked() {  # <source-id>
   esac
 }
 
+# bin/fm-private-lib.sh is the one owner of "can the filesystem under this path
+# carry a POSIX mode", and it answers per filesystem. The capture helper
+# measures nothing of its own, so it is handed the owner's verdict for each
+# filesystem its own assertions land on, keyed by the device it stats. The
+# asserted paths do not all share one filesystem - the claim file resolves
+# through the claim-root override, then the XDG state home, then the home
+# directory, while the rest are this home's state - so each one is measured
+# where it actually lives. A device this list does not name keeps the helper's
+# exact comparison, which is also what an empty list means.
+CAPTURE_PRIVATE_MODES=
+capture_private_modes() {  # <path>... -> CAPTURE_PRIVATE_MODES
+  local path device verdict
+  CAPTURE_PRIVATE_MODES=
+  for path in "$@"; do
+    device=$(fm_private_stat_device "$path") || device=
+    case "$device" in ''|*[!0-9-]*) continue ;; esac
+    if fm_private_modes_enforcing "$path"; then
+      verdict=enforcing
+    else
+      verdict=unenforceable
+    fi
+    case ",$CAPTURE_PRIVATE_MODES," in
+      *",$device=$verdict,"*) continue ;;
+    esac
+    CAPTURE_PRIVATE_MODES="${CAPTURE_PRIVATE_MODES:+$CAPTURE_PRIVATE_MODES,}$device=$verdict"
+  done
+}
+
 # Invoke one captured result through its exact extension owner. The immutable
 # sidecar, not the current adapter name alone, supplies every expected binding
 # field, so replacing a binding cannot reinterpret old evidence.
@@ -250,10 +283,13 @@ extension_result_command() {  # <adapter> <operation> <result-file>
       extension_lifecycle_lock_release
       return 1
     fi
+    capture_private_modes "$(fm_procevent_inbox_dir "$STATE")" \
+      "$(fm_procevent_capture_reservation_dir "$STATE")" "$claim_path"
     FM_EXTENSION_RETIREMENT_MODE=process-event \
       FM_EXTENSION_LIFECYCLE_LOCK="$EXTENSION_LIFECYCLE_LOCK" \
       FM_EXTENSION_LIFECYCLE_OWNER="$owner" \
-      perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" handoff \
+      perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" \
+        --private-modes "$CAPTURE_PRIVATE_MODES" handoff \
         8 6 "$claim_path" "$CLAIM_HOME" "$CLAIM_ID" "$CLAIM_TOKEN" "$CLAIM_PID" \
         "$CLAIM_IDENTITY" "$FM_PROCEVENT_RESULT_EXTENSION_BINDING_DIGEST" "$reservation" \
         "$operation" "$result" "$EXTENSION_HOST" -- "${command[@]:1}"
@@ -720,13 +756,15 @@ cmd_start() {
   else
     out=$(staging_file "$id" "$CLAIM_TOKEN")
     printf '%s\n' "$$" > "$runner" 2>/dev/null || true
-    chmod 0600 "$runner" 2>/dev/null || true
+    fm_private_chmod 0600 "$runner" || true
   fi
   # Built-in adapters do not run the extension capture helper, so keep this
   # sentinel defined while sharing the no-result branch below under `set -u`.
   local truncated=0 capture_state='' durable='' reservation_terminal='' reservation_silent=''
   if [ "$extension_owner" -eq 1 ]; then
+    capture_private_modes "$REG" "$inbox" "$reservation_dir"
     capture_state=$(perl "$SCRIPT_DIR/fm-procevent-extension-capture.pl" \
+      --private-modes "$CAPTURE_PRIVATE_MODES" \
       9 8 6 "$id" "$adapter" "$FM_PROCEVENT_EXTENSION_ID" \
       "$FM_PROCEVENT_EXTENSION_VERSION" "$FM_PROCEVENT_EXTENSION_CAPABILITY_VERSION" \
       "$FM_PROCEVENT_EXTENSION_PACKAGE_DIGEST" "$FM_PROCEVENT_EXTENSION_BINDING_DIGEST" \

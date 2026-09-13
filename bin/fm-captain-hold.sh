@@ -141,6 +141,11 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 captain_hold_cleanup() {
@@ -610,7 +615,7 @@ command_bind() {
   dest=$(binding_path "$source")
   tmp=$(umask 077; mktemp "$BINDING_DIR/.origin.XXXXXX") || fail "cannot stage the decision binding"
   if ! { printf 'schema=%s\norigin=%s\n' "$BINDING_SCHEMA" "$origin" > "$tmp" \
-    && chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; }; then
+    && fm_private_chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; }; then
     rm -f -- "$tmp"
     fail "cannot record the decision binding for $source"
   fi

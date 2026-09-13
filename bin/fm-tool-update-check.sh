@@ -91,6 +91,11 @@ MAX_LINE=1000
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -675,7 +680,7 @@ record_read() {
 record_write() {
   local reported=$1 tmp
   tmp=$(mktemp "$RECORD.XXXXXX" 2>/dev/null) || return 1
-  chmod 0600 "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 0600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   {
     printf '%s\n' "$RECORD_SCHEMA"
     printf 'epoch=%s\n' "$(record_epoch_now)"
@@ -764,14 +769,14 @@ shim_write() {
   device=$(fm_pr_file_device "$STATE") || return 1
   [ -n "$device" ] || return 1
   fm_pr_regular_destination_on_device_or_absent "$CHECK_SHIM" "$device" || return 1
-  if [ -e "$CHECK_SHIM" ] && [ "$(fm_pr_file_mode "$CHECK_SHIM")" = 700 ] \
+  if [ -e "$CHECK_SHIM" ] && fm_private_mode_ok "$CHECK_SHIM" 700 \
     && [ "$(cat "$CHECK_SHIM" 2>/dev/null)" = "$want" ]; then
     return 0
   fi
   tmp=$(umask 077; mktemp "$STATE/.fm-tool-updates-check.XXXXXX" 2>/dev/null) || return 1
   SHIM_WRITE_TMP=$tmp
   if ! printf '%s\n' "$want" > "$tmp" \
-    || ! chmod 0700 "$tmp" \
+    || ! fm_private_chmod 0700 "$tmp" \
     || ! fm_pr_private_file_valid "$tmp" 700 "$device"; then
     rm -f -- "$tmp"
     SHIM_WRITE_TMP=
@@ -797,7 +802,7 @@ shim_backup() {
   [ -n "$device" ] || return 1
   tmp=$(umask 077; mktemp "$STATE/.fm-tool-updates-check.XXXXXX" 2>/dev/null) || return 1
   if ! cat "$CHECK_SHIM" > "$tmp" 2>/dev/null \
-    || ! chmod 0700 "$tmp" \
+    || ! fm_private_chmod 0700 "$tmp" \
     || ! fm_pr_private_file_valid "$tmp" 700 "$device"; then
     rm -f -- "$tmp"
     return 1

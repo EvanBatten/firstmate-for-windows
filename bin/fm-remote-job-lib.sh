@@ -83,6 +83,11 @@
 # bin/fm-remote-job-reap-orphans.sh uses it to reap workers that were already
 # orphaned that way.
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
 FM_REMOTE_JOB_LABEL=dev.firstmate.remote-job
 FM_REMOTE_JOB_MAX_BYTES=${FM_REMOTE_JOB_MAX_BYTES:-1048576}
 FM_REMOTE_JOB_QUEUE_TIMEOUT=${FM_REMOTE_JOB_QUEUE_TIMEOUT:-360}
@@ -386,7 +391,7 @@ fm_remote_job_safe_child_dir() { # <canonical-parent> <single child basename>
   else
     (umask 077; mkdir "$candidate") || return 1
   fi
-  chmod 700 "$candidate" 2>/dev/null || return 1
+  fm_private_chmod 700 "$candidate" || return 1
   physical=$(CDPATH='' cd -- "$candidate" 2>/dev/null && pwd -P) || return 1
   [ "$physical" = "$candidate" ] || return 1
   printf '%s\n' "$physical"
@@ -482,7 +487,7 @@ fm_remote_job_write_state() { # <job-dir> queued|running|done
   [ -d "$job" ] && [ ! -L "$job" ] || return 1
   tmp=$(umask 077; mktemp "$job/.state.XXXXXX") || return 1
   printf '%s\n' "$value" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$job/state"
 }
 
@@ -514,7 +519,7 @@ fm_remote_job_write_number() { # <job-dir> queue_deadline|timeout|deadline|seq <
   [ -d "$job" ] && [ ! -L "$job" ] || return 1
   tmp=$(umask 077; mktemp "$job/.$field.XXXXXX") || return 1
   printf '%s\n' "$value" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$job/$field"
 }
 
@@ -530,7 +535,7 @@ fm_remote_job_advance_seq_hint() { # <value>
   [ "$value" -gt "$current" ] || return 0
   tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqhint.XXXXXX") || return 1
   printf '%s\n' "$value" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   current=$(cat "$counter" 2>/dev/null || true)
   case "$current" in ''|*[!0-9]*) current=0 ;; esac
   if [ "$value" -gt "$current" ]; then
@@ -564,7 +569,7 @@ fm_remote_job_next_seq() { # [stage-dir destination]
     value=$((value + 1))
     claim="$FM_REMOTE_JOB_SEQ_CLAIMS/$value"
     if (umask 077; mkdir "$claim") 2>/dev/null; then
-      chmod 700 "$claim" || return 1
+      fm_private_chmod 700 "$claim" || return 1
       fm_remote_job_advance_seq_hint "$value" || true
       if [ -n "$stage" ]; then
         if ! fm_remote_job_write_number "$stage" seq "$value" \
@@ -602,7 +607,7 @@ fm_remote_job_cancel() { # <account-home> <id>
   fi
   tmp=$(umask 077; mktemp "$job/.cancel.XXXXXX") || return 1
   printf 'cancelled: caller disconnected or abandoned the job\n' > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$job/cancel" || return 1
   state=$(fm_remote_job_read_state "$job" 2>/dev/null || true)
   if [ "$state" = 'done' ]; then
@@ -632,11 +637,11 @@ fm_remote_job_stage() { # <account-home> <root> <home> <command> [args...]; stdi
     FM_REMOTE_JOB_ERROR="cannot stage remote job"
     return 1
   }
-  chmod 700 "$stage" || { rm -rf -- "$stage"; return 1; }
+  fm_private_chmod 700 "$stage" || { rm -rf -- "$stage"; return 1; }
   queue_deadline=$(( $(date +%s) + FM_REMOTE_JOB_QUEUE_TIMEOUT ))
   if ! printf '%s\n' "$$" > "$stage/.owner-pid" ||
     ! printf '%s\n' "$owner_start" > "$stage/.owner-start" ||
-    ! chmod 600 "$stage/.owner-pid" "$stage/.owner-start" ||
+    ! fm_private_chmod 600 "$stage/.owner-pid" "$stage/.owner-start" ||
     ! printf '%s\n' "$root" > "$stage/root" ||
     ! printf '%s\n' "$home" > "$stage/home" ||
     ! printf '%s\n' "$queue_deadline" > "$stage/queue_deadline" ||
@@ -647,7 +652,7 @@ fm_remote_job_stage() { # <account-home> <root> <home> <command> [args...]; stdi
     FM_REMOTE_JOB_ERROR="cannot capture remote job input"
     return 1
   fi
-  for bytes in root home queue_deadline timeout argv stdin; do chmod 600 "$stage/$bytes" || { rm -rf -- "$stage"; return 1; }; done
+  for bytes in root home queue_deadline timeout argv stdin; do fm_private_chmod 600 "$stage/$bytes" || { rm -rf -- "$stage"; return 1; }; done
   fm_remote_job_regular_bounded "$stage/argv" "$FM_REMOTE_JOB_MAX_BYTES" || {
     rm -rf -- "$stage"
     FM_REMOTE_JOB_ERROR="remote job argv exceeds the ${FM_REMOTE_JOB_MAX_BYTES}-byte bound"
@@ -660,7 +665,7 @@ fm_remote_job_stage() { # <account-home> <root> <home> <command> [args...]; stdi
   }
   : > "$stage/stdout"
   : > "$stage/stderr"
-  chmod 600 "$stage/stdout" "$stage/stderr" || { rm -rf -- "$stage"; return 1; }
+  fm_private_chmod 600 "$stage/stdout" "$stage/stderr" || { rm -rf -- "$stage"; return 1; }
   id="job-${stage##*/.stage.}"
   fm_remote_job_safe_id "$id" || { rm -rf -- "$stage"; return 1; }
   destination="$FM_REMOTE_JOB_JOBS/$id"
@@ -794,7 +799,7 @@ fm_remote_job_reap_stale() { # <account-home>
   esac
   if [ "$reap_claims" -eq 1 ]; then
     tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap.XXXXXX") || tmp=
-    if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && chmod 600 "$tmp" \
+    if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && fm_private_chmod 600 "$tmp" \
       && mv -f -- "$tmp" "$marker"; then
       for claim in "$FM_REMOTE_JOB_SEQ_CLAIMS"/*; do
         [ -d "$claim" ] && [ ! -L "$claim" ] || continue

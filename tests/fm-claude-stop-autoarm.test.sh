@@ -30,6 +30,7 @@ install_autoarm_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-private-lib.sh" "$dir/bin/fm-private-lib.sh"
   # fm-wake-lib.sh and fm-session-lock-lib.sh both source the leaf process
   # library, and both read FM_PROC_UNAME at source time: without it in the
   # fixture the hook dies on an unbound variable before it decides anything.

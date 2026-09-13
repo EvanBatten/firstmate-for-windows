@@ -144,14 +144,25 @@ fi
 # full digest on a helm this process can never take.
 #
 # The severed ancestry is what makes the digest futile, so the ancestry - not
-# the userland - is the gate. Not every registration severs it: the Codex entry
-# pipes its payload into this script, and bash forks a pipeline element instead
-# of exec-optimizing it, so that transport keeps a live parent chain the hybrid
-# walk crosses to the native harness. There the digest CAN take the lock, and a
-# clear or compact open must still get its `--reemit` - the nudge would go
-# silent on exactly the session that just lost its context. Called rather than
-# exec'd for the same reason the branch exists: exec is what severs the ancestry
-# the nudge's own ownership check reads. POSIX never enters here.
+# the userland - is the gate, and the tracked registrations are written to keep
+# it. The Claude entry and the Cursor entry both end in `; exit 0`, so this
+# script is never the shell's final command and is forked rather than exec'd;
+# no correct shell may fold that away, because exec-ing this script would hand
+# the harness ITS exit status while the builtin pins the hook's status to 0,
+# which is the contract this file's own header states. The Codex entry pipes
+# its payload into this script, and bash forks a pipeline element too. All
+# three keep a live parent chain the hybrid walk crosses to the native harness.
+# There the digest CAN take the lock, and a clear or compact open must still
+# get its `--reemit` - the nudge would go silent on exactly the session that
+# just lost its context. Called rather than exec'd below for the same reason
+# the branch exists: exec is what severs the ancestry the nudge's own ownership
+# check reads. POSIX never enters here.
+#
+# What still reaches the branch, then, is a registration that execs this script
+# (an operator's own, or an older copy of the tracked ones), a host with no
+# `pwsh`, where the Win32 half of the walk cannot run at all, and a native
+# parent the classifier cannot name - Pi on Windows, whose Win32 parent is
+# node.exe and whose script argv `fm_proc_args` cannot recover there.
 #
 # Only the sources that would otherwise spend a digest ask this question. That
 # walk costs about a second on MSYS (bin/fm-proc-lib.sh), and resume, reload and
@@ -163,13 +174,18 @@ msys_severed_ancestry_delegates() {
     *) return 0 ;;
   esac
   fm_harness_ancestry_pid >/dev/null 2>&1 && return 0
-  "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
+  # Hand the walk's answer down rather than let the nudge repeat it: it just
+  # established that no harness is in this process's ancestry, so the nudge's
+  # own ownership check can only reach the same verdict, at the price of a
+  # second walk and the `ps -W` scan its liveness probe runs first. Passed as
+  # an argument, never exported: the nudge's header says why.
+  "$SCRIPT_DIR/fm-sessionstart-nudge.sh" --no-harness-ancestry || true
   exit 0
 }
 
 case "$SOURCE" in
   resume|reload|fork)
-    exec "$SCRIPT_DIR/fm-sessionstart-nudge.sh"
+    "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
     ;;
   clear|compact)
     msys_severed_ancestry_delegates

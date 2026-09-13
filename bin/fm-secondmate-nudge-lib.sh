@@ -5,6 +5,11 @@
 # publish the same bounded record before delivery. A failed send leaves the
 # record for the locked bootstrap retry; a successful send removes it.
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
 FM_SECOND_MATE_NUDGE_MESSAGE='firstmate was updated to the latest - please re-read your AGENTS.md to pick up the new instructions.'
 FM_REMOTE_SECOND_MATE_NUDGE_MESSAGE='Firstmate instructions or inherited config changed on this host. Re-read AGENTS.md and the inherited config files before further work.'
 
@@ -35,7 +40,7 @@ fm_remote_inherit_generation_next() { # <state-dir> <id>
   next=$((current + 1))
   tmp=$(umask 077; mktemp "$state/.remote-inherit-generation.XXXXXX") || return 1
   printf '%s\n' "$next" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$path" || { rm -f -- "$tmp"; return 1; }
   printf '%s\n' "$next"
 }
@@ -63,6 +68,6 @@ fm_secondmate_nudge_write() { # <state> <id> <home> <commit> <instructions> <mes
     printf 'message=%s\n' "$message"
     printf 'remote=%s\n' "$remote"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$marker" || { rm -f -- "$tmp"; return 1; }
 }
