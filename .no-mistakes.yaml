@@ -45,8 +45,7 @@ document:
 # alias through its own bundled `sh` from the repository toplevel, so the
 # relative script path resolves whatever the caller's directory. The same line
 # is correct on Linux and macOS, where git runs the alias through `/bin/sh` and
-# the script is tracked mode 100755. Double quotes, not single, because cmd.exe
-# treats `'` as an ordinary character rather than a quote.
+# the script is tracked mode 100755.
 #
 # One worker, for the reason `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1`
 # on its own lint step: the two default workers hold their peaks together, a
