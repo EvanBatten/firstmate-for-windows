@@ -87,16 +87,18 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-entrypoint.XXXXXX") || die "cannot cr
 JOB_ID=
 JOB_COMPLETED=0
 ACCOUNT_HOME=
-ENTRYPOINT_PPID=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)
+ENTRYPOINT_PPID=$(fm_proc_ppid $$ || true)
 
 # The recorded parent is the ssh session process; when it disappears this
 # process is reparented and the caller is provably gone. An unreadable probe
-# never cancels: only an observed parent change does.
+# never cancels: only an observed parent change does. The parent is read through
+# bin/fm-proc-lib.sh (sourced by the remote job library), because MSYS `ps` has
+# no -o and a bare spelling there reads empty, which never cancels.
 # shellcheck disable=SC2329 # Invoked by fm_remote_job_wait through FM_REMOTE_JOB_DISCONNECT_PROBE.
 entrypoint_caller_connected() {
   local current
   case "$ENTRYPOINT_PPID" in ''|*[!0-9]*) return 0 ;; esac
-  current=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)
+  current=$(fm_proc_ppid $$ || true)
   case "$current" in ''|*[!0-9]*) return 0 ;; esac
   [ "$current" = "$ENTRYPOINT_PPID" ]
 }
