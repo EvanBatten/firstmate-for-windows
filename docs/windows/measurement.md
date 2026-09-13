@@ -2507,8 +2507,9 @@ The first green Linux lint run of the port was the Lint job on PR #38, 17 minute
 The process-identity change in PR #42 took two roots back over the ceiling without adding a file to the lint set, because ShellCheck inlines a sourced file at every directive site rather than once per unit.
 The pending-reply library gained a top-level load of the wake library while three lock helpers kept their own directive-bearing reloads, and teardown kept a guarded reload inside a function, so each of those roots re-analysed the wake subtree several times over.
 Measured 2026-09-13 on WSL2 Ubuntu with ShellCheck 0.11.0, `bin/fm-teardown.sh` went from the 8289836 KiB in the ranking above to more than 15698236 KiB, killed at 973 s, and `bin/fm-watch.sh` from 4441636 KiB to more than 15715988 KiB, killed at 446 s; the CI Lint job died with exit 143 at 11 minutes 45 seconds having printed no finding.
-The fix keeps one directive-bearing load of the wake library per root and marks every repeat `source=/dev/null`, which changes nothing at runtime and gives up no coverage, since every definition is already in the unit from the first load and the wake library is still analysed in full as its own root.
+The fix marks the reloads in the pending-reply library's three lock helpers and teardown's guarded reload `source=/dev/null`, which changes nothing at runtime and gives up no coverage, since every definition is already in the unit from the first load and the wake library is still analysed in full as its own root.
 With it, `bin/fm-teardown.sh` peaks at 5296720 KiB in 48 s and `bin/fm-watch.sh` at 3124808 KiB in 26 s, both below their ranking figures, with no finding on either.
+The teardown root still follows the wake library at three sites, `bin/fm-teardown.sh:204`, `bin/fm-public-followup-lib.sh:346` and `bin/fm-pending-reply-lib.sh:120`, and the 5296720 KiB above was measured with all three in place; issue #45 tracks them.
 The extended-analysis directive held in reserve for those two roots was not needed.
 
 ## How a skipped suite is counted, and the two results that change category

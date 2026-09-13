@@ -112,8 +112,8 @@ _fm_pending_reply_load_process_identity() {
   # the name when it is not yet defined (see bin/fm-remote-job-lib.sh).
   declare -F fm_pid_identity_equal >/dev/null && return 0
   STATE=$_FM_PENDING_REPLY_LIB_DIR
-  # The only load of the wake library that ShellCheck is told to follow. The
-  # lock helpers below source it again at runtime and mark those loads
+  # The one directive-bearing load of the wake library in this file. The lock
+  # helpers below source it again at runtime and mark those repeats
   # source=/dev/null, because ShellCheck inlines a sourced file at every
   # directive site: each extra one re-analysed the whole wake subtree and took
   # bin/fm-teardown.sh and bin/fm-watch.sh past 15 GiB of lint memory.

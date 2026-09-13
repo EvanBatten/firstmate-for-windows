@@ -2364,8 +2364,9 @@ teardown_herdr_require_prerequisites() {  # <task-id>
     fi
   done
   if ! declare -F fm_lock_try_acquire >/dev/null 2>&1; then
-    # Followed once at the top of this file; see bin/fm-pending-reply-lib.sh
-    # _fm_pending_reply_load_process_identity for why repeats are not.
+    # This file's one directive-bearing load of the wake library is at the top;
+    # this repeat is marked /dev/null, for the reason given at
+    # bin/fm-pending-reply-lib.sh _fm_pending_reply_load_process_identity.
     # shellcheck source=/dev/null
     . "$SCRIPT_DIR/fm-wake-lib.sh"
   fi
