@@ -13,7 +13,8 @@ export function encodeFirstmateOperationalInput(root, kind, content) {
     const script = existsSync(requested)
       ? requested
       : `${adapterRoot}/bin/fm-operational-input.sh`;
-    const child = spawn(script, ["encode", kind], {
+    // Through bash: Windows node cannot execute a shebang script directly.
+    const child = spawn("bash", [script, "encode", kind], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
