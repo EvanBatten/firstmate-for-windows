@@ -2542,6 +2542,70 @@ It was armed, though: a serial re-run here at that commit would have published t
 
 `FM_TEST_END` and the JSON artifact now also carry `cases_ok` and `cases_skipped` per script, so a green that ran nothing stays visible without returning a heuristic to the category rule.
 
+## One process identity: the remote job and pending-reply libraries
+
+`bin/fm-remote-job-lib.sh` and `bin/fm-pending-reply-lib.sh` were the last two places outside `bin/fm-wake-lib.sh` that spelled a process identity themselves, as `ps -p <pid> -o lstart=` and `-o command=`.
+Git Bash's `ps` has no `-o`, so every one of those reads returned 1 here.
+Two consequences were operational, not test artifacts: a remote job worker could never publish its lock owner, so staging failed at its first line, and a pending-reply recovery returned before sending, so a secondmate reply left pending after a completed turn was never recovered on Windows.
+
+### Before and after, measured on this box 2026-09-12
+
+Each row is a one-case copy inside `tests/`, run against the libraries before the change and after it.
+
+| Case | Before | After |
+| --- | --- | --- |
+| `fm-remote-job` start identity reads, with a negative control | `could not read this shell's start identity` | ok |
+| `fm-pending-reply` sender identity reads, with a stale-sender control | `the recovery sender's identity could not be read on this host` | ok |
+| `fm-remote-job` staging (the default bounds case) | `the default queue bound is too short`, after `cat` found no job | ok |
+| `fm-pending-reply` `recovery should send after completed turn + grace` | red | ok |
+| `fm-remote-transport-lanes` readiness heartbeat | red | readiness passes; the case now fails on `home B's job waited 65s behind home A's long job` |
+| `fm-on` case 1 and the child PATH case | `got 64`, then the PATH contract | both ok |
+
+The two negative controls were each shown to fail with their comparator stubbed to always answer yes, so neither unit case can pass by never saying no.
+
+The readiness row needed the PATH composer from `29b50ca` as well: with identity fixed, the worker got one step further and died on `cannot publish worker code identity`, because the composed PATH had no `git`.
+Its remaining red is timing: a diagnostic run showed home A's job finished at t=129, home B's job ran at t=172 with exit 0 and an empty worker log, so B was neither blocked by A nor reclaimed; the worker took about 50 seconds to launch B's lane against a 3-second bound.
+That row therefore stays in issue #8's spawn-cost family, now for the right reason.
+
+Whole suites at the final commit, run one at a time here:
+
+| Suite | Result | What it stops on now |
+| --- | --- | --- |
+| `fm-pending-reply` | 33 ok, 1 not ok, exit 0, 2766 s | `recorded Kimi spinner was not observed as busy`, a capture-fallback case; the suite exits 0 because that case's body is a subshell whose `fail` the run list does not propagate |
+| `fm-remote-job` | 7 ok, 1 skip, then red | `the worker did not publish its readiness heartbeat`: the fixture starts the worker with `PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin"`, where `git` does not resolve, so the composer has nothing to append and the worker logs `cannot publish worker code identity` 17 times in 300 s |
+| `fm-remote-entrypoint` | 2 ok | - |
+| `fm-remote-job-orphan-reap` | red at its first case | `could not start the fixture remote job worker`: the fixture finds the worker with `pgrep`, which this box does not have |
+| `fm-remote-transport-lanes` | 1 ok, then red | `home B's job waited 89s behind home A's long job` |
+
+So the `fm-pending-reply` row in the slice 11 verdict table, carried as spawn cost, was this defect, and the suite now reaches its thirty-third case.
+The `fm-remote-transport-lanes` and `fm-remote-job-orphan-reap` rows there are still red, for the reasons above rather than for identity.
+
+On WSL Ubuntu the six suites this change touches give the same verdicts at base `2e0cee7` and at the final commit, with the new cases added: `fm-remote-job` 25 to 28 ok, `fm-remote-transport-lanes` 12 and 12, `fm-pending-reply` 33 to 34, `fm-remote-entrypoint` 2 and 2; `fm-on` stops at the same missing `tasks-axi` and `fm-remote-job-orphan-reap` at the same init-reparenting precondition in both.
+
+### A whole identity does not survive an exec, on either platform
+
+A job's group leader is recorded while it waits to be armed, and only then execs the job command.
+A probe of that shape, reading `fm_pid_identity` before arming and again after the exec:
+
+```
+MSYS:  proc-createtime-ms=...0733 cmdline-hex=6261...  ->  proc-createtime-ms=...3131 cmdline-hex=736c...  NOT EQUAL
+Linux: linux-starttime=2034 cmdline-hex=6261...        ->  linux-starttime=2034 cmdline-hex=736c...        NOT EQUAL
+```
+
+So the remote job library records the start half only, through `fm_pid_start_identity` and `fm_pid_start_identity_equal` in `bin/fm-wake-lib.sh`, and keeps pairing the worker lock with a separate command check.
+The pending-reply sender never execs, so it records the whole identity.
+On Git Bash an exec is a new Windows process with its own creation time, so no start recorded before an exec matches after it there; a live exec'd group leader still reads as stale on a crash reclaim, and the new exec case skips on MSYS saying so.
+The lane launch has the same shape and races the exec; six launches here read after the final exec every time the later read succeeded, within 8 ms of it.
+
+### The loader's guard cost a second per source on WSL
+
+Both libraries load the wake library once at source time, guarded by whether its comparator is already defined.
+The first guard was `command -v`, which searches PATH for a name that is not a function, and WSL's PATH carries the Windows interop directories.
+Sourcing `bin/fm-remote-job-lib.sh` there went from 62 ms for five sources to 6512 ms, and `fm-remote-job` went from 3 of 3 green to 3 of 3 red, each run on a different start or readiness bound.
+The guard is `declare -F` now, which asks about functions only: 115 ms for five sources and 3 of 3 green with 28 cases.
+
+Upgrade cost: a record written by the previous build holds a `ps` string that never compares equal, so each live worker and job claim is reclaimed once, and a recovery in flight is reconciled once.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
