@@ -82,6 +82,11 @@ MAIN_BACKLOG="$DATA/backlog.md"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 RECEIVER_WAKE_MESSAGE='New routed work is in your backlog. Run bin/fm-session-start.sh now, then act on the routed task.'
 
 ACTIVE_HANDOFF_LOCK=
@@ -341,7 +346,7 @@ receiver_wake_state_write() { # <secondmate-id> <state>
     *) return 1 ;;
   esac
   tmp=$(umask 077; mktemp "$STATE/.backlog-handoff-wake.XXXXXX") || return 1
-  if ! printf '%s\n' "$value" > "$tmp" || ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$marker"; then
+  if ! printf '%s\n' "$value" > "$tmp" || ! fm_private_chmod 600 "$tmp" || ! mv -f -- "$tmp" "$marker"; then
     rm -f -- "$tmp"
     return 1
   fi
@@ -544,7 +549,7 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
     || { rm -f -- "$snapshot"; return 1; }
   printf '%s\n' "$generation" > "$counter_tmp" \
     || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
-  chmod 600 "$counter_tmp" \
+  fm_private_chmod 600 "$counter_tmp" \
     || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
   mv -f -- "$counter_tmp" "$counter" \
     || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }

@@ -422,6 +422,55 @@ test_msys_prime_rooted_at_a_win32_pid_needs_no_second_walk() {
   pass "proc-lib: a prime rooted at a Win32 pid serves every field from one pwsh process"
 }
 
+# Callers ask the same question twice in one process: bin/fm-sessionstart-run.sh
+# resolves its ancestry, then asks again through the lock library, and each of
+# those entry points primes. A prime that always refetches turns every repeat
+# into another pwsh, which is the whole cost of the MSYS walk. A pid the memo
+# already describes had its entire chain walked in THIS process, so a second
+# walk of it could only buy a second pwsh.
+#
+# Counted, not asserted from the memo's contents: an implementation that reuses
+# the memo for the answer while still starting the walk would look identical
+# from the outside, and only the log distinguishes them. Step two is what stops
+# idempotence from decaying into "never walk again" - a pid the memo does not
+# hold must still cost its own walk and must still replace the memo, which is
+# what fm_harness_pid_alive does to a foreign lock pid.
+test_msys_prime_is_idempotent_for_a_memoised_pid() {
+  local dir fakebin log calls second got
+  dir="$TMP_ROOT/msys-prime-idempotent"
+  fakebin=$(msys_env "$dir")
+  log="$dir/pwsh.log"
+  : > "$log"
+  # 600, 601, 90777 and 90888 are all rows of the one chain rooted at 600, so
+  # after the first prime none of them needs a walk of its own.
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" FM_PWSH_LOG="$log" lib_eval "$fakebin" '
+    fm_proc_chain_prime 600
+    fm_proc_chain_prime 600
+    fm_proc_chain_prime 90777' || fail "repeated primes of one chain failed"
+  calls=$(grep -c . "$log" || true)
+  [ "$calls" = 1 ] || fail "three primes within one chain must start one pwsh, started $calls"
+
+  : > "$log"
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" FM_PWSH_LOG="$log" lib_eval "$fakebin" '
+    fm_proc_chain_prime 600
+    fm_proc_chain_prime 90999
+    fm_proc_comm 90999' > "$dir/foreign.out" || fail "a prime off the memoised chain failed"
+  calls=$(grep -c . "$log" || true)
+  [ "$calls" = 2 ] || fail "a prime for a pid outside the memo must walk, expected 2 pwsh calls, got $calls"
+  second=$(sed -n '2p' "$log")
+  [ "$second" = 90999 ] || fail "the second walk must be rooted at the unmemoised pid, was rooted at '$second'"
+  assert_grep 'C:/tools/pi' "$dir/foreign.out" "the replacing prime must leave the new chain readable"
+
+  # The memo is a plain shell variable that the library resets at source time,
+  # and that reset is load-bearing: an inherited memo would describe a DIFFERENT
+  # process's ancestry, and on Windows a reused pid in it would let this process
+  # answer "that pid is a harness" for a pid it has never met.
+  got=$(FM_PROC_MSYS_PROC_ROOT="$dir/proc" FM_PROC_CHAIN_MEMO=$'1\t2\tx\ty' \
+    lib_eval "$fakebin" 'fm_proc_comm 1' 2>/dev/null) \
+    && fail "an inherited FM_PROC_CHAIN_MEMO answered for pid 1 with '$got'; it must never be read from the environment"
+  pass "proc-lib: a prime for a memoised pid costs nothing, one for a new pid still walks, and an inherited memo is never read"
+}
+
 test_msys_chain_terminates_cleanly_without_a_working_pwsh() {
   local dir fakebin got
   dir="$TMP_ROOT/msys-no-pwsh"
@@ -495,6 +544,7 @@ test_msys_names_survive_the_callers_matchers
 test_msys_walk_costs_exactly_one_pwsh_process
 test_msys_lookup_without_a_memo_still_answers
 test_msys_prime_rooted_at_a_win32_pid_needs_no_second_walk
+test_msys_prime_is_idempotent_for_a_memoised_pid
 test_msys_chain_terminates_cleanly_without_a_working_pwsh
 test_msys_liveness_falls_back_to_the_winpid_column
 test_msys_pgid_reads_proc_and_forks_nothing

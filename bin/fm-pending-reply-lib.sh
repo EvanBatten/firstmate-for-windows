@@ -90,6 +90,11 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 # shellcheck source=bin/fm-classify-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-classify-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$_FM_PENDING_REPLY_LIB_DIR/fm-private-lib.sh"
+
 FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
@@ -244,7 +249,7 @@ fm_pending_reply_create() {  # <parent-home> <state-dir> <task_id> <request-text
   [ -n "$parent_home" ] && [ -n "$state" ] && [ -n "$task_id" ] || return 2
   dir=$(fm_pending_reply_dir "$state")
   mkdir -p "$dir" || return 1
-  chmod 700 "$dir" 2>/dev/null || true
+  fm_private_chmod 700 "$dir" || true
   corr=$(fm_pending_reply_new_id)
   [ "${#corr}" -eq 16 ] || return 1
   rec=$(fm_pending_reply_path "$state" "$corr")
@@ -295,7 +300,7 @@ wrong_home_sightings=
 wrong_home_scan_signature=
 grace_secs=$(fm_pending_reply_grace_secs)
 EOF
-  chmod 600 "$tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$tmp" || true
   mv -f "$tmp" "$rec" || return 1
   printf '%s' "$corr"
 }
@@ -332,7 +337,7 @@ fm_pending_reply_write_delivery_confirmation() {  # <state-dir> <corr_id> <state
   mkdir -p "$dir" || return 1
   tmp="$marker.tmp.$$"
   printf '%s=%s\n' "$delivery_state" "$value" > "$tmp" || return 1
-  chmod 600 "$tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$tmp" || true
   mv -f "$tmp" "$marker"
 }
 
@@ -810,11 +815,11 @@ fm_pending_reply_note_remote_channel_caught_up() {  # <state-dir> <task_id> [epo
   path=$(fm_pending_reply_remote_channel_watermark_path "$state" "$task_id")
   dir=$(dirname "$path")
   mkdir -p "$dir" || return 1
-  chmod 700 "$dir" 2>/dev/null || true
+  fm_private_chmod 700 "$dir" || true
   [ ! -L "$path" ] || return 1
   tmp="$dir/.caught-up.$task_id.$$"
   printf 'caught_up_epoch=%s\n' "$epoch" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" 2>/dev/null || true
+  fm_private_chmod 600 "$tmp" || true
   mv -f -- "$tmp" "$path"
 }
 

@@ -19,6 +19,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 sha256_file() {
@@ -123,7 +128,7 @@ put_handoff_file() { # <home-real> <name> <max-bytes> <relative-path> <bytes> <s
     [ "$bytes" -eq "$expected_bytes" ] || exit 6
     actual_hash=$(sha256_file "$tmp") || exit 5
     [ "$actual_hash" = "$expected_hash" ] || exit 6
-    chmod 600 "$tmp" || exit 5
+    fm_private_chmod 600 "$tmp" || exit 5
     named=$(CDPATH='' cd -- "$home_real/state/handoff" 2>/dev/null && directory_identity) || exit 3
     [ "$named" = "$pinned" ] || exit 3
     [ ! -L "$name" ] || exit 3
@@ -149,7 +154,7 @@ put_handoff_file() { # <home-real> <name> <max-bytes> <relative-path> <bytes> <s
     if [ ! -e "$generation_file" ] || [ "$stored_generation" -lt "$generation" ]; then
       generation_tmp=$(umask 077; mktemp './.put-generation.XXXXXX') || exit 5
       printf '%s\n%s\n%s\n' "$generation" "$expected_bytes" "$expected_hash" > "$generation_tmp" || exit 5
-      chmod 600 "$generation_tmp" || exit 5
+      fm_private_chmod 600 "$generation_tmp" || exit 5
       mv -f -- "$generation_tmp" "$generation_file" || exit 5
       generation_tmp=
     fi

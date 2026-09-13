@@ -29,6 +29,11 @@
 # runner as at-least-once, no-loss, or lossless, and never claim generic
 # exactly-once effects from the handled acknowledgement alone.
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
 # Machine-wide claim root. Homes can share one underlying source store, so the
 # "one owner per canonical source" rule cannot live inside a single home.
 fm_procevent_claim_root() {
@@ -148,7 +153,7 @@ fm_procevent_registration_publish_locked() {  # <state> <adapter> <source-id> <a
     printf 'argc=%s\n' "$#"
     printf 'argv:\n'
     printf '%s\n' "$@"
-  } > "$tmp" && chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; then
+  } > "$tmp" && fm_private_chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; then
     return 0
   fi
   rm -f -- "$tmp"
@@ -188,7 +193,7 @@ fm_procevent_extension_registration_publish_locked() {  # <state> <adapter> <sou
     printf 'registration_token=%s\n' "$registration_token"
     printf 'argc=0\n'
     printf 'argv:\n'
-  } > "$tmp" && chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; then
+  } > "$tmp" && fm_private_chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; then
     return 0
   fi
   rm -f -- "$tmp"
@@ -205,7 +210,7 @@ fm_procevent_extension_registration_load_locked() {  # <state> <source-id>
   [ -f "$file" ] && [ ! -L "$file" ] || return 2
   owner_line=$(sed -n '2p' "$file") || return 2
   [ "$owner_line" = owner=extension ] || return 1
-  [ "$(fm_pr_file_mode "$file")" = 600 ] \
+  fm_private_mode_ok "$file" 600 \
     && [ "$(fm_pr_file_link_count "$file")" = 1 ] || return 2
   {
     IFS= read -r adapter_line \
@@ -489,7 +494,7 @@ fm_procevent_claim_acquire_locked() {
     printf '%s\n%s\n%s\n%s\n%s\n%s\nactive\n%s\n%s\n%s\n%s\n%s\n' \
       "$home" "$pid" "$token" "$identity" "$reg_dir" "$reg_identity" \
       "$state_root" "$state_device" "$state_inode" "$state_owner" "$state_mode" > "$tmp" || status=1
-    [ "$status" -ne 0 ] || chmod 0600 "$tmp" || status=1
+    [ "$status" -ne 0 ] || fm_private_chmod 0600 "$tmp" || status=1
     [ "$status" -ne 0 ] || mv -f -- "$tmp" "$claim" || status=1
     if [ "$status" -eq 0 ]; then
       FM_PROCEVENT_CLAIM_TOKEN=$token
@@ -518,7 +523,7 @@ fm_procevent_claim_mark_terminal_locked() {
       "$FM_PROCEVENT_CLAIM_REG_IDENTITY" "$FM_PROCEVENT_CLAIM_STATE_ROOT" \
       "$FM_PROCEVENT_CLAIM_STATE_DEVICE" "$FM_PROCEVENT_CLAIM_STATE_INODE" \
       "$FM_PROCEVENT_CLAIM_STATE_OWNER" "$FM_PROCEVENT_CLAIM_STATE_MODE" > "$tmp" \
-      && chmod 0600 "$tmp" \
+      && fm_private_chmod 0600 "$tmp" \
       && mv -f -- "$tmp" "$claim"; then
       return 0
     else
@@ -530,7 +535,7 @@ fm_procevent_claim_mark_terminal_locked() {
     "$FM_PROCEVENT_CLAIM_HOME" "$FM_PROCEVENT_CLAIM_PID" "$FM_PROCEVENT_CLAIM_TOKEN" \
     "$FM_PROCEVENT_CLAIM_IDENTITY" "$FM_PROCEVENT_CLAIM_REG_DIR" \
     "$FM_PROCEVENT_CLAIM_REG_IDENTITY" > "$tmp" \
-    && chmod 0600 "$tmp" \
+    && fm_private_chmod 0600 "$tmp" \
     && mv -f -- "$tmp" "$claim"; then
     return 0
   else
@@ -594,8 +599,10 @@ fm_procevent_private_directory_valid() {
   mode=$(fm_pr_file_mode "$directory") || return 1
   case "$mode" in ''|*[!0-7]*) return 1 ;; esac
   if [ "$exact_mode" = 1 ]; then
-    [ "$mode" = 700 ] || return 1
+    fm_private_mode_ok "$directory" 700 || return 1
   elif [ $((8#$mode & 8#022)) -ne 0 ]; then
+    # A mount that drops modes reads back 755, which is already not
+    # group-writable, so this branch needs no waiver of its own.
     return 1
   fi
   canonical=$(cd -P -- "$directory" && pwd -P) || return 1
@@ -716,11 +723,11 @@ fm_procevent_capture() {
     rm -f -- "$tmp" "$adapter_tmp" "$extension_tmp"
     return 1
   fi
-  if ! chmod 0600 "$tmp" "$adapter_tmp"; then
+  if ! fm_private_chmod 0600 "$tmp" "$adapter_tmp"; then
     rm -f -- "$tmp" "$adapter_tmp" "$extension_tmp"
     return 1
   fi
-  if [ "$#" -eq 9 ] && ! chmod 0600 "$extension_tmp"; then
+  if [ "$#" -eq 9 ] && ! fm_private_chmod 0600 "$extension_tmp"; then
     rm -f -- "$tmp" "$adapter_tmp" "$extension_tmp"
     return 1
   fi
@@ -816,7 +823,7 @@ fm_procevent_mark_handled() {
   marker=$(fm_procevent_handled_marker "$state" "$id" "$seq")
   [ ! -L "$marker" ] || return 2
   tmp=$(umask 077; mktemp "$inbox/.handled.XXXXXX") || return 2
-  if ! chmod 0600 "$tmp"; then
+  if ! fm_private_chmod 0600 "$tmp"; then
     rm -f -- "$tmp"
     return 2
   fi
@@ -863,7 +870,7 @@ fm_procevent_result_extension_load() {  # <result-path>
   local package_line binding_line extra
   [ -e "$file" ] || return 1
   [ -f "$file" ] && [ ! -L "$file" ] || return 2
-  [ "$(fm_pr_file_mode "$file")" = 600 ] \
+  fm_private_mode_ok "$file" 600 \
     && [ "$(fm_pr_file_link_count "$file")" = 1 ] || return 2
   {
     IFS= read -r schema_line \

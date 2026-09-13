@@ -315,17 +315,21 @@ test_namespace_valid_accepts_a_real_private_directory() {
   pass "fm_backend_herdr_presentation_lock_namespace_valid: the operator's own private namespace is accepted"
 }
 
+# The mount is tests/lib.sh's noacl stat, the same one bin/fm-private-lib.sh's
+# probe is proved against: a mode synthesized from the reader's umask, and a
+# chmod that moves nothing. umask 022 makes the namespace read 755, and the
+# recorded waiver shows the 755 was measured and waived rather than never read.
 test_namespace_valid_accepts_755_when_the_filesystem_drops_modes() {
-  local fb dir="$TMP_ROOT/ns-modeless/ns"
-  fb=$(make_stat_fake "$TMP_ROOT/ns-modeless")
-  mkdir -p "$dir"
-  FM_FAKE_STAT_UID=$(id -u) FM_FAKE_STAT_MODE=755 FM_FAKE_STAT_PROBE_MODE=755 \
-    adapter "$fb" 'fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" ||
+  local fb="$TMP_ROOT/ns-modeless/fakebin" dir="$TMP_ROOT/ns-modeless/ns"
+  mkdir -p "$fb" "$dir"
+  fm_fake_noacl_stat "$fb"
+  adapter "$fb" 'umask 022; fm_backend_herdr_presentation_lock_namespace_valid "$1" &&
+    [ "$FM_PRIVATE_MODE_UNENFORCEABLE" = "$1" ]' "$dir" ||
     fail "a filesystem that cannot carry a mode must not fail the mode check forever"
-  [ -z "$(find "$TMP_ROOT/ns-modeless" -mindepth 1 -name '.fm-mode-probe.*' -print -quit)" ] ||
-    fail "the mode probe must not leave a directory behind"
+  [ -z "$(find "$TMP_ROOT/ns-modeless" -mindepth 1 -name '.fm-private-probe.*' -print -quit)" ] ||
+    fail "the mode probe must not leave a file behind"
   [ -z "$(find "$dir" -mindepth 1 -print -quit)" ] ||
-    fail "the mode probe must never write inside the namespace it is judging"
+    fail "the mode probe must leave nothing behind in the namespace it is judging"
   pass "fm_backend_herdr_presentation_lock_namespace_valid: a mode-less filesystem falls back to owner identity alone"
 }
 

@@ -29,7 +29,20 @@ jobs:
       # and GitHub workflow lint). Do not re-spell the checks here; keep CI
       # and the pre-push gate on this script so a self-broken ci.yml still
       # fails locally before merge.
+      #
+      # One worker, because this runner has 16 GB and the file set does not fit
+      # in two. Measured on the canonical set at ShellCheck 0.11.0: the largest
+      # single root peaks at 7.89 GiB, but the two default workers reach a
+      # combined 12.14 GiB and hold it for four and a half minutes of a twelve
+      # minute run, which leaves the runner agent and page cache under 4 GB.
+      # Serialising makes the job's peak the largest single root instead of the
+      # sum, at roughly double the wall time. The alternative, a second
+      # extended-analysis directive, would buy speed by giving up ShellCheck's
+      # flow analysis on another file, and a green gate is worth more here than
+      # ten minutes. See docs/windows/measurement.md, "Linux baseline".
       - run: bin/fm-lint.sh
+        env:
+          FM_LINT_JOBS: 1
 
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,

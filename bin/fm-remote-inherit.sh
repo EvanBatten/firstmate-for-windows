@@ -19,6 +19,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-config-inherit-lib.sh
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 file_link_count() {
@@ -117,7 +122,7 @@ commit_generation() {
     || die "cannot stage inheritance generation"
   printf '%s\n%s\n%s\n%s\n' "$GENERATION" "$EXPECTED_BYTES" "$EXPECTED_HASH" "$COMMAND" > "$GENERATION_TMP" \
     || die "cannot write inheritance generation"
-  chmod 600 "$GENERATION_TMP" || die "cannot secure inheritance generation"
+  fm_private_chmod 600 "$GENERATION_TMP" || die "cannot secure inheritance generation"
   mv -f -- "$GENERATION_TMP" "$GENERATION_FILE" || die "cannot publish inheritance generation"
   GENERATION_TMP=
 }
@@ -133,7 +138,7 @@ quarantine_shared() {
     quarantine="$base.$n"
   done
   cp -p -- "$DEST" "$quarantine" || die "cannot quarantine divergent shared captain preferences"
-  chmod 600 "$quarantine" || die "cannot secure shared-preference quarantine"
+  fm_private_chmod 600 "$quarantine" || die "cannot secure shared-preference quarantine"
   printf 'quarantined: %s (%s)\n' "${quarantine#"$HOME_REAL/"}" "$reason" >&2
 }
 
@@ -153,7 +158,7 @@ case "$COMMAND" in
       exit 0
     fi
     quarantine_shared replaced
-    chmod 600 "$TMP" || die "cannot secure inherited material"
+    fm_private_chmod 600 "$TMP" || die "cannot secure inherited material"
     mv -f -- "$TMP" "$DEST" || die "cannot publish inherited material"
     TMP=
     [ "$REL" != data/captain-shared.md ] || chmod 444 "$DEST"

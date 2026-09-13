@@ -489,9 +489,9 @@ test_valid_recording_and_merge_derivation() {
     || fail "canonical pr metadata was not exact"
   grep -qxF "pr_head=$expected" "$dir/home/state/task-a.meta" || fail "PR head metadata was not exact"
   cmp -s "$POLL" "$dir/home/state/task-a.check.sh" || fail "published check was not byte-for-byte static"
-  [ "$(file_mode "$dir/home/state/task-a.check.sh")" = 600 ] || fail "published check mode was not 0600"
-  [ "$(file_mode "$dir/home/state/task-a.pr-poll")" = 600 ] || fail "published sidecar mode was not 0600"
-  [ "$(file_mode "$dir/home/state/task-a.pr-poll-registration")" = 600 ] \
+  fm_private_mode_ok "$dir/home/state/task-a.check.sh" 600 || fail "published check mode was not 0600"
+  fm_private_mode_ok "$dir/home/state/task-a.pr-poll" 600 || fail "published sidecar mode was not 0600"
+  fm_private_mode_ok "$dir/home/state/task-a.pr-poll-registration" 600 \
     || fail "published registration mode was not 0600"
   [ "$(fm_pr_file_link_count "$dir/home/state/task-a.check.sh")" = 1 ] \
     && [ "$(fm_pr_file_link_count "$dir/home/state/task-a.pr-poll")" = 1 ] \
@@ -610,10 +610,29 @@ SH
 }
 
 run_watcher_bounded() {
-  local home=$1 fakebin=$2 check_interval=${FM_TEST_CHECK_INTERVAL:-0} watch_root=${FM_TEST_WATCH_ROOT:-$ROOT}
+  local home=$1 fakebin=$2 check_interval=${FM_TEST_CHECK_INTERVAL:-0} watch_root=${FM_TEST_WATCH_ROOT:-$ROOT} budget check_timeout
   shift 2
-  perl -e 'my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm 10; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
-    env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" FM_CHECK_TIMEOUT=1 \
+  # A hang net, not an assertion: no case asserts the 124. The watcher's
+  # startup and first cycle cost one exec after another, so the bound has to be
+  # sized for this host, and generously, since a busy host's real cost runs
+  # ahead of the scale measured when the suite started.
+  budget=$(fm_test_seconds 30)
+  # The per-check bound is sized for the host for the same reason, and is a
+  # per-call value so a case that wants a different one says so. An unscaled
+  # second was a coin toss here: bin/fm-pr-poll.sh measured 242 ms to 1013 ms
+  # per run on this Git Bash host, two of eight runs over the second. A check
+  # killed at that bound is silent - run_check drops its stderr and ignores the
+  # status - so the cycle ended rc 0 with the poll still armed, which is how
+  # test_valid_recording_and_merge_derivation failed at assert_poll_absent on
+  # one run and passed on the next. Every case that reaches this helper needs
+  # its check to finish. The one case that depends on a check timing out,
+  # test_static_poll_contract, spells its literal unscaled second on its own
+  # direct run_check call and does not come through here.
+  check_timeout=${FM_TEST_CHECK_TIMEOUT:-$(fm_test_seconds 1)}
+  perl -e 'my $budget = shift; my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm $budget; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
+    "$budget" \
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" \
+      FM_CHECK_TIMEOUT="$check_timeout" \
       FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 PATH="$fakebin:$BASE_PATH" "$WATCH" "$@"
 }
 
@@ -791,9 +810,9 @@ SH
     [ ! -s "$dir/watch.err" ] || fail "concurrent watcher observed a partial artifact error"
     if [ -e "$dir/home/state/task-a.check.sh" ]; then
       cmp -s "$POLL" "$dir/home/state/task-a.check.sh" || fail "concurrent publication check bytes changed"
-      [ "$(file_mode "$dir/home/state/task-a.check.sh")" = 600 ] || fail "concurrent check mode was not private"
-      [ "$(file_mode "$dir/home/state/task-a.pr-poll")" = 600 ] || fail "concurrent sidecar mode was not private"
-      [ "$(file_mode "$dir/home/state/task-a.pr-poll-registration")" = 600 ] \
+      fm_private_mode_ok "$dir/home/state/task-a.check.sh" 600 || fail "concurrent check mode was not private"
+      fm_private_mode_ok "$dir/home/state/task-a.pr-poll" 600 || fail "concurrent sidecar mode was not private"
+      fm_private_mode_ok "$dir/home/state/task-a.pr-poll-registration" 600 \
         || fail "concurrent registration mode was not private"
       fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
         || fail "concurrent publication did not leave canonical provenance"
@@ -987,7 +1006,7 @@ test_postrename_poll_validation_revokes_and_retries() {
       fm_pr_poll_cleanup
       assert_no_final_poll "$state"
       [ "$(cat "$link_target")" = 'external sentinel' ] || fail "poll type fault changed an external target"
-      [ "$(file_mode "$link_target")" = 644 ] || fail "poll type fault changed an external target mode"
+      fm_private_mode_ok "$link_target" 644 || fail "poll type fault changed an external target mode"
 
       fm_pr_poll_prepare "$state" task-a github https://github.com/o/r/pull/2 github.com o/r 2 "$POLL" \
         || fail "could not prepare poll retry"

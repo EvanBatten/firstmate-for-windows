@@ -300,7 +300,7 @@ cmd_register() {
   local mkdir_target registry_state retired_file
   for mkdir_target in "$(fm_pf_registry_dir "$STATE")" "$(fm_pf_events_dir "$STATE")" \
                       "$(fm_pf_consumed_dir "$STATE")" "$(fm_pf_rejected_dir "$STATE")"; do
-    fmx_private_artifact_dir_prepare "$mkdir_target" >/dev/null \
+    fmx_private_artifact_dir_prepare "$mkdir_target" \
       || die "could not prepare $mkdir_target" 1
   done
 
@@ -391,7 +391,7 @@ EOF
 reject_event() {
   local file=$1 event_id=$2 reason=$3 rejected event_payload
   rejected=$(fm_pf_rejected_dir "$STATE")
-  fmx_private_artifact_dir_prepare "$rejected" >/dev/null \
+  fmx_private_artifact_dir_prepare "$rejected" \
     || { printf 'rejected %s: %s (quarantine failed; event retained)\n' "$event_id" "$reason"; return 1; }
   if ! printf '%s\n' "$reason" \
       | fmx_private_artifact_publish_stdin "$rejected" "$event_id.reason" 600 2>/dev/null; then
@@ -423,7 +423,7 @@ cmd_consume() {
   local obligation delivery request platform
   events_dir=$(fm_pf_events_dir "$STATE")
   consumed_dir=$(fm_pf_consumed_dir "$STATE")
-  fmx_private_artifact_dir_prepare "$consumed_dir" >/dev/null \
+  fmx_private_artifact_dir_prepare "$consumed_dir" \
     || die "could not prepare the consumed-event ledger" 1
   stderr_file=$(mktemp "${TMPDIR:-/tmp}/fm-pf-consume.XXXXXX") \
     || die "could not stage the reconciliation log" 1

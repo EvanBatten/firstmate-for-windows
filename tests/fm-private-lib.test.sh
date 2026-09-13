@@ -1,0 +1,835 @@
+#!/usr/bin/env bash
+# tests/fm-private-lib.test.sh - unit tests for bin/fm-private-lib.sh, the one
+# owner of "this path must be private".
+#
+# The library has two branches and BOTH are covered from any host, because the
+# thing that picks the branch is a MEASUREMENT of the filesystem and the two
+# filesystems the fleet meets do not both exist on any one machine: a Linux or
+# macOS runner has no mount that drops a mode, and a Git Bash host has no mount
+# that keeps one. Letting the host pick would give two sets of cases that each
+# only ever run in one place, and the branch that matters most - the strict one
+# - would then never run where the relaxation was written.
+#
+# So each case names its filesystem, and the fixture supplies it by shadowing
+# the two commands that carry a mode: `chmod`, which sets it, and `stat`, which
+# reads it back. Both fixtures are faithful to a real mount rather than to the
+# library's internals:
+#
+#   noacl_fs     `chmod` is left alone, because on such a mount it exits 0 and
+#                does nothing; `stat` stores no mode and synthesizes one from
+#                the READING process's umask, which is what was measured on
+#                this machine's Git Bash mounts (measurement.md row 21).
+#                tests/lib.sh owns that stub - tests/fm-pr-merge.test.sh puts
+#                the same mount under the guarded merge path.
+#   enforcing_fs `chmod` runs the real chmod AND records the mode it set
+#                against the file's device and inode; `stat` answers %a from
+#                that record. On a host that really carries modes the record
+#                and the inode agree at every step, so the fixture is a
+#                pass-through; on one that does not, it supplies the mode the
+#                filesystem dropped. Recording against the INODE rather than
+#                the path is what keeps a mode attached to a file across the
+#                `mv` that publishes it.
+#
+# Everything else - the temp file the probe makes, the directories, the links,
+# the devices - is the real filesystem, so the structural half of the assertion
+# is never simulated at all.
+set -u
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+TMP_ROOT=$(fm_test_tmproot fm-private-lib)
+LIB="$ROOT/bin/fm-private-lib.sh"
+
+# --- fixtures ---------------------------------------------------------------
+
+case_dir() {  # <name>
+  local dir="$TMP_ROOT/$1"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+# The header the enforcing `stat` stub needs: where the real stat is, which
+# spelling it answers to, and which format and path this call is asking about.
+fixture_stat_header() {  # <real-stat>
+  printf 'REAL_STAT=%s\n' "$(printf '%q' "$1")"
+  cat <<'SH'
+if [ "$(uname 2>/dev/null)" = Darwin ]; then KEY_FMT=%d:%i; FMT_FLAG=-f
+else KEY_FMT=%d:%i; FMT_FLAG=-c; fi
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+SH
+}
+
+# A mount that cannot carry a restrictive mode. `chmod` is left alone, because
+# on such a mount it exits 0 and simply does nothing; only the readback moves.
+# tests/lib.sh owns that stub, because tests/fm-pr-merge.test.sh puts the same
+# mount under the guarded merge path.
+noacl_fs() {  # <dir> -> a directory to prepend to PATH
+  local dir=$1 fakebin
+  fakebin="$dir/fs-noacl"
+  mkdir -p "$fakebin"
+  fm_fake_noacl_stat "$fakebin"
+  printf '%s\n' "$fakebin"
+}
+
+# A mount that carries modes, on any host: the mode `chmod` sets is the mode
+# `stat` reads back, keyed by inode so it survives a rename.
+enforcing_fs() {  # <dir> -> a directory to prepend to PATH
+  local dir=$1 fakebin db
+  fakebin="$dir/fs-enforcing"
+  db="$dir/fs-enforcing-modes"
+  mkdir -p "$fakebin" "$db"
+  {
+    printf '#!/usr/bin/env bash\n'
+    fixture_stat_header "$(command -v stat)"
+    printf 'DB=%s\n' "$(printf '%q' "$db")"
+    cat <<'SH'
+case "$ARG_FMT" in
+  %a|%Lp)
+    key=$("$REAL_STAT" "$FMT_FLAG" "$KEY_FMT" "$ARG_PATH" 2>/dev/null) || exit 1
+    [ -f "$DB/$key" ] && exec cat "$DB/$key"
+    ;;
+esac
+exec "$REAL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'REAL_STAT=%s\n' "$(printf '%q' "$(command -v stat)")"
+    printf 'REAL_CHMOD=%s\n' "$(printf '%q' "$(command -v chmod)")"
+    printf 'DB=%s\n' "$(printf '%q' "$db")"
+    cat <<'SH'
+if [ "$(uname 2>/dev/null)" = Darwin ]; then KEY_FMT=%d:%i; FMT_FLAG=-f
+else KEY_FMT=%d:%i; FMT_FLAG=-c; fi
+mode=$1
+shift
+"$REAL_CHMOD" "$mode" "$@" 2>/dev/null || true
+# A real filesystem keeps the mode in the inode, where a leading zero has
+# nowhere to live, so the record drops it the way stat would.
+while :; do case "$mode" in 0?*) mode=${mode#0} ;; *) break ;; esac; done
+rc=0
+# -L because the real chmod above followed any symlink it was given, so the
+# mode it set belongs to the TARGET's inode. A plain path is unaffected.
+for p in "$@"; do
+  key=$("$REAL_STAT" -L "$FMT_FLAG" "$KEY_FMT" "$p" 2>/dev/null) || { rc=1; continue; }
+  printf '%s\n' "$mode" > "$DB/$key" || rc=1
+done
+exit "$rc"
+SH
+  } > "$fakebin/chmod"
+  chmod +x "$fakebin/stat" "$fakebin/chmod"
+  printf '%s\n' "$fakebin"
+}
+
+# Run <script> against the library on the filesystem <fakebin> describes. The
+# fixture is PREPENDED to PATH rather than replacing it, so the only commands
+# the library sees differently are the two the fixture defines.
+#
+# A library that will not source exits here with no output rather than letting
+# the script run. Several cases below expect a REFUSAL, and an undefined
+# function refuses too, so without this every one of them would pass against a
+# tree that has no library at all.
+fs_eval() {  # <fakebin> <script>
+  local fakebin=$1 script=$2
+  PATH="$fakebin:$PATH" "${BASH:-/bin/bash}" -c "
+    set -u
+    . \"\$0\" || exit 97
+    $script
+  " "$LIB"
+}
+
+# --- the probe --------------------------------------------------------------
+
+# "enforcing" is also what the probe's directory guard answers WITHOUT
+# measuring, so this verdict alone cannot tell a probe that watched the mode
+# move from one that never ran. Two things keep the guard from answering for
+# it. The directory is given a known mode through the fixture, so the ambient
+# umask - 022 on one host, 002 on another - cannot hand the guard a
+# group-writable directory. And the fixture's `stat` records every mode it
+# reads back off a probe file, so the case asserts the measurement itself: 644
+# after the probe's chmod 0644, then 600 after its chmod 0600. A probe that is
+# skipped, for any reason, leaves no readbacks and fails here.
+test_probe_measures_a_mount_that_carries_modes() {
+  local dir fakebin out readbacks
+  dir=$(case_dir probe-enforcing)
+  fakebin=$(enforcing_fs "$dir")
+  mv "$fakebin/stat" "$fakebin/stat-enforcing"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'ENFORCING_STAT=%s\n' "$(printf '%q' "$fakebin/stat-enforcing")"
+    printf 'READBACKS=%s\n' "$(printf '%q' "$dir/probe-readbacks")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %a:*/.fm-private-probe.*|%Lp:*/.fm-private-probe.*)
+    answer=$("$ENFORCING_STAT" "$@") || exit 1
+    printf '%s\n' "$answer" >> "$READBACKS"
+    printf '%s\n' "$answer"
+    exit 0
+    ;;
+esac
+exec "$ENFORCING_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  out=$(fs_eval "$fakebin" "
+    chmod 0700 '$dir'
+    fm_private_modes_enforcing '$dir' && echo enforcing || echo relaxed
+  ")
+  [ "$out" = enforcing ] \
+    || fail "a mount whose chmod 0600 reads back 600 must measure as enforcing, got '$out'"
+  readbacks=$(cat "$dir/probe-readbacks" 2>/dev/null) || readbacks=
+  [ "$readbacks" = "644
+600" ] || fail "the enforcing verdict did not come from the probe watching its mode move 644 then 600, readbacks were '$readbacks'"
+  pass "private-lib: the probe measures a mode-carrying mount as enforcing"
+}
+
+test_probe_measures_a_mount_that_drops_modes() {
+  local dir out
+  dir=$(case_dir probe-noacl)
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    fm_private_modes_enforcing '$dir' && echo enforcing || echo relaxed
+  ")
+  [ "$out" = relaxed ] \
+    || fail "a mount whose chmod 0600 reads back 644 must measure as not representable, got '$out'"
+  pass "private-lib: the probe measures a mount that drops modes as not representable"
+}
+
+# A mount that stores no mode synthesizes one from the READER's umask, so under
+# `umask 077` a plain file reads back 600 and a directory 700 while carrying
+# nothing at all. bin/fm-pr-lib.sh's poll registration sets exactly that umask
+# before it stages its private files, so a probe that asks one question - chmod
+# 0600, is it 600? - answers "modes are enforcing here" on the very mount, and
+# in the very code path, this library exists for. Only watching the mode MOVE
+# tells the two mounts apart.
+test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback() {
+  local dir out
+  dir=$(case_dir probe-umask)
+  mkdir -p "$dir/work"
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    umask 077
+    : > '$dir/work/f'
+    observed=\$(fm_private_stat_mode '$dir/work/f')
+    fm_private_modes_enforcing '$dir/work/f' && verdict=enforcing || verdict=relaxed
+    printf '%s %s\n' \"\$observed\" \"\$verdict\"
+  ")
+  [ "$out" = "600 relaxed" ] \
+    || fail "a 600 readback that is only the caller's own umask must not be read as an enforced mode, got '$out'"
+  pass "private-lib: a umask that flatters the readback does not fool the probe"
+}
+
+test_probe_leaves_nothing_behind() {
+  local dir out residue
+  dir=$(case_dir probe-residue)
+  mkdir -p "$dir/target"
+  # The verdict is asserted first, so an empty directory cannot be read as a
+  # tidy probe when what actually happened is that no probe ran.
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    fm_private_modes_enforcing '$dir/target' && echo enforcing || echo relaxed
+  ")
+  [ "$out" = relaxed ] || fail "the probe must have run and measured this mount, got '$out'"
+  residue=$(find "$dir/target" -mindepth 1 | wc -l)
+  [ "$residue" -eq 0 ] \
+    || fail "the probe must remove its own temp file, $residue entries left in the target directory"
+  pass "private-lib: the probe removes the temp file it measures"
+}
+
+# The one directory the probe cannot avoid writing into is the directory whose
+# mode is in question, and it only ever gets there because that mode was
+# already found wrong - which on a mode-carrying host can mean the directory is
+# genuinely group-writable. Another account can unlink the probe there and
+# leave a 644 file of its own behind, and a probe that believed it would report
+# "this mount cannot carry modes" and waive the check that was catching the
+# directory. The swap is staged as what it actually leaves: a probe file this
+# user does not own.
+test_probe_refuses_to_conclude_from_a_file_it_does_not_own() {
+  local dir fakebin out
+  dir=$(case_dir probe-foreign)
+  mkdir -p "$dir/work"
+  fakebin="$dir/fs-foreign"
+  mkdir -p "$fakebin"
+  fm_fake_noacl_stat "$fakebin"
+  # Wrap that stat so the probe's own file reads back as another account's,
+  # exactly as it would after the swap. Every other path answers normally, so
+  # the case still exercises the real probe against the real filesystem.
+  mv "$fakebin/stat" "$fakebin/stat-noacl"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'NOACL_STAT=%s\n' "$(printf '%q' "$fakebin/stat-noacl")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %u:*/.fm-private-probe.*) echo 4294967294; exit 0 ;;
+esac
+exec "$NOACL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  out=$(fs_eval "$fakebin" "
+    : > '$dir/work/f'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+    echo \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "refused
+[]" ] || fail "a probe file this user does not own must not waive anything, got '$out'"
+  pass "private-lib: the probe draws no conclusion from a file this user does not own"
+}
+
+# The swap above is staged as already done. The interesting one is staged HALF
+# done: the probe is still ours when the ownership question is asked and another
+# account's by the time the modes are read back, which is exactly the window an
+# unlink-and-recreate in a group-writable directory opens. A defence that asks
+# once, before the measurement, waives the check on the strength of a file it no
+# longer owns; the answer has to be re-taken after the readbacks.
+test_probe_refuses_to_conclude_from_a_probe_swapped_mid_measurement() {
+  local dir fakebin out
+  dir=$(case_dir probe-swapped)
+  mkdir -p "$dir/work"
+  fakebin="$dir/fs-swapped"
+  mkdir -p "$fakebin"
+  fm_fake_noacl_stat "$fakebin"
+  mv "$fakebin/stat" "$fakebin/stat-noacl"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'NOACL_STAT=%s\n' "$(printf '%q' "$fakebin/stat-noacl")"
+    printf 'FIRST_ASK=%s\n' "$(printf '%q' "$dir/owner-asked-once")"
+    printf 'OUR_UID=%s\n' "$(printf '%q' "$(id -u)")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %u:*/.fm-private-probe.*)
+    if [ -e "$FIRST_ASK" ]; then
+      echo 4294967294
+    else
+      : > "$FIRST_ASK"
+      echo "$OUR_UID"
+    fi
+    exit 0
+    ;;
+esac
+exec "$NOACL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  out=$(fs_eval "$fakebin" "
+    : > '$dir/work/f'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+    echo \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "refused
+[]" ] || fail "a probe swapped after its ownership check must not waive anything, got '$out'"
+  pass "private-lib: the probe draws no conclusion from a file swapped mid-measurement"
+}
+
+# The two cases above defend the VERDICT against a swapped probe. They say
+# nothing about the file the probe's own `chmod` lands on, and that is the other
+# half: `chmod` follows symlinks and has no portable no-follow, so a probe
+# sitting in a directory another account can write hands that account a way to
+# change the mode of a file this user owns somewhere else - unlink the probe
+# between its ownership check and the first `chmod 0644`, leave a symlink of the
+# same name, and the chmod goes to the symlink's target. The verdict is not what
+# breaks there; the post-readback ownership check still discards the
+# measurement. So this case asserts the TARGET, which is the thing that was
+# damaged, and the verdict beside it.
+#
+# A real substitution needs a second account and a suite has one, so it is
+# staged through the fixture's own `stat`: the wrapper performs exactly the
+# unlink-and-symlink another account would, at the moment it would - the
+# ownership question - and answers that question truthfully so the probe carries
+# on. The mount is the mode-carrying fixture, so the target's mode is recorded
+# state on any host rather than a Git Bash synthesis.
+test_the_probe_never_chmods_through_a_name_another_account_could_replace() {
+  local dir fakebin out
+  dir=$(case_dir probe-substitution)
+  mkdir -p "$dir/work"
+  # Without symlinks the staging below cannot express the attack at all, and a
+  # case that cannot express its attack must say so rather than pass.
+  ln -s "$dir/victim" "$dir/link-check" \
+    || fail "this host cannot stage the substitution: ln -s failed"
+  [ -L "$dir/link-check" ] \
+    || fail "this host cannot stage the substitution: ln -s made no symlink"
+  rm -f -- "$dir/link-check"
+
+  fakebin=$(enforcing_fs "$dir")
+  mv "$fakebin/stat" "$fakebin/stat-enforcing"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'ENFORCING_STAT=%s\n' "$(printf '%q' "$fakebin/stat-enforcing")"
+    printf 'VICTIM=%s\n' "$(printf '%q' "$dir/victim")"
+    printf 'SWAPPED=%s\n' "$(printf '%q' "$dir/swapped")"
+    printf 'OUR_UID=%s\n' "$(printf '%q' "$(id -u)")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT:$ARG_PATH" in
+  %u:*/.fm-private-probe.*)
+    if [ ! -e "$SWAPPED" ]; then
+      : > "$SWAPPED"
+      rm -f -- "$ARG_PATH"
+      ln -s "$VICTIM" "$ARG_PATH"
+    fi
+    printf '%s\n' "$OUR_UID"
+    exit 0
+    ;;
+esac
+exec "$ENFORCING_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+
+  # 0777 on the probe's directory is the precondition the whole attack needs,
+  # and 0644 on the file under test is what sends the assertion to the probe in
+  # the first place. The target starts at 0700, a mode the probe's two chmods
+  # would both destroy.
+  out=$(fs_eval "$fakebin" "
+    : > '$dir/victim'
+    chmod 0700 '$dir/victim'
+    : > '$dir/work/f'
+    chmod 0644 '$dir/work/f'
+    chmod 0777 '$dir/work'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+    fm_private_stat_mode '$dir/victim'
+  ")
+  [ "$out" = "refused
+700" ] || fail "a probe in a directory another account can write must refuse and must not touch a file outside it, got '$out'"
+  pass "private-lib: the probe never chmods through a name another account could replace"
+}
+
+test_probe_cannot_relax_a_directory_it_cannot_write() {
+  local dir out
+  dir=$(case_dir probe-unwritable)
+  # A directory the probe cannot make a file in proves nothing about the
+  # filesystem, so the strict branch has to stand. Named through a path that
+  # does not exist, which no mount lets anyone write.
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    fm_private_modes_enforcing '$dir/absent/deeper/file' && echo enforcing || echo relaxed
+  ")
+  [ "$out" = enforcing ] \
+    || fail "a probe that cannot run must leave the strict branch in force, got '$out'"
+  pass "private-lib: a probe that cannot run does not relax anything"
+}
+
+# --- creating private state -------------------------------------------------
+
+test_creation_carries_700_and_600_where_modes_are_enforcing() {
+  local dir out
+  dir=$(case_dir create-enforcing)
+  out=$(fs_eval "$(enforcing_fs "$dir")" "
+    fm_private_mkdir '$dir/state' || { echo mkdir-failed; exit 0; }
+    : > '$dir/state/f' || { echo touch-failed; exit 0; }
+    fm_private_chmod 0600 '$dir/state/f' || { echo chmod-failed; exit 0; }
+    printf '%s %s %s\n' \
+      \"\$(fm_private_stat_mode '$dir/state')\" \
+      \"\$(fm_private_stat_mode '$dir/state/f')\" \
+      \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "700 600 []" ] \
+    || fail "a private directory and file must really carry 700 and 600 where modes are enforcing, got '$out'"
+  pass "private-lib: creation carries 700 and 600 where modes are enforcing"
+}
+
+test_creation_succeeds_and_is_recorded_where_modes_are_not_representable() {
+  local dir out
+  dir=$(case_dir create-noacl)
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    fm_private_mkdir '$dir/state' || { echo mkdir-failed; exit 0; }
+    : > '$dir/state/f' || { echo touch-failed; exit 0; }
+    fm_private_chmod 0600 '$dir/state/f' || { echo chmod-failed; exit 0; }
+    device=\$(fm_private_stat_device '$dir/state') || exit 1
+    fm_private_dir_valid '$dir/state' 700 \"\$device\" || { echo dir-refused; exit 0; }
+    fm_private_file_valid '$dir/state/f' 600 \"\$device\" || { echo file-refused; exit 0; }
+    fm_private_mode_unenforceable && echo \"recorded \$FM_PRIVATE_MODE_UNENFORCEABLE\" || echo not-recorded
+  ")
+  case "$out" in
+    "recorded $dir/state"*) ;;
+    *) fail "creation must succeed and record the unenforceable mode where it cannot be represented, got '$out'" ;;
+  esac
+  pass "private-lib: creation succeeds and records the waiver where a mode is not representable"
+}
+
+test_the_directory_creator_still_refuses_a_directory_that_exists() {
+  local dir out fs
+  dir=$(case_dir create-lock)
+  # Several callers hold a lock by racing to create the directory, so the
+  # relaxation must not turn the second creator into a winner. Both mounts.
+  for fs in "$(enforcing_fs "$dir")" "$(noacl_fs "$dir")"; do
+    rm -rf "$dir/lock"
+    out=$(fs_eval "$fs" "
+      fm_private_mkdir '$dir/lock' || { echo first-failed; exit 0; }
+      fm_private_mkdir '$dir/lock' && echo second-won || echo second-refused
+    ")
+    [ "$out" = second-refused ] \
+      || fail "the private directory creator must still refuse an existing directory on $fs, got '$out'"
+  done
+  pass "private-lib: creating a private directory still refuses one that exists, on both mounts"
+}
+
+# --- the assertion ----------------------------------------------------------
+
+# The structural half of the assertion is not about modes at all, so it has to
+# hold identically on a mount that carries them and one that does not.
+assert_structural_refusal_on_both_mounts() {  # <name> <script> <what>
+  local name=$1 script=$2 what=$3 dir fs out label
+  dir=$(case_dir "$name")
+  for label in enforcing noacl; do
+    case "$label" in
+      enforcing) fs=$(enforcing_fs "$dir") ;;
+      *) fs=$(noacl_fs "$dir") ;;
+    esac
+    rm -rf "$dir/work"
+    mkdir -p "$dir/work"
+    out=$(fs_eval "$fs" "$script")
+    [ "$out" = refused ] \
+      || fail "the private-path assertion must refuse $what where modes are $label, got '$out'"
+  done
+  pass "private-lib: the assertion refuses $what on both mounts"
+}
+
+test_assertion_refuses_a_symlink() {
+  local dir
+  dir=$(case_dir assert-symlink)
+  assert_structural_refusal_on_both_mounts assert-symlink "
+    : > '$dir/work/real'
+    fm_private_chmod 0600 '$dir/work/real' || exit 1
+    ln -s '$dir/work/real' '$dir/work/link' || exit 1
+    device=\$(fm_private_stat_device '$dir/work') || exit 1
+    fm_private_file_valid '$dir/work/link' 600 \"\$device\" && echo accepted || echo refused
+  " "a symlink"
+}
+
+test_assertion_refuses_a_wrong_device() {
+  local dir
+  dir=$(case_dir assert-device)
+  assert_structural_refusal_on_both_mounts assert-device "
+    : > '$dir/work/f'
+    fm_private_chmod 0600 '$dir/work/f' || exit 1
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\${device}9\" && echo accepted || echo refused
+  " "a file on another device"
+}
+
+test_assertion_refuses_a_second_link() {
+  local dir
+  dir=$(case_dir assert-links)
+  assert_structural_refusal_on_both_mounts assert-links "
+    : > '$dir/work/f'
+    fm_private_chmod 0600 '$dir/work/f' || exit 1
+    ln '$dir/work/f' '$dir/work/second' || exit 1
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    fm_private_file_valid '$dir/work/f' 600 \"\$device\" && echo accepted || echo refused
+  " "a file with a second hard link"
+}
+
+test_assertion_refuses_a_wrong_mode_where_modes_are_enforcing() {
+  local dir out
+  dir=$(case_dir assert-wrong-mode)
+  mkdir -p "$dir/work"
+  out=$(fs_eval "$(enforcing_fs "$dir")" "
+    : > '$dir/work/f'
+    fm_private_chmod 0644 '$dir/work/f' || exit 1
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    if fm_private_file_valid '$dir/work/f' 600 \"\$device\"; then echo accepted; else echo refused; fi
+    echo \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "refused
+[]" ] || fail "a genuinely group-readable file must still be refused where modes are enforcing, and no waiver recorded, got '$out'"
+  pass "private-lib: a genuinely wrong mode is still refused where modes are enforcing"
+}
+
+test_assertion_accepts_the_same_wrong_mode_where_modes_are_not_representable() {
+  local dir out
+  dir=$(case_dir assert-relaxed-mode)
+  mkdir -p "$dir/work"
+  # The same file, the same expectation, the other mount: the mode check is the
+  # only thing that gives way, and it says so.
+  out=$(fs_eval "$(noacl_fs "$dir")" "
+    : > '$dir/work/f'
+    device=\$(fm_private_stat_device '$dir/work/f') || exit 1
+    if fm_private_file_valid '$dir/work/f' 600 \"\$device\"; then echo accepted; else echo refused; fi
+    echo \"[\$FM_PRIVATE_MODE_UNENFORCEABLE]\"
+  ")
+  [ "$out" = "accepted
+[$dir/work/f]" ] || fail "the mode check must give way, and record that it did, where a mode is not representable, got '$out'"
+  pass "private-lib: the mode check gives way and records the waiver where a mode is not representable"
+}
+
+test_a_setter_that_fails_for_a_real_reason_still_fails() {
+  local dir out fs label
+  dir=$(case_dir setter-real-failure)
+  # The relaxation is for a mode a filesystem cannot take, not for a path that
+  # is not there. Both mounts must still refuse this.
+  for label in enforcing noacl; do
+    case "$label" in
+      enforcing) fs=$(enforcing_fs "$dir") ;;
+      *) fs=$(noacl_fs "$dir") ;;
+    esac
+    out=$(fs_eval "$fs" "
+      fm_private_chmod 0600 '$dir/not-there' && echo accepted || echo refused
+    ")
+    [ "$out" = refused ] \
+      || fail "chmod of an absent path must still fail where modes are $label, got '$out'"
+  done
+  pass "private-lib: a setter that fails for a reason other than the mode still fails, on both mounts"
+}
+
+# --- the sibling this library became -----------------------------------------
+
+# Thirty-two scripts gained bin/fm-private-lib.sh as a required sibling, and a
+# fixture bin/ that stages one of them without it aborts the script at source
+# time, before any assertion. tests/lib.sh's fm_test_install_bin exists to make
+# that unrepresentable by staging the closure instead of a hand list, so the
+# thing worth proving is the property itself: stage a script ALONE and it must
+# still run out of the fixture.
+#
+# The five below reach this library through the spelling that resolves its own
+# directory inline, `. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/..."`, and
+# fm-session-lock-lib.sh through `. "$(dirname -- "${BASH_SOURCE[0]}")/..."`. A
+# closure walker that cannot read those spellings stages exactly one file and
+# every case here dies on a missing sibling, which is what makes this evidence
+# rather than decoration: it is red whenever the walk sees no edges at all.
+test_a_script_staged_alone_can_still_source_its_siblings() {
+  local dir subject bin staged rc out
+  dir=$(case_dir install-closure)
+  for subject in fm-pr-lib.sh fm-x-lib.sh fm-procevent-lib.sh \
+                 fm-remote-job-lib.sh fm-check-lib.sh fm-session-lock-lib.sh; do
+    bin="$dir/$subject/bin"
+    rm -rf "${dir:?}/$subject"
+    mkdir -p "$dir/$subject/home"
+    fm_test_install_bin "$bin" "$subject" \
+      || fail "the installer refused to stage $subject"
+    staged=$(find "$bin" -maxdepth 1 -name '*.sh' | wc -l | tr -d ' ')
+    [ "$staged" -gt 1 ] \
+      || fail "staging $subject brought no sibling at all, so the closure walk found no edges"
+    out=$(FM_HOME="$dir/$subject/home" "${BASH:-/bin/bash}" -c \
+      "set -eu; . \"\$0\"; echo sourced" "$bin/$subject" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] && [ "$out" = sourced ] \
+      || fail "$subject could not be sourced out of a bin staged for it alone: $out"
+  done
+  pass "private-lib: a script staged alone through the shared installer still finds its siblings"
+}
+
+# --- the capture helper across the language boundary ------------------------
+
+# bin/fm-procevent-extension-capture.pl asserts the same private-state modes
+# this library owns, in another language and in another process, so the owner's
+# verdict has to REACH it: the helper measures nothing itself, and
+# bin/fm-procevent.sh hands it the owner's answer for each filesystem its
+# assertions land on, as `--private-modes <device>=enforcing|unenforceable`
+# pairs read from fm_private_modes_enforcing. These cases run the helper the way
+# that caller runs it - registry, inbox and capture reservation root arrive as
+# inherited descriptors 9, 8 and 6, everything else as argv - and read the line
+# it prints, which is the contract bin/fm-procevent.sh parses.
+CAPTURE_HELPER="$ROOT/bin/fm-procevent-extension-capture.pl"
+CAPTURE_DIGEST="sha256:$(printf '%064d' 0)"
+
+# The staged directories are 0755 and not 0700 deliberately: that is what a
+# mount which stores no mode REPORTS for the 0700 directory its own caller just
+# made, because `stat` there synthesizes the mode from the reading process's
+# umask (docs/windows/measurement.md row 21). A Git Bash host presents it with
+# no help at all; a host that carries modes has to be asked for it, which is
+# what this chmod does. Either way the helper sees exactly the readback the
+# relaxation exists for.
+capture_home() {  # <state-dir>
+  local state=$1
+  mkdir -p "$state/procevent" "$state/procevent-inbox" "$state/procevent-capture-reservations"
+  chmod 0755 "$state/procevent" "$state/procevent-inbox" "$state/procevent-capture-reservations"
+}
+
+# A verdict answers for ONE filesystem and names it, so the argument is built
+# the way the owner's own cache is keyed: by device. Everything a case stages
+# under one root shares that root's device, which is what makes a single pair
+# enough here.
+capture_verdict() {  # <path> <verdict>
+  printf '%s=%s\n' "$(fm_private_stat_device "$1")" "$2"
+}
+
+run_capture_helper() {  # <registry> <inbox> <reservations> <source-id> [option...]
+  local registry=$1 inbox=$2 reservations=$3 id=$4
+  shift 4
+  (
+    exec 9<"$registry" || exit 97
+    exec 8<"$inbox" || exit 97
+    exec 6<"$reservations" || exit 97
+    exec perl "$CAPTURE_HELPER" "$@" 9 8 6 "$id" ext-capture org.example.capture 1.0.0 1 \
+      "$CAPTURE_DIGEST" "$CAPTURE_DIGEST" capture-token "$id.runner" ".$id.output" \
+      "$$" capture-identity 1024 -- /bin/printf 'captured body'
+  ) 2>&1
+}
+
+test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check() {
+  local dir out status=0
+  dir=$(case_dir capture-helper-verdict)
+
+  # No option at all is the strict mode, and it has to stay the strict mode:
+  # this half is what would go green if the relaxation ever leaked into a
+  # caller that did not ask for it.
+  capture_home "$dir/strict"
+  out=$(run_capture_helper "$dir/strict/procevent" "$dir/strict/procevent-inbox" \
+    "$dir/strict/procevent-capture-reservations" strict-source) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a helper told nothing about this mount must still compare modes exactly, got '$out'"
+  case "$out" in
+    *"unsafe registry directory"*) ;;
+    *) fail "the strict refusal did not come from the mode comparison: '$out'" ;;
+  esac
+  assert_absent "$dir/strict/procevent-inbox/strict-source.1.result" \
+    "a refused capture published a result anyway"
+
+  status=0
+  capture_home "$dir/relaxed"
+  out=$(run_capture_helper "$dir/relaxed/procevent" "$dir/relaxed/procevent-inbox" \
+    "$dir/relaxed/procevent-capture-reservations" relaxed-source \
+    --private-modes "$(capture_verdict "$dir/relaxed" unenforceable)") || status=$?
+  expect_code 0 "$status" "the capture helper on a mount that cannot carry a mode"
+  case "$out" in
+    captured*relaxed-source.1.result*) ;;
+    *) fail "the owner's verdict did not reach the helper's mode comparison: '$out'" ;;
+  esac
+  assert_present "$dir/relaxed/procevent-inbox/relaxed-source.1.result" \
+    "the accepted capture published no result"
+  [ "$(cat "$dir/relaxed/procevent-inbox/relaxed-source.1.result")" = "captured body" ] \
+    || fail "the published result is not the output the source produced"
+  pass "private-lib: the capture helper compares modes exactly until the owner says the mount cannot carry one"
+}
+
+# One verdict standing in for every path the helper checks relaxes filesystems
+# nobody measured. The claim file is what proves it: it does not live under the
+# home's state at all - it resolves through the claim-root override, then the
+# XDG state home, then the home directory - so a verdict read off the state
+# volume was being applied to a file that may sit on storage which carries modes
+# perfectly well, waiving the very comparison that exists to refuse a 0644
+# claim. So a verdict names the filesystem it answers for, and a filesystem it
+# does not name is compared exactly.
+test_the_capture_helper_relaxes_only_the_filesystem_the_owner_measured() {
+  local dir device out status=0
+  dir=$(case_dir capture-helper-per-filesystem)
+  device=$(fm_private_stat_device "$dir") || device=
+  case "$device" in
+    ''|*[!0-9-]*) fail "could not read the device of the staged capture root" ;;
+  esac
+
+  # A verdict for another filesystem must leave this one strict. This is the
+  # defect itself: one measurement, applied to every path.
+  capture_home "$dir/elsewhere"
+  out=$(run_capture_helper "$dir/elsewhere/procevent" "$dir/elsewhere/procevent-inbox" \
+    "$dir/elsewhere/procevent-capture-reservations" elsewhere-source \
+    --private-modes "$((device + 1))=unenforceable") || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a verdict measured on another filesystem relaxed this one, got '$out'"
+  case "$out" in
+    *"unsafe registry directory"*) ;;
+    *) fail "the refusal did not come from the mode comparison: '$out'" ;;
+  esac
+  assert_absent "$dir/elsewhere/procevent-inbox/elsewhere-source.1.result" \
+    "a capture refused for another filesystem's verdict published a result anyway"
+
+  # A verdict that names no filesystem is the unscoped spelling, and unscoped is
+  # what the defect was, so it relaxes nothing either.
+  status=0
+  capture_home "$dir/unscoped"
+  out=$(run_capture_helper "$dir/unscoped/procevent" "$dir/unscoped/procevent-inbox" \
+    "$dir/unscoped/procevent-capture-reservations" unscoped-source \
+    --private-modes unenforceable) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a verdict that names no filesystem relaxed this one, got '$out'"
+  assert_absent "$dir/unscoped/procevent-inbox/unscoped-source.1.result" \
+    "a capture refused on an unscoped verdict published a result anyway"
+
+  # And this same filesystem, measured as mode-carrying, stays strict: the
+  # verdict decides, not the presence of the option.
+  status=0
+  capture_home "$dir/enforcing"
+  out=$(run_capture_helper "$dir/enforcing/procevent" "$dir/enforcing/procevent-inbox" \
+    "$dir/enforcing/procevent-capture-reservations" enforcing-source \
+    --private-modes "$(capture_verdict "$dir/enforcing" enforcing)") || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a filesystem the owner measured as mode-carrying was relaxed anyway, got '$out'"
+  assert_absent "$dir/enforcing/procevent-inbox/enforcing-source.1.result" \
+    "a capture refused on a mode-carrying filesystem published a result anyway"
+  pass "private-lib: the capture helper relaxes only the filesystem the owner measured as unable to carry a mode"
+}
+
+# The waiver covers the mode comparison and nothing beside it. The two refusals
+# below are the ones a single-user runner can actually stage: a planted symlink,
+# which the helper's O_CREAT|O_EXCL|O_NOFOLLOW open must still refuse, and a
+# directory this user does not own, which exists on a POSIX host and does not on
+# a mount that synthesizes ownership along with the mode - there the case says
+# so rather than pretending to have asserted it.
+test_the_capture_helpers_other_refusals_survive_the_relaxation() {
+  local dir out status=0 foreign
+  dir=$(case_dir capture-helper-confinement)
+  capture_home "$dir/planted"
+  ln -s "$dir/outside" "$dir/planted/procevent/planted-source.runner"
+  out=$(run_capture_helper "$dir/planted/procevent" "$dir/planted/procevent-inbox" \
+    "$dir/planted/procevent-capture-reservations" planted-source \
+    --private-modes "$(capture_verdict "$dir/planted" unenforceable)") || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "the relaxation waived the helper's no-follow refusal, got '$out'"
+  case "$out" in
+    *"cannot create planted-source.runner"*) ;;
+    *) fail "the planted symlink was refused for some other reason: '$out'" ;;
+  esac
+  assert_absent "$dir/outside" "the helper wrote through a planted symlink out of its registry"
+
+  capture_home "$dir/foreign"
+  foreign=$(perl -e '
+    for my $candidate (@ARGV) {
+      my @st = lstat($candidate);
+      next unless @st && -d _ && !-l _;
+      next if $st[4] == $<;
+      print $candidate;
+      last;
+    }' /usr/share /usr/lib /usr /etc / 2>/dev/null) || foreign=
+  if [ -z "$foreign" ]; then
+    printf '# skipped the ownership half: every directory on this host reports the current user as its owner\n'
+  else
+    status=0
+    out=$(run_capture_helper "$foreign" "$dir/foreign/procevent-inbox" \
+      "$dir/foreign/procevent-capture-reservations" foreign-source \
+      --private-modes "$(capture_verdict "$foreign" unenforceable)") || status=$?
+    [ "$status" -ne 0 ] \
+      || fail "the relaxation waived the helper's ownership refusal for $foreign, got '$out'"
+    case "$out" in
+      *"unsafe registry directory"*) ;;
+      *) fail "a registry directory this user does not own was refused for some other reason: '$out'" ;;
+    esac
+  fi
+  pass "private-lib: the relaxation waives the mode comparison and leaves every other refusal standing"
+}
+
+test_probe_measures_a_mount_that_carries_modes
+test_probe_measures_a_mount_that_drops_modes
+test_probe_is_not_fooled_by_a_umask_that_flatters_the_readback
+test_probe_leaves_nothing_behind
+test_probe_refuses_to_conclude_from_a_file_it_does_not_own
+test_probe_refuses_to_conclude_from_a_probe_swapped_mid_measurement
+test_the_probe_never_chmods_through_a_name_another_account_could_replace
+test_probe_cannot_relax_a_directory_it_cannot_write
+test_creation_carries_700_and_600_where_modes_are_enforcing
+test_creation_succeeds_and_is_recorded_where_modes_are_not_representable
+test_the_directory_creator_still_refuses_a_directory_that_exists
+test_assertion_refuses_a_symlink
+test_assertion_refuses_a_wrong_device
+test_assertion_refuses_a_second_link
+test_assertion_refuses_a_wrong_mode_where_modes_are_enforcing
+test_assertion_accepts_the_same_wrong_mode_where_modes_are_not_representable
+test_a_setter_that_fails_for_a_real_reason_still_fails
+test_a_script_staged_alone_can_still_source_its_siblings
+test_the_capture_helper_takes_the_owners_verdict_for_its_mode_check
+test_the_capture_helper_relaxes_only_the_filesystem_the_owner_measured
+test_the_capture_helpers_other_refusals_survive_the_relaxation

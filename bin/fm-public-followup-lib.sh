@@ -341,7 +341,7 @@ fm_pf_registry_lock_path() {
 fm_pf_registry_lock_acquire() {
   local state=$1 id=$2
   fm_pf_slug_valid "$id" || return 1
-  fmx_private_artifact_dir_prepare "$(fm_pf_root "$state")" >/dev/null || return 1
+  fmx_private_artifact_dir_prepare "$(fm_pf_root "$state")" || return 1
   if ! command -v fm_lock_acquire_wait >/dev/null 2>&1; then
     # shellcheck source=bin/fm-wake-lib.sh
     . "$_FM_PF_LIB_DIR/fm-wake-lib.sh"

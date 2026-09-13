@@ -57,6 +57,11 @@ FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$SCRIPT_DIR/fm-remote-job-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 WORKER_LOCK=
 WORKER_LOCK_HELD=0
 WORKER_RELEASE_OWNERSHIP=1
@@ -85,7 +90,7 @@ worker_write_heartbeat() {
   ready=$(fm_remote_job_worker_ready_path)
   tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.ready.XXXXXX") || return 1
   printf '%s\n' "${BASHPID:-$$}" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$ready"
 }
 
@@ -94,7 +99,7 @@ worker_publish_pid() {
   pid_file=$(fm_remote_job_worker_pid_path)
   tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.pid.XXXXXX") || return 1
   printf '%s\n' "${BASHPID:-$$}" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$pid_file"
 }
 
@@ -104,7 +109,7 @@ worker_publish_identity() {
   identity_file=$(fm_remote_job_worker_identity_path)
   tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.identity.XXXXXX") || return 1
   printf '%s\n' "$identity" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$identity_file"
 }
 
@@ -119,7 +124,7 @@ worker_publish_lock_owner() {
   printf '%s\n' "$pid" > "$pid_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
   printf '%s\n' "$start" > "$start_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
   printf '%s\n' "$command" > "$command_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
-  chmod 600 "$pid_tmp" "$start_tmp" "$command_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
+  fm_private_chmod 600 "$pid_tmp" "$start_tmp" "$command_tmp" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
   mv -f -- "$command_tmp" "$WORKER_LOCK/command" || { rm -f -- "$pid_tmp" "$start_tmp" "$command_tmp"; return 1; }
   mv -f -- "$start_tmp" "$WORKER_LOCK/start" || { rm -f -- "$pid_tmp" "$start_tmp" "$WORKER_LOCK/command"; return 1; }
   mv -f -- "$pid_tmp" "$WORKER_LOCK/pid" || { rm -f -- "$pid_tmp" "$WORKER_LOCK/start" "$WORKER_LOCK/command"; return 1; }
@@ -188,7 +193,7 @@ worker_publish_quarantine() {
   [ "$WORKER_LOCK_HELD" -eq 1 ] || return 1
   tmp=$(umask 077; mktemp "$WORKER_LOCK/.quarantine.XXXXXX") || return 1
   printf 'active execution could not be confirmed stopped\n' > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$WORKER_LOCK/quarantine"
 }
 
@@ -440,7 +445,7 @@ worker_claim() { # <job-dir>
     return 1
   }
   if ! printf '%s\n' "$pid" > "$pid_tmp" || ! printf '%s\n' "$start" > "$start_tmp" \
-    || ! chmod 600 "$pid_tmp" "$start_tmp" || ! mv -f -- "$start_tmp" "$claim/owner_start" \
+    || ! fm_private_chmod 600 "$pid_tmp" "$start_tmp" || ! mv -f -- "$start_tmp" "$claim/owner_start" \
     || ! mv -f -- "$pid_tmp" "$claim/owner"; then
     rm -f -- "$pid_tmp" "$start_tmp" "$claim/owner" "$claim/owner_start"
     rmdir "$claim" 2>/dev/null || true
@@ -523,7 +528,7 @@ worker_publish_result() { # <job-dir> <exit>
   done
   tmp=$(umask 077; mktemp "$job/.exit.XXXXXX") || return 1
   printf '%s\n' "$exit_status" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  fm_private_chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$job/exit" || { rm -f -- "$tmp"; return 1; }
   fm_remote_job_write_state "$job" 'done' || return 1
   if fm_remote_job_cancelled "$job"; then
@@ -570,7 +575,7 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
   }
   if ! printf '%s\n' "$group_pid" > "$group_tmp" \
     || ! printf '%s\n' "$group_start" > "$group_start_tmp" \
-    || ! chmod 600 "$group_tmp" "$group_start_tmp" \
+    || ! fm_private_chmod 600 "$group_tmp" "$group_start_tmp" \
     || ! mv -f -- "$group_start_tmp" "$group_start_file" \
     || ! mv -f -- "$group_tmp" "$group_file"; then
     rm -f -- "$group_tmp" "$group_start_tmp" "$group_file" "$group_start_file"
@@ -584,7 +589,7 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
     rm -f -- "$group_file" "$group_start_file"
     return 125
   }
-  if ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$armed_file"; then
+  if ! fm_private_chmod 600 "$tmp" || ! mv -f -- "$tmp" "$armed_file"; then
     rm -f -- "$tmp"
     worker_signal_process_or_group group KILL "$group_pid"
     wait "$group_pid" 2>/dev/null || true
@@ -734,7 +739,7 @@ worker_run_job() { # <account-home> <job-dir>
     return
   }
   mkfifo "$stdout_pipe" "$stderr_pipe" || { worker_publish_result "$job" 125; return; }
-  chmod 600 "$stdout_pipe" "$stderr_pipe" || {
+  fm_private_chmod 600 "$stdout_pipe" "$stderr_pipe" || {
     rm -f -- "$stdout_pipe" "$stderr_pipe"
     worker_publish_result "$job" 125
     return
@@ -860,7 +865,7 @@ worker_lane_execute() { # <account-home> <job-dir>
   }
   if ! printf '%s\n' "$supervisor_pid" > "$pid_tmp" \
     || ! printf '%s\n' "$supervisor_start" > "$start_tmp" \
-    || ! chmod 600 "$pid_tmp" "$start_tmp" \
+    || ! fm_private_chmod 600 "$pid_tmp" "$start_tmp" \
     || ! mv -f -- "$start_tmp" "$job/.claim/supervisor_start" \
     || ! mv -f -- "$pid_tmp" "$job/.claim/supervisor"; then
     rm -f -- "$pid_tmp" "$start_tmp" "$job/.claim/supervisor_start"

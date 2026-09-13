@@ -270,6 +270,155 @@ SH
   done
 }
 
+# A suite that asserts a mode must ask the same question the product asks, or
+# it decides privacy a second time, in a weaker copy, and goes red on every
+# platform the product was taught to cope with. bin/fm-private-lib.sh is that
+# owner: `fm_private_mode_ok <path> <mode>` holds where the mode is carried and
+# is waived only where the filesystem cannot carry one, and
+# tests/fm-private-lib.test.sh proves both branches on any host. It is a leaf
+# with no side effects, so sourcing it here costs a suite nothing.
+# shellcheck source=bin/fm-private-lib.sh
+. "$ROOT/bin/fm-private-lib.sh"
+
+# fm_test_modes_carried <path> <what>
+# True when the filesystem under <path> carries a POSIX mode, so a refusal that
+# can only be seen through one is worth asserting there. Where it does not,
+# this prints why <what> was skipped and returns 1. The product WAIVES such a
+# check on that mount by design, so asserting the refusal there would be
+# asserting that the fix is absent, and a test that cannot observe its subject
+# is not evidence. Wrap the whole staged case, not just its assertion: the
+# staging is what the refusal is about.
+fm_test_modes_carried() {  # <path> <what>
+  fm_private_modes_enforcing "$1" && return 0
+  printf '# skipped %s: this filesystem does not carry the mode\n' "$2"
+  return 1
+}
+
+# fm_test_install_bin <dest-bin-dir> <script>...
+# Copy each <script> from bin/ into <dest-bin-dir> TOGETHER WITH every sibling
+# it sources, transitively.
+#
+# A fixture bin/ is not a list of the scripts a case calls, it is a closure: a
+# script that cannot resolve `. "$SCRIPT_DIR/fm-<x>-lib.sh"` aborts at source
+# time, before any assertion, and hook entrypoints whose stdout and stderr are
+# a protocol abort silently. Hand-maintained lists get this wrong every time a
+# script gains a sibling, and the omission is invisible to a text sweep when
+# the installer copies through a loop variable, which is how three review
+# rounds each found more of them. Deriving the closure from the scripts
+# themselves removes the possibility rather than detecting it.
+#
+# A conditional source is staged too: over-staging a real sibling costs a
+# fixture nothing, and a fixture that wants a stub writes it afterwards.
+#
+# The queue is the positional parameters and the visited set is a
+# space-delimited string, because this repository keeps working on bash 3.2 -
+# the stock macOS shell, which docs/fm-test-isolation-proof.md records a real
+# measurement run against - and 3.2 has no associative arrays and treats
+# "${arr[@]}" on an emptied array as unset under `set -u`, which both callers
+# set. `case` membership over a padded string is the idiom
+# bin/fm-private-lib.sh already uses for its probe cache.
+fm_test_install_bin() {  # <dest-bin-dir> <script>...
+  local dest=$1 want cur sib staged=' '
+  shift
+  want=$*
+  mkdir -p "$dest" || return 1
+  while [ "$#" -gt 0 ]; do
+    cur=$1
+    shift
+    case "$staged" in *" $cur "*) continue ;; esac
+    staged="$staged$cur "
+    [ -f "$ROOT/bin/$cur" ] || return 1
+    cp "$ROOT/bin/$cur" "$dest/$cur" || return 1
+    for sib in $(fm_test_bin_siblings "$cur"); do
+      set -- "$@" "$sib"
+    done
+  done
+  for cur in $want; do
+    [ -f "$dest/$cur" ] || return 1
+  done
+}
+
+# fm_test_bin_siblings <script>: the basenames bin/<script> sources from its
+# own directory, one per line.
+#
+# The path between the `.` and the basename is not scanned, only skipped. Two
+# spellings are in use and the commonest one resolves the directory inline -
+# `. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-<x>.sh"` - so a pattern
+# that cannot cross an embedded quote sees nothing there, which silently
+# includes every script that sources bin/fm-private-lib.sh. Only the basename
+# is ever needed, so match to the closing quote and take the last path segment.
+fm_test_bin_siblings() {  # <script>
+  grep -oE '^[[:space:]]*(\.|source)[[:space:]]+.*/fm-[a-z0-9-]+\.sh"' "$ROOT/bin/$1" 2>/dev/null \
+    | sed -E 's#.*/##; s#"$##'
+}
+
+# fm_fake_noacl_stat <fakebin>
+# Puts a `stat` in <fakebin> that answers the mode question the way a mount
+# which cannot carry POSIX modes answers it. Every other question goes to the
+# real stat, so devices, inodes and link counts stay true.
+#
+# Such a mount stores no mode at all. `chmod` exits 0 and does nothing, and
+# `stat` SYNTHESIZES a mode from the umask of the process doing the reading:
+# 0644 & ~umask for a plain file, 0755 & ~umask for a directory or anything
+# executable. Measured on this repository's Git Bash mounts, where one file
+# reads 644 under umask 022 and 600 under umask 077
+# (docs/windows/measurement.md row 21).
+#
+# The umask is modelled rather than a constant returned, because the constant
+# is what makes this mount look harmless. A caller that sets `umask 077` before
+# staging private state - which bin/fm-pr-lib.sh's poll registration does -
+# reads 600 back off a file that carries nothing of the sort, and any check
+# that asks one question passes. The trap only appears when the answer moves
+# with the reader.
+#
+# EXECUTABLE IS DECIDED FROM CONTENT, NOT FROM THE PERMISSION BIT, because on
+# such a mount there is no permission bit to read: MSYS marks an entry
+# executable when it begins `#!` or `MZ`, or carries a Windows executable
+# extension. That is not a detail. Ledger row 24 names the one file issue #3
+# actually died on, `<id>.check.sh`, a copy of an EXECUTABLE template that
+# reads back 700 under the registration's `umask 077` while the two plain
+# files beside it read 600 and passed. A stub that asked `[ -x ]` instead
+# would answer 644 & ~077 = 600 for that copy as well, because the poll
+# registration creates its temps with `mktemp` at 0600 and `cp` into an
+# existing destination keeps that mode - so the mount it staged could not
+# reproduce the failure the fix exists for.
+#
+# A case that prepends this fakebin to PATH is running on such a mount wherever
+# the suite itself is running, which is the only way a Linux or macOS runner can
+# reach the code that has to cope with one.
+fm_fake_noacl_stat() {
+  local fakebin=$1 real
+  real=$(command -v stat) || return 1
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'REAL_STAT=%s\n' "$(printf '%q' "$real")"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT" in
+  %a|%Lp)
+    [ -e "$ARG_PATH" ] || [ -L "$ARG_PATH" ] || exit 1
+    BASE=0644
+    if [ -d "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; then
+      BASE=0755
+    elif [ -f "$ARG_PATH" ] && [ ! -L "$ARG_PATH" ]; then
+      MAGIC=
+      IFS= read -r -n2 MAGIC < "$ARG_PATH" 2>/dev/null
+      case "$MAGIC" in '#!'|MZ) BASE=0755 ;; esac
+      case "$ARG_PATH" in
+        *.exe|*.EXE|*.com|*.COM|*.bat|*.BAT|*.cmd|*.CMD) BASE=0755 ;;
+      esac
+    fi
+    printf '%o\n' "$(( BASE & ~$(umask) ))"
+    exit 0 ;;
+esac
+exec "$REAL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  chmod +x "$fakebin/stat"
+}
+
 # fm_fake_version_tool <fakebin> <tool> <override-env-var> <default-version>
 # The stub answers `--version` with <override-env-var> when that variable is set
 # and non-empty, and with <default-version> otherwise; every other invocation
@@ -596,4 +745,19 @@ fm_test_wait_until() {
     [ "$now" -lt "$deadline" ] || return 124
     sleep 0.1
   done
+}
+
+# fm_test_settle <linux-seconds>: sleep that budget sized for this host. This is
+# the window an assertion about an ABSENCE needs - "nothing started", "nothing
+# was written" - where there is nothing to wait FOR. fm_test_wait_until is the
+# wrong tool there: a predicate that is already true returns on its first probe
+# and leaves no window at all, and a predicate that stays false burns the whole
+# budget to say what the sleep would have said. Every wait for something that
+# must HAPPEN belongs in fm_test_wait_until instead.
+fm_test_settle() {  # <linux-seconds>
+  local ms whole frac
+  ms=$(fm_test_budget_ms "$1")
+  whole=$(( ms / 1000 ))
+  printf -v frac '%03d' "$(( ms % 1000 ))"
+  sleep "$whole.$frac"
 }

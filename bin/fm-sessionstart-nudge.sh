@@ -3,12 +3,39 @@
 # primary whose current harness session has not already acquired the home lock.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
+#
+# Usage: fm-sessionstart-nudge.sh [--no-harness-ancestry]
+#   --no-harness-ancestry
+#     The caller has already walked THIS process's ancestry and found no
+#     harness in it, so no lock can be proven to belong to this session and the
+#     ownership check below has nothing left to learn. Skipping it drops a
+#     second ancestry walk and, on a Windows userland, the `ps -W` table scan
+#     its liveness probe runs first. The one case where the two answers could
+#     differ is a Windows pid the lock names and the OS has since reused: the
+#     check would go silent for a lock that is not this session's, while
+#     skipping it fires the nudge so bin/fm-lock.sh can reclaim that lock,
+#     which is the safer direction. Only bin/fm-sessionstart-run.sh passes it,
+#     after its own walk; the Grok registration and the OpenCode plugin invoke
+#     this script without it and are unchanged.
+#
+#     An ARGUMENT rather than an environment variable, deliberately. An
+#     exported answer outlives this process: it is inherited by the digest, by
+#     bin/fm-spawn.sh, and by every crew harness and hook those start, which
+#     live for hours and have ancestries of their own. An argument reaches this
+#     process and nothing it goes on to spawn.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+
+NO_HARNESS_ANCESTRY=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-harness-ancestry) NO_HARNESS_ANCESTRY=1 ;;
+  esac
+done
 
 # shellcheck source=bin/fm-proc-lib.sh
 . "$SCRIPT_DIR/fm-proc-lib.sh"
@@ -46,7 +73,9 @@ lock_is_in_ancestry() {
   return 1
 }
 
-lock_is_in_ancestry && exit 0
+if [ "$NO_HARNESS_ANCESTRY" = 0 ] && lock_is_in_ancestry; then
+  exit 0
+fi
 nudge=
 fm_operational_input_encode session-start \
   "Run \`bin/fm-session-start.sh\` now, exactly once, before executing any other instructions." \

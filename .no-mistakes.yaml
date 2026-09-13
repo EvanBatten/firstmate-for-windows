@@ -34,8 +34,33 @@ document:
 # .github/workflows/ci.yml owns broad regression (behavior suite, platform,
 # security, Herdr, tmux, and lifecycle coverage). A full-suite override here
 # would duplicate CI and defeat the targeted Test contract.
+# Routed through `git` because no-mistakes hands this line to cmd.exe on
+# Windows, which cannot run a bare `bin/fm-lint.sh` (issue #20). A plain `bash`
+# prefix only resolves when the daemon happened to inherit Git's `usr/bin` on
+# PATH: on the default Machine+User PATH, `C:\WINDOWS\system32` comes before
+# `C:\Program Files\Git\cmd`, and that is the only Git directory on it and
+# ships no `bash.exe`, so `bash` finds the WSL launcher and the gate lints a
+# different file set under Linux while still looking like it ran. `git.exe` is
+# the one shell-bearing Git executable on that default PATH, and git runs a `!`
+# alias through its own bundled `sh` from the repository toplevel, so the
+# relative script path resolves whatever the caller's directory. The same line
+# is correct on Linux and macOS, where git runs the alias through `/bin/sh` and
+# the script is tracked mode 100755. Double quotes, not single, because cmd.exe
+# treats `'` as an ordinary character rather than a quote.
+#
+# One worker, for the reason `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1`
+# on its own lint step: the two default workers hold their peaks together, a
+# combined 12.14 GiB on the canonical set, and `bin/fm-teardown.sh` and
+# `bin/fm-watch.sh` are the whole of that sum, so a changed-file run on any
+# branch that touches both pays it too - with less RAM behind it, this box
+# having 15 GiB against the runner's 16 GB. Serialising makes the peak the
+# largest single root instead of the sum, at roughly 1.79 times the wall time,
+# and gives up no coverage anywhere. See docs/windows/measurement.md, "Linux
+# baseline". Spelled as the script's own `--jobs` option rather than an
+# `FM_LINT_JOBS=1` prefix, because cmd.exe cannot read a POSIX VAR=value
+# prefix any more than it can run the bare script.
 commands:
-  lint: 'bin/fm-lint.sh'
+  lint: 'git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.

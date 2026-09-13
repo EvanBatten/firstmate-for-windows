@@ -92,6 +92,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-jq-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-jq-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-private-lib.sh"
+
 FM_BACKEND_HERDR_MIN_PROTOCOL=14
 # events.subscribe (the native pane.agent_status_changed push stream) and its
 # subscription_event schema first shipped at protocol 16 (verified: herdr
@@ -636,7 +641,7 @@ fm_backend_herdr_projection_journal_create() {  # <state-dir> <task-id>
     return 1
   }
   tmp=$(mktemp "$state/.${id}.herdr-presentation.XXXXXX") || return 1
-  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  fm_private_chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
   if ! {
     printf 'version=1\n'
     printf 'task_id=%s\n' "$id"
@@ -743,7 +748,7 @@ fm_backend_herdr_projection_journal_write_v2() {  # <journal> <task-id> <token> 
   local parent_workspace=$9 parent_label=${10} workspace_label=${11} task_label=${12} state tmp
   state=$(dirname "$journal")
   tmp=$(mktemp "$state/.${id}.herdr-presentation.bind.XXXXXX") || return 1
-  chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+  fm_private_chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
   if ! {
     printf 'version=2\n'
     printf 'task_id=%s\n' "$id"
@@ -830,14 +835,6 @@ fm_backend_herdr_presentation_lock_namespace() {
   printf '%s' '/tmp/firstmate-herdr-presentation'
 }
 
-fm_backend_herdr_presentation_lock_namespace_mode() {
-  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-    stat -f '%Lp' "$1" 2>/dev/null
-  else
-    stat -c '%a' "$1" 2>/dev/null
-  fi
-}
-
 fm_backend_herdr_presentation_lock_namespace_uid() {
   if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
     stat -f '%u' "$1" 2>/dev/null
@@ -846,40 +843,21 @@ fm_backend_herdr_presentation_lock_namespace_uid() {
   fi
 }
 
-# fm_backend_herdr_presentation_lock_namespace_modeless: 0 when the filesystem
-# holding <dir> cannot represent POSIX modes at all, so the 700 a private
-# directory is created with is never the 700 that is read back. Measured on
-# Git Bash, where every MSYS mount is `noacl`: a directory asked for as 700
-# stats as 755 and no chmod changes that.
-# The probe is created BESIDE the namespace, never inside it. It has to sit on
-# the same filesystem to measure the same thing, and it has to sit where a
-# second process cannot swap it for a directory of its own choosing between
-# the create and the stat - which is exactly what a group-writable namespace
-# would let an attacker do. `mktemp -d` picks an unpredictable name and creates
-# it 0700, and the namespace's parent is /tmp, whose sticky bit then keeps
-# anyone but the owner from removing or renaming that entry.
-fm_backend_herdr_presentation_lock_namespace_modeless() {  # <dir>
-  local dir=$1 probe_dir mode
-  probe_dir=$(mktemp -d "$(dirname "$dir")/.fm-mode-probe.XXXXXX" 2>/dev/null) || return 1
-  mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$probe_dir")
-  rmdir "$probe_dir" 2>/dev/null
-  [ -n "$mode" ] && [ "$mode" != 700 ]
-}
-
 fm_backend_herdr_presentation_lock_namespace_valid() {
-  local dir=$1 expected_uid owner mode
+  local dir=$1 expected_uid owner
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   expected_uid=$(id -u 2>/dev/null) || return 1
   owner=$(fm_backend_herdr_presentation_lock_namespace_uid "$dir") || return 1
-  mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$dir") || return 1
   [ "$owner" = "$expected_uid" ] || return 1
   # Owner identity is required everywhere. The mode is required wherever a
   # mode means something: on a filesystem that cannot carry one, 700 is
   # unreachable by any means and demanding it only refuses the operator's own
   # private directory. A namespace that is genuinely group- or world-readable
   # on a mode-capable filesystem still fails here, because there the probe
-  # reads back the 700 it asked for.
-  [ "$mode" = 700 ] || fm_backend_herdr_presentation_lock_namespace_modeless "$dir"
+  # reads back the 700 it asked for. Slice 3 measured that here first and this
+  # adapter carried its own probe for it; bin/fm-private-lib.sh owns the
+  # question now, for every private-state site at once.
+  fm_private_mode_ok "$dir" 700
 }
 
 # Resolve the one verified running named-session socket path as an absolute
@@ -969,7 +947,7 @@ fm_backend_herdr_presentation_session_lock_path() {  # <session>
   dir=$(fm_backend_herdr_presentation_lock_namespace) || return 1
   [ -n "$dir" ] || return 1
   if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
-    if ! mkdir -m 700 "$dir" 2>/dev/null; then
+    if ! fm_private_mkdir "$dir"; then
       fm_backend_herdr_presentation_lock_namespace_valid "$dir" || return 1
     fi
   fi
@@ -2918,7 +2896,7 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|pending-unprove
   verdict=$(fm_composer_classify_screen "$caps" "$cap")
   if [ "$verdict" = need-identity ]; then
     if ! identity=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null) || [ -z "$identity" ]; then
-      identity=probe-absent
+      identity='probe-absent'
     fi
     verdict=$(fm_composer_classify_screen "$caps" "$cap" '' "$identity")
     [ "$verdict" != need-identity ] || verdict=unknown

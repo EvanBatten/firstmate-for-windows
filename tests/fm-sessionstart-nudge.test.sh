@@ -359,6 +359,97 @@ test_run_on_an_msys_userland_with_a_live_harness_still_reemits() {
   pass "run wrapper: an MSYS transport that keeps its harness parent keeps the run tier"
 }
 
+# A transport that keeps its harness parent asks the ancestry question TWICE in
+# one process: once to decide whether the run tier can take the helm at all,
+# and again through the lock library to decide whether a completed startup is
+# this owner's. On MSYS each of those costs a pwsh, and the memo that exists to
+# stop the second one lives inside a command substitution, where a subshell's
+# assignment is discarded. Both halves of the fix are needed to make this case
+# pass: without the idempotent prime the second call re-walks, and without the
+# caller-shell prime the first walk is thrown away.
+#
+# Counted at pwsh rather than at the wall clock, and against a stubbed digest:
+# the real bin/fm-session-start.sh walks through bin/fm-lock.sh as well, and on
+# a Windows host every walk in the suite roots at the same boundary pid, so a
+# per-root count could not tell the wrapper's walks from the digest's.
+test_run_compact_on_a_resolving_msys_transport_walks_once() {
+  local dir fakes log lock walks status=0
+  dir="$TMP_ROOT/run-msys-resolving-walks"
+  make_run_primary "$dir"
+  # The WHOLE bin directory: these entrypoints source siblings at load time,
+  # and a fixture missing one aborts the hook before any assertion.
+  rm -rf "${dir:?}/bin"
+  cp -R "$ROOT/bin" "$dir/bin" || fail "could not stage the fixture bin directory"
+  cat > "$dir/bin/fm-session-start.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/digest-args"
+exit 0
+SH
+  chmod +x "$dir/bin/fm-session-start.sh"
+
+  fakes=$(fm_fakebin "$dir/fakebin")
+  cat > "$fakes/uname" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' MINGW64_NT-10.0-26200
+SH
+  # An MSYS ps: -o is rejected outright, so bin/fm-proc-lib.sh's capability
+  # probe selects the Win32 branch and the walk has to go through pwsh.
+  cat > "$fakes/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do
+  case "$a" in
+    -o) echo "ps: unknown option -- o" >&2; exit 1 ;;
+  esac
+done
+case "${1:-}" in
+  -W)
+    printf '%s\n' '      PID    PPID    PGID     WINPID  TTY   UID    STIME COMMAND'
+    printf '%s\n' '   273976       0       0      90888  ?       0 03:02:31 C:\Users\u\claude.exe'
+    ;;
+esac
+SH
+  # Rows rooted at whatever pid is asked for, so the same fake serves a Linux
+  # host - where the requested pid itself is the boundary, MSYS /proc having no
+  # row for it - and a Git Bash host, where the real /proc segment runs up to
+  # the suite's own fixture harness first. CRLF, as the real one prints.
+  cat > "$fakes/pwsh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "${FM_PROC_QUERY_PID:-}" >> "${FM_PWSH_LOG:-/dev/null}"
+printf '%s\t%s\t%s\r\n' "${FM_PROC_QUERY_PID:-0}" 90777 'C:\Program Files\Git\usr\bin\bash.exe'
+printf '%s\t%s\t%s\r\n' 90777 90888 'C:\Users\u\.local\bin\claude.exe'
+printf '%s\t%s\t%s\r\n' 90888 0 'C:\Program Files\nodejs\node.exe'
+SH
+  chmod +x "$fakes/uname" "$fakes/ps" "$fakes/pwsh"
+
+  log="$dir/pwsh.log"
+  : > "$log"
+  # The lock has to name the pid the library ITSELF resolves under these fakes,
+  # which differs by host: the fake harness above on Linux, the suite's own
+  # fixture harness on Git Bash, where the real /proc segment is walked first.
+  # shellcheck disable=SC2016 # $0 must expand in the child shell, not here.
+  lock=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys PATH="$fakes:$RUN_PATH" FM_PWSH_LOG="$log" \
+    bash -c '. "$0"; fm_harness_ancestry_pid' "$dir/bin/fm-session-lock-lib.sh") \
+    || fail "the fixture ancestry named no harness, so this case would test the divert instead"
+  printf '%s\n' "$lock" > "$dir/state/.lock"
+  printf '%s\n' "$lock" > "$dir/state/.session-start-complete"
+
+  : > "$log"
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys PATH="$fakes:$RUN_PATH" FM_PWSH_LOG="$log" \
+    FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$dir" FM_HOME="$dir" \
+    "$dir/bin/fm-sessionstart-run.sh" --source compact </dev/null >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "run wrapper compact on a resolving MSYS transport"
+  assert_grep '--reemit' "$dir/digest-args" \
+    "the run tier was lost: a resolving MSYS compact must still reach the digest with --reemit"
+  walks=$(grep -c . "$log" || true)
+  [ "$walks" -eq 1 ] \
+    || fail "one session open asked its own ancestry twice and paid $walks pwsh walk(s) for it"
+  pass "run wrapper: a resolving MSYS compact resolves its ancestry once for the whole open"
+}
+
 test_run_clear_and_compact_reemit() {
   local root out source status
   for source in clear compact; do
@@ -1111,6 +1202,93 @@ test_run_resume_on_msys_delegates_without_walking_the_ancestry() {
   pass "run wrapper: an MSYS resume delegates to the nudge without walking the ancestry"
 }
 
+# Delegating is not the same as getting out of the way. The nudge decides
+# whether to stay silent by walking THIS process's ancestry for the lock owner,
+# so the open that hands it the session has to hand it the live parent chain the
+# tracked registrations end in `; exit 0` to keep. `exec` hands the wrapper's
+# process over instead of keeping it, and the nudge then walks from whatever
+# that exec left behind - on MSYS a new Win32 process whose parent is already
+# dead (docs/windows/measurement.md C4b). A walk that cannot reach the lock
+# owner fires the nudge at a session that already holds the lock, and the agent
+# runs a second full digest over a context that was just restored, which is the
+# one case the resume row exists to keep quiet. So the nudge is CALLED here, as
+# it is on the divert branch and as the digest is on the others, and the wrapper
+# stays the live parent of the process doing the walking.
+#
+# The call is what keeps the status pin too: under `exec` the nudge's status IS
+# the hook's, so a nudge that cannot even parse would reach Claude as the
+# SessionStart exit 2 that blocks a session from opening, while a call leaves
+# the trailing `exit 0` in charge. The stub exits 2 for exactly that reason.
+#
+# Asserted on the process tree, so any future spelling that keeps the parent
+# passes and any that severs it fails: the stub records the parent it really
+# has, and the case compares it against the WRAPPER's own pid rather than
+# against the test's, which a subshell between them would also satisfy.
+test_run_resume_keeps_the_hook_parent_alive_for_the_nudge() {
+  local dir wrapper parent status=0
+  dir="$TMP_ROOT/run-resume-nudge-parent"
+  make_run_primary "$dir"
+  fm_test_install_bin "$dir/bin" fm-sessionstart-run.sh \
+    || fail "could not stage the fixture bin closure for the run wrapper"
+  cat > "$dir/bin/fm-sessionstart-nudge.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$PPID" > "$(dirname "$0")/../nudge-parent"
+exit 2
+SH
+  chmod +x "$dir/bin/fm-sessionstart-nudge.sh"
+  # Backgrounded rather than run in $(...) or a pipeline: `env` execs the
+  # wrapper, so $! IS the wrapper's pid and the recorded parent can be compared
+  # against it, while a command substitution would put a subshell in between.
+  # The userland named is the one whose exec severs, though this branch reads it
+  # for nothing: it delegates before the divert's own question is asked.
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    OSTYPE=msys FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$dir" FM_HOME="$dir" \
+    PATH="$RUN_PATH" "$dir/bin/fm-sessionstart-run.sh" --source resume \
+    </dev/null >/dev/null 2>&1 &
+  wrapper=$!
+  wait "$wrapper" || status=$?
+  expect_code 0 "$status" "run wrapper resume whose nudge exits 2"
+  assert_present "$dir/nudge-parent" "a resume open never reached the nudge at all"
+  parent=$(cat "$dir/nudge-parent")
+  [ "$parent" = "$wrapper" ] \
+    || fail "the nudge's parent is $parent, not the wrapper $wrapper: resume exec'd the wrapper's process away instead of keeping it alive as the parent the nudge's ownership check walks from"
+  pass "run wrapper: resume delegates with the hook's parent alive and the hook's status still pinned to 0"
+}
+
+# A severed open walks its own ancestry to decide it cannot take the helm, then
+# hands the open to the nudge, which walks the SAME ancestry again to decide
+# whether the lock is this session's. That second walk can only ever repeat the
+# first one's answer: a live lock holder within the nudge's eight parents would
+# be a harness the wrapper's own sixteen-hop walk had already named, and the
+# wrapper would not have diverted. So the wrapper passes its answer down as an
+# argument and the nudge stops asking. The one case where the two could differ
+# is a pid Windows has reused, where the old check went silent for a lock that
+# was not this session's; firing the nudge there is the safer direction,
+# because bin/fm-lock.sh can then reclaim it.
+#
+# The `args=` assertion is what keeps the `ppid=` count honest: a fixture where
+# nothing walked at all would satisfy a ppid count on its own.
+test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once() {
+  local root="$TMP_ROOT/run-msys-foreign-lock" log out status=0 walks probes
+  make_run_primary "$root"
+  log="$root/ps-calls.log"
+  : > "$log"
+  # Alive for the nudge's liveness probe, and not an ancestor under a table
+  # where every parent is init: exactly the lock that used to cost the walk.
+  printf '%s\n' "$$" > "$root/state/.lock"
+  out=$(run_hook_counting "$root" "$log" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper startup on a severed MSYS ancestry with a live foreign lock"
+  [ "$out" = "$NUDGE_LINE" ] \
+    || fail "a severed MSYS open with a foreign lock printed something other than the nudge: $out"
+  walks=$(grep -c 'args=' "$log" 2>/dev/null) || walks=0
+  [ "$walks" -eq 1 ] \
+    || fail "the severed open must walk its ancestry exactly once, walked $walks time(s)"
+  probes=$(grep -c 'ppid=' "$log" 2>/dev/null) || probes=0
+  [ "$probes" -eq 1 ] \
+    || fail "the nudge repeated the wrapper's ancestry question: $probes parent lookups for one open"
+  pass "run wrapper: a diverted MSYS open hands its ancestry answer to the nudge instead of paying for it twice"
+}
+
 test_run_reads_source_from_the_hook_payload() {
   local root="$TMP_ROOT/run-payload" out status=0
   make_run_primary "$root"
@@ -1182,6 +1360,49 @@ test_run_reports_a_failed_session_start_as_digest_text() {
   pass "run wrapper: a session start that cannot take the lock still opens the session and says so"
 }
 
+# The run tier can only take the helm when this process can prove which harness
+# session it belongs to, and on MSYS that proof is the parent chain: exec there
+# starts a NEW Win32 process and exits the old one, so a registration that ends
+# in the wrapper leaves it with a dead parent and no ancestry to walk
+# (docs/windows/measurement.md C4b). The tracked registration therefore ends in
+# a builtin, which no correct shell may fold away: exec-ing the wrapper would
+# hand the harness the wrapper's exit status, while `; exit 0` pins the hook's
+# status to 0 whatever the wrapper does. That status pin is the second half of
+# the contract - a Claude SessionStart exit 2 blocks session initialization.
+#
+# Asserted on the process tree rather than on the JSON bytes: the registration
+# is EXECUTED here the way the harness executes it, so any future spelling that
+# keeps a live parent and pins the status passes, and any that severs fails.
+test_claude_registration_keeps_the_hook_parent_alive() {
+  local dir cmd parent status=0
+  command -v jq >/dev/null 2>&1 \
+    || fail "this case reads the tracked registration with jq, which is not installed"
+  dir="$TMP_ROOT/claude-registration-parent"
+  mkdir -p "$dir/bin"
+  cmd=$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$ROOT/.claude/settings.json") \
+    || fail "could not read the tracked Claude SessionStart registration"
+  [ -n "$cmd" ] && [ "$cmd" != null ] \
+    || fail "the tracked Claude SessionStart registration has no command"
+  # Exiting non-zero is deliberate: it pins that the registration returns 0
+  # regardless of what the wrapper does.
+  cat > "$dir/bin/fm-sessionstart-run.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$PPID" > "$(dirname "$0")/../parent"
+exit 7
+SH
+  chmod +x "$dir/bin/fm-sessionstart-run.sh"
+  # NOT inside $(...) or a pipeline: either would add a subshell of its own and
+  # the recorded parent would stop meaning what this case reads it to mean.
+  env -u GROK_AGENT -u GROK_HOOK_EVENT CLAUDE_PROJECT_DIR="$dir" \
+    bash -c "$cmd" </dev/null >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "the tracked Claude SessionStart registration"
+  assert_present "$dir/parent" "the tracked Claude SessionStart registration never reached the wrapper"
+  parent=$(cat "$dir/parent")
+  [ "$parent" != "$$" ] \
+    || fail "the wrapper's parent $parent is the test process: the registration exec'd it and a hook launched this way has no ancestry to walk"
+  pass "claude registration: the session-open wrapper keeps a live parent and the hook's status is pinned to 0"
+}
+
 test_genuine_primary_nudges
 test_gate_env_is_silent
 test_gate_common_dir_is_silent
@@ -1194,6 +1415,7 @@ test_run_startup_runs_the_full_digest
 test_run_on_an_msys_userland_nudges_instead_of_the_digest
 test_run_on_a_posix_userland_still_runs_the_digest
 test_run_on_an_msys_userland_with_a_live_harness_still_reemits
+test_run_compact_on_a_resolving_msys_transport_walks_once
 test_run_clear_and_compact_reemit
 test_run_rebuild_forwards_source_to_drifted_instruction_refresh
 test_run_compact_without_completion_refreshes_before_finishing_startup
@@ -1201,10 +1423,13 @@ test_run_clear_without_completion_finishes_startup
 test_run_clear_rejects_previous_owner_completion
 test_run_resume_delegates_to_the_nudge
 test_run_resume_on_msys_delegates_without_walking_the_ancestry
+test_run_resume_keeps_the_hook_parent_alive_for_the_nudge
+test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
 test_run_reports_a_failed_session_start_as_digest_text
+test_claude_registration_keeps_the_hook_parent_alive
 test_pi_startup_classifies_cli_continuations
 test_pi_sessionstart_generation_prerequisite
 test_pi_reload_releases_sessionstart_exit_listener

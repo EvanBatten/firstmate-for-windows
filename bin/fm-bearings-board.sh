@@ -46,6 +46,11 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 
@@ -171,7 +176,7 @@ command_build() {
     rm -f -- "$tmp"
     fail "the built board does not carry a readable $BOARD_SCHEMA payload"
   fi
-  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
+  if ! { fm_private_chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
     rm -f -- "$tmp"
     fail "cannot publish the board"
   fi

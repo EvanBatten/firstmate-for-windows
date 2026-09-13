@@ -68,18 +68,30 @@
 # fail-closed, Pi-only, and recorded in docs/windows/measurement.md rather than
 # fixed here, because that file is outside this patch's four callers.
 #
-# ONE pwsh PROCESS PER WALK. Every caller runs its field queries inside command
-# substitution, and a subshell cannot write back to its parent, so a memo that
-# filled itself lazily would be discarded on every hop. Callers therefore prime
-# the memo ONCE, in their own shell, before the loop:
+# ONE pwsh PROCESS PER ROOT PER PROCESS. Every caller runs its field queries
+# inside command substitution, and a subshell cannot write back to its parent,
+# so a memo that filled itself lazily would be discarded on every hop. Callers
+# therefore prime the memo ONCE, in their own shell, before the loop:
 #     fm_proc_chain_prime "$pid"
 # after which the per-hop fm_proc_comm/args/ppid calls read it from inside
 # their subshells. A lookup that misses the memo still answers correctly, at
-# the cost of its own walk. The memo is deliberately not time-bounded: it is
-# refilled by the next prime, it never answers a liveness question
-# (fm_pid_alive always probes the live process table), and a stale identity for
-# an already-dead pid can only make a caller keep a lock it would otherwise
-# steal, which is the safe direction.
+# the cost of its own walk. A prime for a pid the memo already holds is free,
+# so a process that asks the same ancestry question twice - which one session
+# open does, once to pick its tier and once through the lock library - pays for
+# one walk, not two. The memo is deliberately not time-bounded: it is refilled
+# by the next prime for a pid it does not hold, it never answers a liveness
+# question (fm_pid_alive always probes the live process table), and a stale
+# identity for an already-dead pid can only make a caller keep a lock it would
+# otherwise steal, which is the safe direction.
+#
+# THE MEMO IS NEVER READ FROM THE ENVIRONMENT. It is a plain shell variable
+# that this file resets to empty at source time, and that reset is load-
+# bearing: an inherited memo would describe a DIFFERENT process's ancestry,
+# and because _fm_proc_msys_field consults it before /proc or pwsh, a hook that
+# inherited its launcher's memo would answer "that pid is claude.exe" for a
+# Win32 pid Windows has since reused - and bin/fm-session-lock-lib.sh would
+# write that dead pid into this home's lock. Nothing may export it, and a
+# caller with an answer to hand to a child passes it as an ARGUMENT.
 
 if [ -n "${FM_PROC_LIB_SOURCED:-}" ]; then
   return 0
@@ -329,6 +341,14 @@ fm_proc_chain() {
 # MUST be called from the caller's own shell, never inside `$(...)`.
 fm_proc_chain_prime() {
   [ "$FM_PROC_OS" = msys ] || return 0
+  # A pid the memo already describes had its WHOLE chain walked in this
+  # process, so walking it again could only buy a second pwsh. A live
+  # process's parent link does not change, and identity never answers
+  # liveness here (fm_pid_alive always probes the live table), so the only
+  # staleness this admits is a Win32 pid reused between two primes of one
+  # short-lived hook - the class the header above already accepts. A pid the
+  # memo does NOT hold still walks and still replaces the memo.
+  _fm_proc_row_field "$FM_PROC_CHAIN_MEMO" "$1" ppid >/dev/null 2>&1 && return 0
   FM_PROC_CHAIN_MEMO=$(fm_proc_chain "$1" 2>/dev/null) || FM_PROC_CHAIN_MEMO=
   return 0
 }

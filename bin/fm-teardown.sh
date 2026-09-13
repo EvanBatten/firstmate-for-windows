@@ -211,6 +211,11 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 # leases).
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
 # Role partition: forced teardown discards work, and the supervision branch
 # never discards anything - only an ordinary landed-work teardown is branch
 # territory (contract: bin/fm-lease-lib.sh).
@@ -2103,7 +2108,7 @@ restore_firstmate_home_process_events() {
       echo "error: process-event restoration failed for $label $home; recover registrations from $backup" >&2
       return "$TEARDOWN_PROCEVENT_RESTORE_FAILED"
     }
-    if ! cp -- "$source" "$tmp" || ! chmod 0600 "$tmp" || ! mv -f -- "$tmp" "$reg/${source##*/}"; then
+    if ! cp -- "$source" "$tmp" || ! fm_private_chmod 0600 "$tmp" || ! mv -f -- "$tmp" "$reg/${source##*/}"; then
       rm -f -- "$tmp"
       echo "error: process-event restoration failed for $label $home; recover registrations from $backup" >&2
       return "$TEARDOWN_PROCEVENT_RESTORE_FAILED"

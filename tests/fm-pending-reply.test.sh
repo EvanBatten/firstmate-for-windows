@@ -22,6 +22,14 @@
 #  12. A remote mate's repost waits for its asynchronous reply mirror to be read
 #      past the turn, so a mirrored reply is never nagged and a real miss still
 #      gets its one repost
+#
+# shellcheck extended-analysis=false
+# ShellCheck's control-flow analysis of this file peaks around 15 GB and got the
+# Linux CI lint job killed (issue #16); with it off the file lints in under 1 GB.
+# Every other ShellCheck check still runs on this file, and the libraries it
+# sources are still analysed in full as their own lint roots. What this gives
+# up here is the flow-graph family: SC2317 (unreachable command) and SC2329
+# (function never invoked). Measured in docs/windows/measurement.md.
 set -u
 
 # shellcheck source=tests/lib.sh

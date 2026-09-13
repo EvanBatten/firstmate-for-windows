@@ -51,6 +51,11 @@ HOME_SUMMARY_LOCK_HELD=0
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 usage() {
   sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
 }
@@ -171,7 +176,7 @@ home_summary_refresh_once() {
     home_summary_fail "summary producer returned a malformed ledger document"
     return 1
   fi
-  if ! chmod 600 "$HOME_SUMMARY_TMP" 2>/dev/null; then
+  if ! fm_private_chmod 600 "$HOME_SUMMARY_TMP"; then
     home_summary_fail "could not set the publication file mode"
     return 1
   fi

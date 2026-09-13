@@ -117,15 +117,22 @@ make_lab() {  # <harness> -> echoes lab dir
     chmod +x "$lab/bin/$stub"
   done
 
-  # The REAL deferred-network stage plus the two libraries it sources, so fact
-  # (c) is proven against the actual detach this ship relies on rather than a
-  # re-creation of it. Its bootstrap child is a stub: what is under test here is
-  # survival across the hook boundary, not the sweeps, which
-  # tests/fm-bootstrap.test.sh already owns.
+  # The REAL deferred-network stage plus every library it sources, transitively
+  # and in full, so fact (c) is proven against the actual detach this ship
+  # relies on rather than a re-creation of it. The stage runs from the hook
+  # with its output discarded and `|| true`, so a missing sibling would not
+  # fail loudly - it would silently never detach, and (c) would assert on a
+  # marker nothing was ever going to write. Its bootstrap child is a stub: what
+  # is under test here is survival across the hook boundary, not the sweeps,
+  # which tests/fm-bootstrap.test.sh already owns.
   ln -sf "$ROOT/bin/fm-startup-network.sh" "$lab/bin/fm-startup-network.sh"
   ln -sf "$ROOT/bin/fm-timeout-lib.sh" "$lab/bin/fm-timeout-lib.sh"
+  ln -sf "$ROOT/bin/fm-timing-lib.sh" "$lab/bin/fm-timing-lib.sh"
   ln -sf "$ROOT/bin/fm-wake-lib.sh" "$lab/bin/fm-wake-lib.sh"
+  ln -sf "$ROOT/bin/fm-proc-lib.sh" "$lab/bin/fm-proc-lib.sh"
+  ln -sf "$ROOT/bin/fm-private-lib.sh" "$lab/bin/fm-private-lib.sh"
   ln -sf "$ROOT/bin/fm-session-lock-lib.sh" "$lab/bin/fm-session-lock-lib.sh"
+  ln -sf "$ROOT/bin/fm-cursor-lib.sh" "$lab/bin/fm-cursor-lib.sh"
   cat > "$lab/bin/fm-bootstrap.sh" <<'SH'
 #!/usr/bin/env bash
 # Outlives the hook on purpose: the marker can only appear if the worker was

@@ -36,7 +36,7 @@ cleanup_remote_job_fixture() {
 }
 trap cleanup_remote_job_fixture EXIT
 
-cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
+cp "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
   "$ROOT/bin/fm-remote-delta-read.sh" "$REMOTE_ROOT/bin/"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
 cat > "$REMOTE_ROOT/bin/fm-probe-job.sh" <<'SH'
@@ -196,21 +196,13 @@ for _ in $(seq 1 100); do
 done
 assert_present "$STATE_ROOT/worker.ready" "the worker did not publish its readiness heartbeat"
 
-file_mode() {
-  if [ "$(uname)" = Darwin ]; then
-    stat -f %Lp "$1"
-  else
-    stat -c %a "$1"
-  fi
-}
-
 printf 'first line\nsecond line\n' > "$TMP_ROOT/stdin"
 # shellcheck disable=SC2016 # Literal shell-looking argv is an injection probe.
 TOP_SECRET=must-not-cross fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
   fm-probe-job.sh 'two words' '$(not executed)' < "$TMP_ROOT/stdin" > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
-[ "$(file_mode "$JOB_DIR")" = 700 ] \
+fm_private_mode_ok "$JOB_DIR" 700 \
   || fail "staged job directory is not mode 0700"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the completed probe did not preserve exit status"
@@ -726,6 +718,7 @@ RESTART_HOME="$TMP_ROOT/restart-account"
 RESTART_STATE="$TMP_ROOT/restart-state"
 RESTART_CHILD_LOG="$TMP_ROOT/restart-children"
 mkdir -p "$RESTART_ROOT/bin" "$RESTART_HOME"
+cp "$ROOT/bin/fm-private-lib.sh" "$RESTART_ROOT/bin/"
 cp "$ROOT/bin/fm-remote-job-lib.sh" "$RESTART_ROOT/bin/"
 cp "$ROOT/bin/fm-remote-job-worker.sh" "$RESTART_ROOT/bin/fm-remote-job-supervisor-under-test.sh"
 printf 'fixture\n' > "$RESTART_ROOT/AGENTS.md"

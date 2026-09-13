@@ -3,11 +3,11 @@
 #
 # Runs its file set with ShellCheck's default severity, extended analysis,
 # ambient configuration disabled, and one exact ShellCheck version. CI and
-# no-mistakes both invoke this script with no arguments, so the rule set,
+# no-mistakes both invoke this script with no explicit paths, so the rule set,
 # version, bounded execution, and diagnostics ordering cannot drift.
 # The explicit --fast mode is local-only and disables ShellCheck's extended
 # dataflow analysis while preserving ordinary shell lint checks. CI and
-# no-mistakes keep the full-analysis no-argument default.
+# no-mistakes keep the full-analysis default.
 # Tests stop source analysis at imported production modules because every
 # production shell is already a canonical, source-aware root of this same run.
 # The default (no explicit-path) path also runs bin/fm-lint-workflows.sh so a

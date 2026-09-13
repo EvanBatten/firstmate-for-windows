@@ -40,6 +40,22 @@ pe() { FM_HOME="$1" "$ROOT/bin/fm-procevent.sh" "${@:2}"; }
 # never completes outlives the suite unless it is retired explicitly - removing
 # the fixture directory does not stop an already-running child.
 PE_TRACKED=()
+# claim_runner_live <claim-root> <source-id>: THAT source's claim names a live
+# runner pid. The suite waits on this instead of a fixed sleep, because a fork
+# costs an order of magnitude more here than on the host these budgets were
+# written for (issue #8).
+#
+# Scoped to the one source on purpose. The claim root is shared by every home in
+# the suite and holds still-blocking runners from earlier cases until they are
+# retired at the end, so a predicate that accepted any live claim would be true
+# on its first probe and leave the assertion below no window at all - the same
+# way a wait-until standing in for a settle window destroys it.
+claim_runner_live() {
+  local pid
+  pid=$(sed -n '2p' "$1/$2.claim" 2>/dev/null)
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
 pe_register() {  # <home> <adapter> <source-id> -- <argv>...
   local home=$1 adapter=$2 id=$3
   shift 3
@@ -81,10 +97,11 @@ count_results() {  # <home> <source-id>
   printf '%s\n' "$n"
 }
 
+# <tries> is the Linux budget in tenths of a second; the deadline is that budget
+# sized for this host, because a fork here costs an order of magnitude more than
+# on the host these numbers were written for (issue #8).
 wait_for() {  # <file> [tries]
-  local f=$1 n=${2:-100}
-  for _ in $(seq 1 "$n"); do [ -s "$f" ] && return 0; sleep 0.1; done
-  return 1
+  fm_test_wait_until "$(fm_test_tenths "${2:-100}")" test -s "$1"
 }
 
 # <file> <count> [tries]: wait until <file> holds at least <count> lines. A
@@ -178,9 +195,10 @@ pass "one blocking completion yields exactly one bounded normalized event"
 
 RESULT=$(first_result "$H1" src-one || true)
 [ -n "$RESULT" ] || fail "no durable result was captured"
-mode=$(PATH="${FM_TEST_BASE_PATH:-$(fm_test_base_path)}" bash -c \
-  '. "$1/bin/fm-pr-lib.sh"; fm_pr_file_mode "$2"' _ "$ROOT" "$RESULT")
-assert_contains "$mode" 600 "the captured result is private"
+# bin/fm-private-lib.sh owns whether a mode is carried here: on a filesystem
+# that cannot represent one, "is it 600" is not a question about the product.
+fm_private_mode_ok "$RESULT" 600 \
+  || fail "the captured result is not mode 0600: $(fm_private_stat_mode "$RESULT")"
 assert_grep 'payload one' "$RESULT" "the captured result holds the source output verbatim"
 assert_grep 'lavish' "${RESULT%.result}.adapter" "the captured result retains its immutable adapter"
 assert_absent "${RESULT%.result}.handled" "publication alone never marks a result handled"
@@ -227,7 +245,7 @@ if ($sibling == 0) {
   open(my $out, '>', $sibling_file) or exit 125;
   print {$out} "$$\n";
   close $out;
-  sleep 30;
+  sleep($ENV{FM_TEST_SIBLING_SLEEP} || 30);
   exit 0;
 }
 waitpid($runner, 0);
@@ -235,7 +253,8 @@ waitpid($sibling, 0);
 exit 0;
 PL
 pe_register "$HPG" lavish shared-src -- "$BLOCKER" "$SHARED_TRIGGER" "shared result" >/dev/null
-FM_HOME="$HPG" perl "$SHARED_LAUNCHER" "$SHARED_SIBLING" \
+FM_HOME="$HPG" FM_TEST_SIBLING_SLEEP="$(fm_test_seconds 30)" \
+  perl "$SHARED_LAUNCHER" "$SHARED_SIBLING" \
   "$ROOT/bin/fm-procevent.sh" start shared-src > "$TMP_ROOT/shared-start.out" &
 shared_launcher=$!
 wait_for "$SHARED_SIBLING" || fail "shared caller group never started its unrelated sibling"
@@ -330,9 +349,8 @@ assert_contains "$private_out" "cannot durably record handling" "mode enforcemen
 assert_absent "$HPRIVATE/state/procevent-inbox/private-src.1.handled" "failed mode enforcement left an authoritative marker"
 private_out=$(umask 000; pe "$HPRIVATE" handled private-src 1)
 assert_contains "$private_out" "handled: private-src 1" "handling succeeds after private mode enforcement recovers"
-private_mode=$(PATH="${FM_TEST_BASE_PATH:-$(fm_test_base_path)}" bash -c \
-  '. "$1/bin/fm-pr-lib.sh"; fm_pr_file_mode "$2"' _ "$ROOT" "$HPRIVATE/state/procevent-inbox/private-src.1.handled")
-assert_contains "$private_mode" 600 "the handled marker is private under a permissive caller umask"
+fm_private_mode_ok "$HPRIVATE/state/procevent-inbox/private-src.1.handled" 600 \
+  || fail "the handled marker written under a permissive caller umask is not mode 0600: $(fm_private_stat_mode "$HPRIVATE/state/procevent-inbox/private-src.1.handled")"
 pass "handled acknowledgement creation is private and fails safely"
 
 # --- a terminal result retires its source, on the adapter's verdict alone ----
@@ -873,7 +891,7 @@ HW="$TMP_ROOT/hw"; new_home "$HW"
 TRIGW="$TMP_ROOT/trigger-restart-cut"
 pe_register "$HW" lavish restart-cut-src -- "$BLOCKER" "$TRIGW" "restart cut payload" >/dev/null
 pe "$HW" reconcile >/dev/null
-sleep 0.5
+fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" restart-cut-src || true
 : > "$TRIGW"
 wait_for "$HW/state/.wake-queue" || fail "the restart-cut source published no event"
 assert_contains "$(wake_payloads "$HW")" "procevent lavish restart-cut-src 1" \
@@ -951,7 +969,7 @@ TRIG2="$TMP_ROOT/trigger-two"
 pe_register "$HA" lavish shared-src -- "$BLOCKER" "$TRIG2" "shared" >/dev/null
 pe_register "$HB" lavish shared-src -- "$BLOCKER" "$TRIG2" "shared" >/dev/null
 pe "$HA" reconcile >/dev/null
-sleep 0.5
+fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" shared-src || true
 out=$(pe "$HB" start shared-src)
 assert_contains "$out" "already owned" "a second home cannot own a source another home already owns"
 [ -z "$(wake_payloads "$HB")" ] || fail "the losing home published an event"
@@ -974,7 +992,7 @@ TRIG4="$TMP_ROOT/trigger-four"
 HZ="$TMP_ROOT/hz"; new_home "$HZ"
 pe_register "$HZ" lavish orphan-src -- "$BLOCKER" "$TRIG4" "orphan" >/dev/null
 pe "$HZ" reconcile >/dev/null
-sleep 0.5
+fm_test_wait_until 5 claim_runner_live "$FM_PROCEVENT_CLAIM_ROOT" orphan-src || true
 orphan_pid=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/orphan-src.claim" 2>/dev/null)
 if [ -z "$orphan_pid" ] || ! kill -0 "$orphan_pid" 2>/dev/null; then
   fail "orphan fixture runner did not start"
@@ -1036,7 +1054,9 @@ for _ in $(seq 1 24); do
   race_pids+=("$!")
 done
 wait_for "$RACE_LOG" || fail "no contender acquired the stale claim"
-sleep 0.5
+# A window for an ABSENCE - a second line that must never appear - so it is a
+# sleep and not a wait: the winner's runner is already up by the line above.
+fm_test_settle 0.5
 [ "$(wc -l < "$RACE_LOG" | tr -d ' ')" = 1 ] || fail "stale-claim race started more than one runner"
 : > "$RACE_TRIGGER"
 for race_pid in "${race_pids[@]}"; do wait "$race_pid" 2>/dev/null || true; done
@@ -1085,7 +1105,10 @@ kill -0 -"$orphan_leader" 2>/dev/null || fail "fixture invalid: the owned child 
 orphan_out=$(pe "$HG" reconcile)
 kill -0 -"$orphan_leader" 2>/dev/null \
   && fail "reconcile left the crashed generation's process group alive: $orphan_out"
-sleep 0.5
+# A window for an ABSENCE - an overlap marker that must never be written - so
+# it is a sleep and not a wait: the replacement is detached and would write it
+# after reconcile has already returned.
+fm_test_settle 0.5
 assert_absent "$ORPHAN_OVERLAP" "no replacement source starts while the crashed generation remains alive"
 case "$orphan_out" in
   *"started=1"*)

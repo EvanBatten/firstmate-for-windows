@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
 FM_CUSTOM_CHECK_HASH=
 FM_CUSTOM_CHECK_SNAPSHOT=
 
@@ -54,10 +59,10 @@ fm_custom_check_snapshot_prepare() {
   fm_pr_private_file_valid "$check" 700 "$state_device" || return 1
   FM_CUSTOM_CHECK_SNAPSHOT=$(mktemp "$state/.fm-custom-check.XXXXXX") || return 1
   cp "$check" "$FM_CUSTOM_CHECK_SNAPSHOT" || { fm_custom_check_snapshot_cleanup; return 1; }
-  chmod 0600 "$FM_CUSTOM_CHECK_SNAPSHOT" || { fm_custom_check_snapshot_cleanup; return 1; }
+  fm_private_chmod 0600 "$FM_CUSTOM_CHECK_SNAPSHOT" || { fm_custom_check_snapshot_cleanup; return 1; }
   [ -f "$FM_CUSTOM_CHECK_SNAPSHOT" ] && [ ! -L "$FM_CUSTOM_CHECK_SNAPSHOT" ] \
     || { fm_custom_check_snapshot_cleanup; return 1; }
-  [ "$(fm_pr_file_mode "$FM_CUSTOM_CHECK_SNAPSHOT")" = 600 ] \
+  fm_private_mode_ok "$FM_CUSTOM_CHECK_SNAPSHOT" 600 \
     || { fm_custom_check_snapshot_cleanup; return 1; }
   [ "$(fm_pr_file_device "$FM_CUSTOM_CHECK_SNAPSHOT")" = "$state_device" ] \
     || { fm_custom_check_snapshot_cleanup; return 1; }

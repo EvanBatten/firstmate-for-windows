@@ -1818,11 +1818,17 @@ REMOTE_SSH_COUNT="$TMP_ROOT/remote-ssh.count"
 mkdir -p "$H_REMOTE_CONTROL/data" "$H_REMOTE" "$REMOTE_ROOT/bin"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
 for remote_file in \
-  fm-extension.mjs fm-extension-launch-barrier.mjs fm-extension.sh fm-procevent.sh fm-procevent-lib.sh fm-procevent-extension-capture.pl fm-procevent-lavish.sh \
-  fm-pr-lib.sh fm-wake-lib.sh fm-proc-lib.sh fm-remote-entrypoint.sh fm-remote-job-lib.sh \
-  fm-remote-job-worker.sh; do
+  fm-extension.mjs fm-extension-launch-barrier.mjs fm-procevent-extension-capture.pl; do
   cp "$ROOT/bin/$remote_file" "$REMOTE_ROOT/bin/$remote_file"
 done
+# The shell entrypoints fake-ssh reaches, plus every sibling they source: the
+# remote entrypoint resolves them against its own directory, so one missing
+# from this fixture exits it before it can dispatch anything.
+fm_test_install_bin "$REMOTE_ROOT/bin" \
+  fm-extension.sh fm-procevent.sh fm-procevent-lib.sh fm-procevent-lavish.sh \
+  fm-pr-lib.sh fm-wake-lib.sh fm-proc-lib.sh fm-remote-entrypoint.sh \
+  fm-remote-job-lib.sh fm-remote-job-worker.sh \
+  || fail "could not stage the remote fixture bin"
 chmod +x "$REMOTE_ROOT/bin"/fm-*.sh "$REMOTE_ROOT/bin/fm-extension.mjs" "$REMOTE_ROOT/bin/fm-extension-launch-barrier.mjs"
 git -C "$REMOTE_ROOT" init -q -b main
 git -C "$REMOTE_ROOT" config user.email test@example.com

@@ -356,7 +356,11 @@ case " $* " in
       . "$ROOT/bin/fm-proc-lib.sh"
       handoff_pid=$(fm_proc_ppid "$PPID")
       kill -KILL "$handoff_pid"
+      # Stay alive until the KILL lands, then crash without moving anything.
+      # The case is a crash *before* the move, and the retry is what lands it,
+      # so a move from here only races the assertions that follow.
       sleep 1
+      exit 1
     fi
     ;;
 esac

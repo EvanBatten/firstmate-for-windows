@@ -15,6 +15,11 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # is a leaf library and safe to source before anything else here.
 # shellcheck source=bin/fm-proc-lib.sh
 . "$FM_WAKE_LIB_DIR/fm-proc-lib.sh"
+
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-private-lib.sh"
 # Resolved once at source time: fm_pid_identity and fm_path_mtime run inside 0.2s
 # confirm and 0.5s attach polls, and forking uname per call is a measurable cost on
 # the platform (Git Bash/MSYS) that already pays the highest fork price. The leaf
@@ -833,7 +838,7 @@ _fm_recovery_marker_write_locked() {
   tmp=$(mktemp "${marker}.tmp.XXXXXX") || return 1
   [ -n "$generation" ] || generation="$(fm_current_pid).$(date +%s).${tmp##*.}"
   if ! printf '%s:%s:%s\n' "$status" "$kind" "$generation" > "$tmp" \
-    || ! chmod 0600 "$tmp" \
+    || ! fm_private_chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$marker"; then
     rm -f -- "$tmp"
     return 1
@@ -942,7 +947,7 @@ _fm_recovery_marker_ack() {
   esac
   tmp=$(mktemp "${marker}.tmp.XXXXXX") || { fm_lock_release "$lock"; return 1; }
   if ! printf '%s\n' "$line" > "$tmp" \
-    || ! chmod 0600 "$tmp" \
+    || ! fm_private_chmod 0600 "$tmp" \
     || ! mv -f -- "$tmp" "$marker"; then
     rm -f -- "$tmp"
     fm_lock_release "$lock"
@@ -1746,7 +1751,7 @@ fm_wake_secondmate_stall_marker_write() { # <task> <row-key>
     [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
   fi
   tmp=$(mktemp "$STATE/.secondmate-wake-stall.XXXXXX") || return 1
-  if ! printf '%s\n' "$row_key" > "$tmp" || ! chmod 0600 "$tmp" \
+  if ! printf '%s\n' "$row_key" > "$tmp" || ! fm_private_chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$marker"; then
     rm -f -- "$tmp"
     return 1
@@ -1763,18 +1768,18 @@ fm_wake_secondmate_stall_receipt_write() { # <task> <row-key>
     [ -d "$root" ] && [ ! -L "$root" ] || return 1
   else
     mkdir "$root" || return 1
-    chmod 0700 "$root" || return 1
+    fm_private_chmod 0700 "$root" || return 1
   fi
   if [ -e "$task_dir" ] || [ -L "$task_dir" ]; then
     [ -d "$task_dir" ] && [ ! -L "$task_dir" ] || return 1
   else
     mkdir "$task_dir" || return 1
-    chmod 0700 "$task_dir" || return 1
+    fm_private_chmod 0700 "$task_dir" || return 1
   fi
   receipt="$task_dir/$row_key"
   [ "$(cat "$receipt" 2>/dev/null || true)" != "$row_key" ] || return 0
   tmp=$(mktemp "$task_dir/.receipt.XXXXXX") || return 1
-  if ! printf '%s\n' "$row_key" > "$tmp" || ! chmod 0600 "$tmp" \
+  if ! printf '%s\n' "$row_key" > "$tmp" || ! fm_private_chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$receipt"; then
     rm -f -- "$tmp"
     return 1

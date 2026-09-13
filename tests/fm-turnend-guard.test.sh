@@ -115,6 +115,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-private-lib.sh" "$dir/bin/fm-private-lib.sh"
   # fm-wake-lib.sh sources the leaf process library and reads FM_PROC_UNAME at
   # source time, so a fixture without it dies on an unbound variable.
   cp "$ROOT/bin/fm-proc-lib.sh" "$dir/bin/fm-proc-lib.sh"
@@ -1121,6 +1122,7 @@ install_integrated_autoarm() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-private-lib.sh" "$dir/bin/fm-private-lib.sh"
   # fm-wake-lib.sh sources the leaf process library and reads FM_PROC_UNAME at
   # source time, so a fixture without it dies on an unbound variable.
   cp "$ROOT/bin/fm-proc-lib.sh" "$dir/bin/fm-proc-lib.sh"

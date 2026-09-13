@@ -58,6 +58,11 @@
 # shellcheck source=bin/fm-path-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-path-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
 # The one shared data file in this inheritance contract. There is deliberately
 # no shared learnings file.
 FM_SHARED_CAPTAIN_FILE="captain-shared.md"
@@ -288,7 +293,7 @@ quarantine_shared_captain_dest() {
   artifact=$(shared_captain_quarantine_name "$dest_parent" "$dest_hash") || return 1
   chmod u+w "$dest" 2>/dev/null || return 1
   if mv -- "$dest" "$artifact" 2>/dev/null; then
-    chmod 0600 "$artifact" 2>/dev/null || return 1
+    fm_private_chmod 0600 "$artifact" || return 1
     shared_captain_file_safe_existing "$artifact" || return 1
     printf '%s\n' "$artifact"
     return 0
@@ -306,7 +311,7 @@ copy_shared_captain_file() {
     rm -f "$tmp" 2>/dev/null || true
     return 1
   fi
-  chmod 0600 "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+  fm_private_chmod 0600 "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
   shared_captain_file_safe_existing "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
   if mv -f -- "$tmp" "$dest" 2>/dev/null; then
     chmod "$FM_SHARED_CAPTAIN_MODE" "$dest" 2>/dev/null || return 1
@@ -654,7 +659,7 @@ fm_config_reread_new_retry_stage_path() {
   local source_home=$1 id=$2 retry_dir sequence sequence_file sequence_tmp generation stage
   retry_dir=$(fm_config_reread_retry_dir "$source_home" "$id") || return 1
   mkdir -p "$retry_dir" 2>/dev/null || return 1
-  chmod 0700 "$retry_dir" 2>/dev/null || return 1
+  fm_private_chmod 0700 "$retry_dir" || return 1
   sequence=$(cat "$retry_dir/.sequence" 2>/dev/null || true)
   case "$sequence" in
     ''|*[!0-9]*) sequence=0 ;;
@@ -662,7 +667,7 @@ fm_config_reread_new_retry_stage_path() {
   sequence=$((sequence + 1))
   sequence_file="$retry_dir/.sequence"
   sequence_tmp=$(umask 077; mktemp "$retry_dir/.sequence.XXXXXX" 2>/dev/null) || return 1
-  if ! printf '%s\n' "$sequence" > "$sequence_tmp" || ! chmod 0600 "$sequence_tmp" 2>/dev/null || ! mv -f "$sequence_tmp" "$sequence_file" 2>/dev/null; then
+  if ! printf '%s\n' "$sequence" > "$sequence_tmp" || ! fm_private_chmod 0600 "$sequence_tmp" || ! mv -f "$sequence_tmp" "$sequence_file" 2>/dev/null; then
     rm -f "$sequence_tmp"
     return 1
   fi
@@ -677,7 +682,7 @@ fm_config_reread_save_retry_report() {
   parent=${stage_path%/*}
   report_path="$stage_path.report"
   tmp=$(umask 077; mktemp "$parent/.fm-config-reread-report.XXXXXX" 2>/dev/null) || return 1
-  if ! cat "$report" > "$tmp" || ! chmod 0600 "$tmp" 2>/dev/null || ! mv -f "$tmp" "$report_path" 2>/dev/null; then
+  if ! cat "$report" > "$tmp" || ! fm_private_chmod 0600 "$tmp" || ! mv -f "$tmp" "$report_path" 2>/dev/null; then
     rm -f "$tmp"
     return 1
   fi
@@ -702,7 +707,7 @@ fm_config_write_reread_instruction() {
   [ -n "$parent" ] && [ "$parent" != "$instruction_path" ] || return 1
   mkdir -p "$parent" 2>/dev/null || return 1
   tmp=$(umask 077; mktemp "$instruction_path.tmp.XXXXXX" 2>/dev/null) || return 1
-  chmod 0600 "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  fm_private_chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
   while IFS= read -r item; do
     [ -n "$item" ] || continue
     fm_config_reread_is_allowlisted_item "$item" || continue
@@ -744,7 +749,7 @@ fm_config_reread_adopt_exact_temp() {
     return 0
   fi
   if cp "$exact_tmp" "$stage_path" 2>/dev/null \
-    && chmod 0600 "$stage_path" 2>/dev/null \
+    && fm_private_chmod 0600 "$stage_path" \
     && cmp -s "$exact_tmp" "$stage_path"; then
     rm -f "$exact_tmp" 2>/dev/null || true
     return 0
@@ -814,7 +819,7 @@ fm_config_reread_mark_pending() {
     rm -f "$tmp"
     return 1
   fi
-  if ! chmod 0600 "$tmp" 2>/dev/null; then
+  if ! fm_private_chmod 0600 "$tmp"; then
     rm -f "$tmp"
     return 1
   fi
@@ -839,7 +844,7 @@ fm_config_reread_publish_stage() {
     return 0
   fi
   tmp=$(umask 077; mktemp "$state/.fm-config-reread-publish.XXXXXX" 2>/dev/null) || return 1
-  if ! cat "$stage" > "$tmp" || ! chmod 0600 "$tmp" 2>/dev/null || ! mv -f "$tmp" "$final" 2>/dev/null; then
+  if ! cat "$stage" > "$tmp" || ! fm_private_chmod 0600 "$tmp" || ! mv -f "$tmp" "$final" 2>/dev/null; then
     rm -f "$tmp"
     return 1
   fi
@@ -963,10 +968,10 @@ fm_config_reread_quarantine_dir() {
   state="$home/${FM_CONFIG_REREAD_INSTRUCTION_PREFIX_REL%/*}"
   root="$state/.fm-inherited-config-reread-quarantine"
   mkdir -p "$root" 2>/dev/null || return 1
-  chmod 0700 "$root" 2>/dev/null || return 1
+  fm_private_chmod 0700 "$root" || return 1
   fm_config_reread_quarantine_prune "$root" $((FM_CONFIG_REREAD_MAX_QUARANTINE - 1)) || return 1
   quarantine=$(umask 077; mktemp -d "$root/generation.XXXXXX" 2>/dev/null) || return 1
-  chmod 0700 "$quarantine" 2>/dev/null || return 1
+  fm_private_chmod 0700 "$quarantine" || return 1
   printf '%s\n' "$quarantine"
 }
 

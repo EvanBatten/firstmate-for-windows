@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 BRANCH_ROWS="$STATE/.branch-eligible-rows"
 BRANCH_OWNER="$STATE/.branch-eligible-owner"
 MAIN_ROWS="$STATE/.main-eligible-rows"
@@ -56,7 +61,7 @@ case "${1:-}" in
     [ -n "$identity" ] || exit 1
     TMP=$(mktemp "$STATE/.branch-eligible-owner.tmp.XXXXXX") || exit 1
     printf '%s\n%s\n%s\n%s\n' fm-branch-eligible-owner-v1 "$pid" "$identity" "$generation" > "$TMP" || exit 1
-    chmod 0600 "$TMP" || exit 1
+    fm_private_chmod 0600 "$TMP" || exit 1
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     LOCK_HELD=true
     fm_pid_identity_equal "$(fm_pid_identity "$pid" 2>/dev/null || true)" "$identity" || exit 1
@@ -71,7 +76,7 @@ case "${1:-}" in
     shift 2
     TMP=$(mktemp "$STATE/.branch-eligible-rows.tmp.XXXXXX") || exit 1
     printf '%s\n' "$@" > "$TMP" || exit 1
-    chmod 0600 "$TMP" || exit 1
+    fm_private_chmod 0600 "$TMP" || exit 1
     rows_valid "$TMP" || exit 2
     fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
     LOCK_HELD=true

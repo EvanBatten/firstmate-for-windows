@@ -13,6 +13,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
 
+# bin/fm-private-lib.sh owns "this path must be private": the mode private
+# state is created at, and whether the filesystem underneath can carry it.
+# shellcheck source=bin/fm-private-lib.sh
+. "$SCRIPT_DIR/fm-private-lib.sh"
+
 if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
   echo "error: invalid custom check registration" >&2
   exit 2
@@ -33,7 +38,7 @@ umask 077
 TMP=$(mktemp "$STATE/.fm-custom-check-trust.XXXXXX") || exit 1
 trap '[ -z "$TMP" ] || rm -f -- "$TMP"' EXIT HUP INT TERM
 printf '%s\n%s\n' fm-custom-check-v1 "$HASH" > "$TMP" || exit 1
-chmod 0600 "$TMP" || exit 1
+fm_private_chmod 0600 "$TMP" || exit 1
 fm_pr_regular_destination_on_device_or_absent "$TRUST" "$STATE_DEVICE" || exit 1
 mv -f -- "$TMP" "$TRUST" || exit 1
 TMP=
