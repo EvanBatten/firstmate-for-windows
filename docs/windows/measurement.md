@@ -2668,6 +2668,61 @@ Measured on WSL Ubuntu at `d874791` and at the two fixes, whole suites:
 | `fm-control` | 35 ok | 35 ok |
 
 
+## Two repository invariants, and two settling runs from issue #8
+
+Measured on this box 2026-09-12 and 2026-09-13, at host time scale 35 to 40.
+
+### The invariants, and proof that each pattern bites
+
+`tests/fm-repo-invariants.test.sh` asserts that no file under `bin/` spells the `ps -o` field form outside `bin/fm-proc-lib.sh`, and that no test takes a digest outside `fm_test_sha256`.
+Each invariant first proves its pattern finds its owner's known lines and every shape the repository writes, then that every allowlist entry still matches, and only then that nothing else matches.
+The planned patterns failed that first step, which is the reason it exists:
+
+| Pattern | What the self-check printed |
+| --- | --- |
+| planned `-o[[:space:]]*(comm\|args\|...)[=,]` | `cannot match a shape the repository writes: rows=$("$ps_bin" -axo pid=,ppid= ...)` |
+| planned `\b(shasum\|sha256sum)\b` | `matches a line that is not the spelling: fm_install_stub_hasher "$fakebin" shasum` |
+| either, rewritten so it cannot cross embedded quotes | `finds nothing in its owner ...; the invariant is broken, not the tree` |
+
+A planted `"$ps_bin" -p "$pid" -o etime=` line in a `bin/` file and a planted `$(shasum -a 256 "$file" ...)` line in a test file each turned the matching case red with the offender printed.
+With `bin/fm-remote-entrypoint.sh` at its previous content the invariant printed both `ps -o ppid= -p $$` lines, which now read the parent through `fm_proc_ppid`.
+The three `bin/backends/herdr.sh` idle-shell proof lines are allowlisted as an open defect, not as legitimate, because the proof also needs a process-table listing and a process state that the proc library does not own.
+On WSL Ubuntu the file is green under gawk and under mawk, and `fm-remote-transport-lanes` stays green with the entrypoint change and goes red with its probe function removed.
+
+### `fm-startup-network start` does not block behind its worker
+
+The one-case copy with the fake bootstrap sleeping 30 s cannot answer this from a shell hosted by a real harness.
+With `--locked 1`, the ownership check walked to the hosting `claude.exe` rather than the fixture's fake harness, which only a fake `ps` knows about, and `start` refused after 17 to 29 s without launching a worker.
+That is the shape of issue #37.
+
+With `--locked 0` and the call read to EOF through a command substitution:
+
+| Worker sleep | `start` returned after | At return | Worker finished |
+| --- | --- | --- | --- |
+| 10 s | 10 s | worker pid alive, report `IN PROGRESS` | 28 s after launch |
+| 30 s | 12 s | worker pid alive, report `IN PROGRESS` | 54 s after launch |
+| 30 s, traced | 9 s | worker pid alive | 46 s after launch |
+
+The trace of an unlocked `start` spans 8.7 s with no single gap over 1.02 s, so its cost is exec count, not a wait.
+The ledger's `start blocked for 10s behind a 10s worker` was that cost landing on the fake's 10 s sleep.
+`fm-startup-network.sh wait 300` took 513 s when no status file existed, because it counts `sleep 1` iterations rather than wall clock.
+
+### The inactive reconcile budget fires on this host, at the default and at the cap
+
+One-case copy of `test_main_direct_terminal_presentation_receipt`, one terminal child:
+
+| Host | Budget | Scan wall time | Result |
+| --- | --- | --- | --- |
+| Git Bash | 10 (default) | 16.49 s | no wake, `main did not queue terminal presentation` |
+| Git Bash | 30 (the cap) | 36.22 s | `Terminated`, no wake |
+| Git Bash | 30, traced | 33.46 s | wake queued, then killed inside the lock release |
+| WSL Ubuntu | 10 | 0.41 s and 0.47 s | ok |
+
+The outer backstop in `scan` is `fm_run_timed $((BUDGET + 1))`, started before the bounded child forks.
+The scan's own deadline is set only after the child has sourced its libraries, taken the scan lock and written its marker, which took 5 to 8 s here.
+So the backstop always fired first, the scan's clean deadline path never ran, and `scan` exited 0 because it treats 124 as success.
+The scan is the problem rather than the cap: one child's evaluation after the crew-state answer took about 10 s of exec cost, so no budget in the valid 1 to 30 range covers two children on this host.
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
