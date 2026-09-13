@@ -1365,9 +1365,9 @@ select_changed() {
   fi
 }
 
-# Count output lines matching <pattern>. Informational only: these numbers make
-# a green that ran nothing visible without putting a heuristic back into the
-# gate-skip rule, which is the exit status alone.
+# Count output lines matching <pattern>. These numbers never grant a category:
+# the gate skip is the exit status alone, and record_script_result uses the
+# counts only to refuse a record they contradict, as a failure.
 count_output_lines() {  # <file> <ere>
   local file=$1 pattern=$2 n
   n=$(grep -c -E "$pattern" "$file" 2>/dev/null || true)

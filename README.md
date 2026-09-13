@@ -26,7 +26,7 @@ Launching a supported harness inside it instantiates your first mate - and makes
 ## What the port changes
 
 Windows is not a hostile platform for this codebase so much as an unmeasured one.
-The whole port is eight areas, each fixed behind a capability check rather than a `uname` test, so macOS and Linux behavior is unchanged:
+The whole port is nine areas, each fixed behind a capability check rather than a `uname` test, so macOS and Linux behavior is unchanged:
 
 - **Line endings at checkout.** Without a `.gitattributes`, the Git for Windows default rewrites all 151 `bin/*.sh` to CRLF, and a shebang ending `#!/usr/bin/env bash\r` names no interpreter. Nothing else in the port is measurable until this is fixed.
 - **Process identity and liveness.** MSYS `ps` has no `-o`, a bash spawned by a native process reports PPID 1, and `kill -0` cannot see a Win32 pid. `bin/fm-proc-lib.sh` puts "what process is this, and is it alive" behind one library so harness ancestry and every liveness probe stop answering "dead".
@@ -38,6 +38,9 @@ The whole port is eight areas, each fixed behind a capability check rather than 
 - **Private state.** Every Git Bash mount is `noacl`, so no POSIX mode is ever stored: `mkdir -m 700` creates a 755 directory and exits 1, and `chmod 600` reads back 644.
   `bin/fm-private-lib.sh` owns "this path must be private" for the shell scripts and the Perl capture helper.
   It measures whether the filesystem under a path can carry a mode, keeps the exact check where it can, and records a waiver where it cannot, so the guarded PR merge path can now arm its merge poll.
+- **Scripts started from node.** Windows node cannot execute a shebang script: `spawn()` fails with `EFTYPE`.
+  Seven sites started a firstmate script that way, so an OpenCode primary ran no turn-end guard, seatbelt, or session-start nudge, and an OpenCode or Pi crewmate read as busy for its whole task.
+  Each site now runs `bash` with the script as its first argument.
 
 The findings ledger behind every one of those rows, with the exact command and output, is in [docs/windows/measurement.md](docs/windows/measurement.md).
 [docs/windows/README.md](docs/windows/README.md) is the entry point to the port's own documentation.

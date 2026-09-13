@@ -832,6 +832,7 @@ $ cat /proc/$$/pgid          # 13823, and $$ is 13823
 `bin/fm-sessionstart-nudge.sh` also had a second Windows defect in the same four lines: its `kill -0 "$lock_pid"` liveness probe. Slice 1 made the session lock record the harness's **Win32** pid on a Windows userland, and `kill -0` reports a Win32 pid as absent. Both now go through the library, and the walk gets the `fm_proc_chain_prime` call every other caller has, so an MSYS-to-Win32 ancestry costs one pwsh process instead of one per hop.
 
 `bin/fm-teardown.sh`'s three `ps -o pgid=` reads and `bin/fm-remote-entrypoint.sh`'s two `ps -o ppid=` reads are deliberately untouched: the first is inside a tmux-only `lsof`-unavailable fallback that fails safe (it prints a warning and returns 0) and is unreachable on a herdr backend, and the second runs on the remote host, which is never Windows. Both are named here so the next sweep does not have to rediscover them.
+Both have since moved onto the library, teardown's reads through `fm_proc_pgid` and the entrypoint's through `fm_proc_ppid`, and `bin/fm-repo-invariants.sh` now keeps the `ps -o` field form out of `bin/` (see "Two repository invariants" below).
 
 ### `\uHHHH` in a test fixture depends on the ambient locale
 
@@ -981,12 +982,14 @@ Issue #7 later moved every such fixture onto `tests/lib.sh`'s process-identity w
 `fm-x-mode`, `fm-test-run` and `fm-pr-merge` stay red: all three are row 21, and the D6 decision that unblocks them is Phase C's first move, not this slice's.
 
 The five `.opencode/plugins/*.js` cannot spawn a firstmate `.sh` on Windows (the EFTYPE finding above). `tests/fm-sessionstart-nudge.test.sh` therefore stays red one case later than it was.
+All seven node sites that start a firstmate script, these five among them, now start it through `bash` (see "Three operational defects filed as timing" below).
 
 `tests/fm-watcher-lock.test.sh` fails `expected exactly one lock winner under concurrency, got 2` on this host - byte-for-byte the same failure at `HEAD` as with this slice applied, so it is a pre-existing Windows red rather than a regression. It lives in the portable serial lane and is triaged with it. It is worth flagging as a lead: it is the watcher SINGLETON lock, so if it is a real defect rather than a fixture assumption it matters more than its lane suggests.
 
 Four test files still build fixtures out of shell `\uHHHH` escapes and will have the composer-lib problem on any host with no `LANG`. All four are in the portable serial lane.
 
 `bin/fm-teardown.sh` and `bin/fm-remote-entrypoint.sh` still read `ps -o` directly, for the reasons given above.
+Both have since moved onto the library; see above.
 
 `tests/fm-cursor-primary.test.sh` (run here because it copies `bin/fm-sessionstart-nudge.sh` into a fixture) stops on its first case with `a C compiler is required to build the fake Cursor process`. Git for Windows ships no `cc`, so that is a toolchain gap in the serial lane rather than anything this slice touched, and it means the copy-list change above is verified by lint and by inspection there rather than by a run. Issue #21 closed that gap by faking the harness with a copy of bash named `cursor-agent` instead of a compiled C program (a copy rather than a symlink so the identity holds however the parent is read: the classifier matches the command name, which a symlink keeps on Linux and on MSYS, but `/proc/<pid>/exe` would resolve a symlink back to bash; and every body handed to the fake ends in `exit "$?"` so bash cannot exec away the process the adapter is asserting against); the first Windows run of the suite came back 28 of 28 green in 657 s, and Linux is unchanged at 28 of 28 both at the branch and at its base.
 
@@ -1889,33 +1892,33 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-watch-triage | `watcher did not surface a turn-end whose crew is not provably working` | platform: spawn cost | read. Closed by issue #8 slice 1. |
 | fm-wake-daemon-lifecycle-e2e | `watcher did not exit for the routine signal` | platform: spawn cost | read. Closed by issue #8 slice 1: 2 of 2 green. |
 | fm-home-summary-refresh | `the real watcher did not begin polling` | platform: spawn cost | read. Re-measured under issue #8 slice 1: at `5ed6c5e` the suite stops earlier, on case 3's provenance assertion, which is not a timing budget; still open. |
-| fm-pending-reply | `recovery should send after completed turn + grace` | platform: spawn cost | read. A grace window in wall-clock seconds. |
+| fm-pending-reply | `recovery should send after completed turn + grace` | platform: spawn cost | read. A grace window in wall-clock seconds. Reclassified as product and fixed under "One process identity" below: the recovery sender's identity could not be read, so no recovery was sent; the suite now stops at `recorded Kimi spinner was not observed as busy`. |
 | fm-spawn-worktree-settle | `already-settled pane took 31s to confirm` | platform: spawn cost | read. The assertion is a wall-clock bound sized for a fast spawn. |
 | fm-startup-network | `start blocked for 10s behind a 10s worker` | platform: spawn cost | read. A parallelism assertion in wall-clock seconds. |
 | fm-session-lock-ancestry | `the fixture hook never finished` | platform: spawn cost | read. Slice 9 measured the severed-shape identity proof at 5.5 s; this fixture waits less than a loaded machine needs. |
 | fm-backlog-handoff | `reconciliation-race handoff never reached backend delivery` | platform: spawn cost | read. A race the fixture stages with sleeps. |
 | fm-control-relaunch | `relaunch did not reach trace delivery` | platform: spawn cost | read. |
-| fm-control | `the result should report muse's cancelled terminal acknowledgement` | platform: spawn cost | read. |
+| fm-control | `the result should report muse's cancelled terminal acknowledgement` | platform: spawn cost | read. Reclassified as product and fixed under "Three operational defects filed as timing" below: the muse session matcher lost its paths to MSYS conversion, and the case now passes. |
 | fm-inactive-reconcile | `main did not queue terminal presentation` | platform: spawn cost | read. |
-| fm-remote-transport-lanes | `the worker did not publish its readiness heartbeat` | platform: spawn cost | read. |
-| fm-remote-job-orphan-reap | `could not start the fixture remote job worker` | platform: spawn cost | read. |
-| fm-remote-job | `the default queue bound is too short` | platform: spawn cost | read. The bound is a wall-clock constant. |
+| fm-remote-transport-lanes | `the worker did not publish its readiness heartbeat` | platform: spawn cost | read. Re-measured under "One process identity" below: the heartbeat was the identity defect and now publishes; the suite stops at `home B's job waited ... behind home A's long job`, still spawn cost. |
+| fm-remote-job-orphan-reap | `could not start the fixture remote job worker` | platform: spawn cost | read. Re-measured under "One process identity" below: the fixture finds its worker with `pgrep`, which this box does not have, so the red is toolchain; still open. |
+| fm-remote-job | `the default queue bound is too short` | platform: spawn cost | read. The bound is a wall-clock constant. Re-measured under "One process identity" below: that case was the identity defect and now passes; the suite stops at `the worker did not publish its readiness heartbeat`, because its fixture PATH holds no `git`. |
 | fm-remote-reply | `the remote reply delta was not durably captured` | platform: spawn cost | read. |
 | fm-remote-secondmate-lifecycle-e2e | `serialized successful seed failed` | platform: spawn cost | read. |
-| fm-backend-herdr-focus-flash-e2e | `the idle-shell proof never ran` | platform: spawn cost | read. The fixture waits for a pane shell to go idle. |
-| fm-muse-harness | `muse binding did not exclude the pre-existing session` | platform: spawn cost | read. |
+| fm-backend-herdr-focus-flash-e2e | `the idle-shell proof never ran` | platform: spawn cost | read. The fixture waits for a pane shell to go idle. Re-measured under "Three operational defects filed as timing" below: the close plan fell back to `plain` when `bin/backends/herdr-workspace-move.py` failed, before the proof was asked, so this is not spawn cost; still open. |
+| fm-muse-harness | `muse binding did not exclude the pre-existing session` | platform: spawn cost | read. Reclassified as product and fixed under "Three operational defects filed as timing" below: the muse session matcher lost its paths to MSYS conversion; 25 of 25 green. |
 | fm-fleet-snapshot-view | `view should render bold in-flight row from snapshot` | platform: spawn cost | read. The row is missing from a snapshot the fixture expects to have been refreshed by then. |
 | fm-bearings-snapshot | `bearings did not disclose bounded parent activity evidence` | platform: spawn cost | read. Ledger row 30's CRLF defect lives in this script but is not this assertion. |
-| fm-busy-adapter-wiring | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | platform: spawn cost | read. A settle window the fixture times. |
+| fm-busy-adapter-wiring | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | platform: spawn cost | read. A settle window the fixture times. Reclassified as product and fixed under "Three operational defects filed as timing" below: Windows node could not start the adapter's script; 8 of 8 green. |
 | fm-pi-watch-extension | `must surface an external healthy watcher as an owned-wake failure` | platform: spawn cost | read. |
 | fm-secondmate-reconcile | `the window was shorter than four hours` | platform: spawn cost | read. A cooldown computed from wall-clock stamps. |
 | fm-teardown-endpoint-safety | `recorded target pid no longer belongs to the expected child` | platform: spawn cost | read. A pid-identity assertion against a child the fixture outlived. |
 | fm-claude-stop-autoarm | `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2` | unclassified at the time; **fixed** by issue #10: a six-second supersession window that a slow spawn outruns (see the "Issue #10" section under Integration) | measured three ways: in the lane after 603 s, alone at HEAD after 574 s, and alone in a worktree at slice 9's own commit `d80757f` - 36 cases pass and then the same line, every time. Diagnosed 2026-09-05: owner A was never superseded before it legitimately won; a parked-arm barrier replaces the sleep. |
-| fm-turnend-guard | `OpenCode plugin must run the guard from worktree even when directory is elsewhere` | unclassified, but **not** load and **not** a regression | measured the same three ways: 43 cases pass and then the same line, in the lane, alone at HEAD, and alone at `d80757f`. |
+| fm-turnend-guard | `OpenCode plugin must run the guard from worktree even when directory is elsewhere` | unclassified, but **not** load and **not** a regression | measured the same three ways: 43 cases pass and then the same line, in the lane, alone at HEAD, and alone at `d80757f`. Classified as product and fixed under "Three operational defects filed as timing" below: Windows node could not start the guard script, and the case now passes. |
 | fm-kimi-harness | `Kimi hook removal failed` | unclassified | measured. Converting its three fakebins to `fm_fakebin_link` did not move the first case, so the cause is elsewhere; the speculative change was reverted rather than left in. |
-| fm-on | `remote exit status was not preserved (got 64)` | unclassified | read. 64 is a usage refusal from the fixture's ssh stub, so the stub and the product are not separated. |
-| fm-operational-input | `OpenCode cross-language adapter could not invoke the canonical owner` | unclassified | read. A node/bash boundary that needs its own look. |
-| fm-sessionstart-nudge | `OpenCode exact nudge delivery: expected exit 0, got 1` | unclassified | read. The `BASE_PATH` fix did not move it. |
+| fm-on | `remote exit status was not preserved (got 64)` | unclassified | read. 64 is a usage refusal from the fixture's ssh stub, so the stub and the product are not separated. Fixed under "One process identity" below, together with the operator PATH composer: this case and the child PATH case now pass. |
+| fm-operational-input | `OpenCode cross-language adapter could not invoke the canonical owner` | unclassified | read. A node/bash boundary that needs its own look. Classified as product and fixed under "Three operational defects filed as timing" below: the encoder's `spawn` failed with `EFTYPE`, and the case now passes. |
+| fm-sessionstart-nudge | `OpenCode exact nudge delivery: expected exit 0, got 1` | unclassified | read. The `BASE_PATH` fix did not move it. Classified as product and fixed under "Three operational defects filed as timing" below: Windows node could not start the nudge script, and the case now passes. |
 | fm-pi-branch-extension | `file:///C:/Users/ebatt/firstmate-gnhf/[eval1]:10` | unclassified | read. A Windows ESM specifier form inside a node `--eval`; worth its own measurement. |
 | fm-pr-check-security | `parser accepted a rejected raw-byte URL class` | unclassified | read. A security-parser assertion, which is exactly the kind that must not be waved through as timing. |
 | fm-secondmate-safety | `fm-pr-check failed under FM_HOME` | unclassified | read. Plausibly row 21's mode gate again, but not measured. |
@@ -1923,7 +1926,7 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-tool-update-check | `commits behind the origin branch were not reported`, with `origin has no branch main` | unclassified | read. The product answered that about a fixture remote it had just created; a `file://` remote with a drive-letter path is the first suspect. |
 
 Counted by class: 12 fixed this slice (6 of them fully green), 7 row 21, 5 toolchain, 29 spawn cost, 1 product, 11 unclassified - 65.
-Those counts are slice 11's snapshot: one of the eleven unclassified rows, `fm-claude-stop-autoarm`, was later closed by issue #10 and its suite now runs green.
+Those counts are slice 11's snapshot; a row closed or reclassified since says so in its own reason.
 
 ### The four fixture defects this slice fixed
 
@@ -2533,14 +2536,15 @@ So exactly two results change category with this rule, on every platform that ru
 
 The Linux aggregate therefore goes from 27 gate-skips to 25, and its green count rises by 2.
 That is the truth being restored rather than a number being moved: the 25 remaining are real whole-suite gates (opt-in env, no cmux, no zellij, no herdr lab helper, no pi).
-The rule can only move a result from skip to pass, never the reverse, because it only reclassifies scripts that exited 0, and a script that exits 0 keeps doing so until its own gate is converted.
+The rule can only move a result from skip to pass, never the reverse, because nothing a script prints can grant a skip.
 
 No published Windows number is currently wrong.
 The parallel lanes' 19 green / 4 red / 1 gate-skip is exact: the scale comment appears there, but the single gate-skip is `tests/fm-pi-primary-types.test.sh`, which does not source `tests/lib.sh`, so its skip line was still first.
 The serial lane's slice 11 count, `total=135 failed=65 skipped_gate=26`, was measured 2026-08-30 and the scale comment landed 2026-09-05 in `63987a0`, so that count predates the hazard and no serial lane has been published since.
 It was armed, though: a serial re-run here at that commit would have published the two probed suites above as green.
 
-`FM_TEST_END` and the JSON artifact now also carry `cases_ok` and `cases_skipped` per script, so a green that ran nothing stays visible without returning a heuristic to the category rule.
+`FM_TEST_END` and the JSON artifact now also carry `cases_ok` and `cases_skipped` per script.
+The runner uses those counts only to refuse, never to grant: an exit status they contradict, including a gate still exiting 0 having run nothing, is counted as a failure, and the `bin/fm-test-run.sh` header owns the three refusals.
 
 ## One process identity: the remote job and pending-reply libraries
 
@@ -2629,7 +2633,7 @@ Upgrade cost on Linux: a record written by the previous build holds a `ps` strin
 ## Three operational defects filed as timing
 
 Plan p6 section 6 named three product defects hiding under issue #8's timing label.
-Two were real and are fixed; the third was reproduced red for a different reason and is left unchanged.
+Two were real and are fixed; the third was reproduced red for a different reason, and porting its proof, described below, does not change that case.
 
 ### Node cannot start a shebang script, and seven sites asked it to
 
