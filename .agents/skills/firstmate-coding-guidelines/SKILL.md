@@ -120,6 +120,8 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 - `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
 - Test whether a shell function is defined with `declare -F`, never `command -v`.
   A `command -v` miss falls through to a full PATH search, which cost over a second per source on a WSL host whose PATH carries the Windows interop directories, and the regression reads as test flakiness rather than as a slow guard.
+- A library sourced in more than one place within a root gets exactly one `# shellcheck source=<path>` directive; mark every other load of it `# shellcheck source=/dev/null`.
+  ShellCheck inlines a sourced file at every directive site, so repeated directives multiply lint memory without adding coverage, and `docs/windows/measurement.md` records one such change taking two scripts past 15 GiB.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, pinned shellcheck version, and pinned actionlint workflow lint) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other version of either linter.
 - When a task names a specific tool, implement the work with that tool, or explicitly flag the substitution and its new dependency footprint for review before shipping.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
