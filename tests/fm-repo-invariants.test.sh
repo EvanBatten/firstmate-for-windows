@@ -1,289 +1,266 @@
 #!/usr/bin/env bash
-# Repository invariants: spellings that belong to one owner.
+# Behavioral tests for bin/fm-repo-invariants.sh, driven against fixture trees.
 #
-# Each invariant runs three steps, in this order, and the order is the point:
-#  1. the pattern must find known instances - the owner's own lines, and literal
-#     lines in every shape the repository really writes - so a pattern that
-#     cannot match fails here instead of passing over the whole tree;
-#  2. every allowlist entry must still match a line, so an exception cannot
-#     outlive its reason;
-#  3. only then must nothing else match, and every offender is printed.
-# Step 1 exists because an extractor in this repository once used `[^"]*`,
-# which cannot cross the embedded quotes of the dominant spelling, so it matched
-# nothing and passed for months.
+# Every case writes a small tree with both owners in place and runs the script
+# with --root on it, so each assertion is the script's verdict on bytes this
+# file wrote, never on the tracked tree. The shapes below are the spellings the
+# repository has really written, so a pattern that stops matching one of them,
+# or starts matching a lookalike, fails here.
 #
-# Allowlist entries are "<path> <line content>", content trimmed, matched
-# exactly and once per entry: a second copy of an allowed line is an offender.
-# Full-line comments are never scanned, since a comment that names a spelling is
-# documentation, not a call.
+# The digest tool names and the directive prefix are spliced in from @TOKENS@
+# rather than spelled on this file's own lines: this file lives under tests/,
+# which the digest invariant scans, and a literal spelling or directive here
+# would be a finding, or a dead directive, in the real tree.
 set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-cd "$ROOT" || fail "cannot enter the repository root $ROOT"
+INVARIANTS="$ROOT/bin/fm-repo-invariants.sh"
+TMP_ROOT=$(fm_test_tmproot fm-repo-invariants)
 
-# This file spells both patterns' shapes as literals, so the digest scan skips
-# it by its own name, which also holds for a scratch copy of it.
-SELF=tests/$(basename "${BASH_SOURCE[0]}")
+SHASUM=sha"sum"
+SHA256SUM=sha256"sum"
+ALLOW="# fm-invariant: allow"
 
-# The `ps -o` field form. MSYS `ps` has no -o, so every such spelling reads
-# empty on Windows; bin/fm-proc-lib.sh owns the capability-gated answer.
-# Matched on the field keyword rather than on `ps`, because live spellings name
-# the binary through a variable (`"$ps_bin" -p "$pid" -o stat=`), and on any
-# bundled flag ending in o (`-axo`, `-eo`). The keyword list is what keeps
-# `--command=*)` and `grep -Eo 'corr=` out.
-PS_FIELDS='comm|args|command|cmd|ucomm|ppid|pgid|tpgid|pid|sess|lstart|etimes?|time|stat|state|user|uid|tty|rss|vsz|nice|%cpu|%mem'
-PS_FIELD_FORM="(^|[^-[:alnum:]_])-[A-Za-z]*o[[:space:]]*[\"']?($PS_FIELDS)([=,[:space:]\"']|\$)"
-
-# A digest tool in command position, a `command -v` probe for one, or one
-# assigned to a variable. A mention in a message, a stub's file name or an
-# argument is not a digest, which is why the bare word is not the pattern.
-DIGEST_CALL='(^|[;&|`{]|\$\(|(^|[[:space:]])(if|then|do|else|elif|while|until|exec|time|xargs|!|command[[:space:]]+-v)[[:space:]])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(shasum|sha256sum)([[:space:]]|$|\)|;)|=(shasum|sha256sum)([[:space:]]|$|;)'
-
-# invariant_lines <ere> <file>...: "<path> <trimmed content>" for every
-# non-comment line matching <ere>.
-invariant_lines() {
-  local ere=$1
-  shift
-  [ "$#" -gt 0 ] || return 0
-  grep -nHE -- "$ere" "$@" 2>/dev/null | awk '
-    {
-      i = index($0, ":"); path = substr($0, 1, i - 1); rest = substr($0, i + 1)
-      j = index(rest, ":"); content = substr(rest, j + 1)
-      sub(/\r$/, "", content); sub(/^[[:space:]]+/, "", content); sub(/[[:space:]]+$/, "", content)
-      if (content ~ /^#/) next
-      print path " " content
-    }'
+# fixture <root> <path>: stdin written to <root>/<path>, with @SHA256SUM@,
+# @SHASUM@ and @ALLOW@ replaced by the spellings this file must not carry.
+fixture() {
+  local file="$1/$2" content
+  mkdir -p "${file%/*}"
+  content=$(cat)
+  content=${content//@SHA256SUM@/$SHA256SUM}
+  content=${content//@SHASUM@/$SHASUM}
+  content=${content//@ALLOW@/$ALLOW}
+  printf '%s\n' "$content" > "$file"
 }
 
-PROBE=$(fm_test_tmproot fm-repo-invariants)/probe.sh
+# new_tree <name>: a fresh tree holding both owners with their real spellings,
+# which on its own satisfies every invariant.
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+new_tree() {
+  local tree="$TMP_ROOT/$1"
+  fixture "$tree" bin/fm-proc-lib.sh <<'SH'
+if [ "$FM_PROC_OS" = msys ] && LC_ALL=C ps -o comm= -p $$ >/dev/null 2>&1; then
+  ps -o comm= -p "$1" 2>/dev/null
+fi
+SH
+  fixture "$tree" tests/lib.sh <<'SH'
+if command -v @SHA256SUM@ >/dev/null 2>&1; then
+  digest=$(@SHA256SUM@ | awk '{print $1}')
+fi
+SH
+  printf '%s\n' "$tree"
+}
 
-# has_line <found> <line>: <line> is one whole line of <found>, without a fork.
-has_line() {
-  case $'\n'"$1"$'\n' in
-    *$'\n'"$2"$'\n'*) return 0 ;;
+# run_invariants <tree>: the script's output in OUT and its status in RC.
+run_invariants() {
+  RC=0
+  OUT=$("$INVARIANTS" --root "$1" 2>&1) || RC=$?
+}
+
+# expect_every_line_named <path> <line-count>: the last run failed and named
+# each of lines 1..<line-count> of <path>, and nothing else.
+expect_every_line_named() {
+  local path=$1 count=$2 n=1 named
+  [ "$RC" -eq 1 ] || fail "expected the invariants to fail on $path, got $RC:"$'\n'"$OUT"
+  while [ "$n" -le "$count" ]; do
+    case "$OUT" in
+      *"  $path:$n: "*) ;;
+      *) fail "line $n of $path is a shape the repository writes, but was not named:"$'\n'"$OUT" ;;
+    esac
+    n=$((n + 1))
+  done
+  named=$(printf '%s\n' "$OUT" | grep -c '^  ')
+  [ "$named" -eq "$count" ] || fail "expected exactly $count findings in $path, got $named:"$'\n'"$OUT"
+}
+
+test_a_tree_that_keeps_each_spelling_with_its_owner_holds() {
+  local tree
+  tree=$(new_tree clean)
+  run_invariants "$tree"
+  [ "$RC" -eq 0 ] || fail "a tree whose spellings stay in their owners must hold, got $RC:"$'\n'"$OUT"
+  assert_contains "$OUT" "hold" "a holding run must say so"
+  pass "a tree that keeps each spelling in its owner holds"
+}
+
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+test_every_process_listing_shape_outside_the_owner_is_named() {
+  local tree
+  tree=$(new_tree ps-shapes)
+  fixture "$tree" bin/backends/shapes.sh <<'SH'
+if [ "$FM_PROC_OS" = msys ] && LC_ALL=C ps -o comm= -p $$ >/dev/null 2>&1; then
+ps -o comm= -p "$1" 2>/dev/null
+ps -o args= -p "$1" 2>/dev/null
+ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]'
+ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+comm=$("$1" -p "$2" -o comm= 2>/dev/null) || return 1
+out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1
+stat=$("$ps_bin" -p "$shell_pid" -o stat= 2>/dev/null)
+LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
+ps -A -o %cpu= 2>/dev/null
+ps -o "comm=" -p "$pid"
+ps -eo pid,comm
+ps -o comm -p "$pid"
+SH
+  run_invariants "$tree"
+  expect_every_line_named bin/backends/shapes.sh 14
+  assert_contains "$OUT" "ps-o:" "the failing invariant must name itself"
+  pass "every ps field form bin/ has written is named outside bin/fm-proc-lib.sh, nested directories included"
+}
+
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+test_every_digest_shape_outside_the_helper_is_named() {
+  local tree
+  tree=$(new_tree digest-shapes)
+  fixture "$tree" tests/shapes.test.sh <<'SH'
+if command -v @SHA256SUM@ >/dev/null 2>&1; then
+digest=$(@SHA256SUM@ | awk '{print $1}')
+digest=$(@SHASUM@ -a 256 | awk '{print $1}')
+printf '%s' "$real" | @SHASUM@ -a 256 | awk '{print substr($1,1,8)}'
+before=$(@SHASUM@ -a 256 "$home/data/backlog.md" | awk '{print $1}')
+[ "$(@SHASUM@ -a 256 "$state/domain.meta")" = "$meta_before" ] || fail "retirement changed metadata"
+@SHASUM@ -a 256 "$file" | awk '{print $1}'
+elif command -v @SHA256SUM@ >/dev/null 2>&1; then
+LC_ALL=C @SHA256SUM@ "$file"
+hasher=@SHA256SUM@
+SH
+  run_invariants "$tree"
+  expect_every_line_named tests/shapes.test.sh 10
+  assert_contains "$OUT" "digest:" "the failing invariant must name itself"
+  pass "every digest call shape tests have used is named outside tests/lib.sh"
+}
+
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+test_lookalikes_and_comments_are_not_findings() {
+  local tree
+  tree=$(new_tree lookalikes)
+  fixture "$tree" bin/lookalike.sh <<'SH'
+--command=*)
+done < <(grep -Eo 'corr=[A-Fa-f0-9]{16}' "$payload")
+git log --format=%H HEAD --not --remotes
+echo "exit-command=delivered agent-state=$state"
+sort -o "$out" "$in"
+# A comment naming `ps -o comm= -p "$pid"` is documentation, not a call.
+SH
+  fixture "$tree" tests/lookalike.test.sh <<'SH'
+fm_install_stub_hasher "$fakebin" @SHASUM@
+printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/@SHASUM@"
+assert_grep '@SHASUM@ -a 256' "$hasher_log" "installer did not invoke @SHASUM@ -a 256"
+pass "digests with @SHA256SUM@ alone (@SHASUM@ proven unreachable)"
+if [ "$self" = @SHASUM@ ]; then
+  # before=$(@SHASUM@ -a 256 "$file") is how this used to read.
+SH
+  run_invariants "$tree"
+  [ "$RC" -eq 0 ] || fail "lookalikes and comments must not be findings, got $RC:"$'\n'"$OUT"
+  pass "a mention, a stub name, an argument or a comment is not a spelling"
+}
+
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+test_a_directive_allows_only_the_line_directly_below_it() {
+  local tree
+  tree=$(new_tree allowed)
+  fixture "$tree" bin/allowed.sh <<'SH'
+walk() {
+  @ALLOW@ ps-o - the remote-host reaper is POSIX by decision
+  walk=$(ps -p "$walk" -o ppid= 2>/dev/null | tr -d '[:space:]') || return 0
+  walk=$(ps -p "$walk" -o ppid= 2>/dev/null | tr -d '[:space:]') || return 0
+}
+SH
+  fixture "$tree" tests/allowed.test.sh <<'SH'
+  @ALLOW@ digest - proves this tool's branch with the other masked
+  command -v @SHASUM@ >/dev/null 2>&1 || return 0
+SH
+  run_invariants "$tree"
+  [ "$RC" -eq 1 ] || fail "the undirected copy of an allowed line must still fail, got $RC:"$'\n'"$OUT"
+  case "$OUT" in
+    *"  bin/allowed.sh:4: "*) ;;
+    *) fail "the second copy, with no directive above it, was not named:"$'\n'"$OUT" ;;
   esac
-  return 1
+  case "$OUT" in
+    *"bin/allowed.sh:3:"*|*"tests/allowed.test.sh"*) fail "a directed line was named:"$'\n'"$OUT" ;;
+  esac
+  pass "a directive allows the one line directly below it, and a copy without one is still named"
 }
 
-# expect_shapes <name> <ere> <must|never> <line>...: the lines, written to one
-# probe file and fed through the same extractor the tree scan uses, all match
-# (must) or none does (never).
-expect_shapes() {
-  local name=$1 ere=$2 want=$3 line found
-  shift 3
-  printf '%s\n' "$@" > "$PROBE"
-  found=$(invariant_lines "$ere" "$PROBE")
-  for line in "$@"; do
-    if has_line "$found" "$PROBE $line"; then
-      [ "$want" = must ] || fail "$name pattern matches a line that is not the spelling: $line"
-    else
-      [ "$want" = never ] || fail "$name pattern cannot match a shape the repository writes: $line"
-    fi
-  done
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+test_a_dead_directive_fails() {
+  local tree
+  tree=$(new_tree dead)
+  fixture "$tree" bin/dead.sh <<'SH'
+@ALLOW@ ps-o - the line this excused was ported
+pid=$(fm_proc_ppid "$pid")
+@ALLOW@ ps-o - a blank line breaks the adjacency
+
+comm=$(ps -o comm= -p "$pid" 2>/dev/null)
+SH
+  run_invariants "$tree"
+  [ "$RC" -eq 1 ] || fail "a directive with no spelling below it must fail, got $RC:"$'\n'"$OUT"
+  case "$OUT" in
+    *"  bin/dead.sh:1: dead directive"*) ;;
+    *) fail "the directive above a ported line was not reported dead:"$'\n'"$OUT" ;;
+  esac
+  case "$OUT" in
+    *"  bin/dead.sh:3: dead directive"*) ;;
+    *) fail "a directive separated from its line was not reported dead:"$'\n'"$OUT" ;;
+  esac
+  case "$OUT" in
+    *"  bin/dead.sh:5: comm="*) ;;
+    *) fail "a spelling whose directive is not directly above it was not named:"$'\n'"$OUT" ;;
+  esac
+  pass "a directive whose next line is not a spelling fails, so an exception cannot outlive its reason"
 }
 
-# expect_owner_lines <name> <ere> <file> <line>...: each exact content line is
-# found in <file> by the tree extractor.
-expect_owner_lines() {
-  local name=$1 ere=$2 file=$3 found line
-  shift 3
-  found=$(invariant_lines "$ere" "$file")
-  [ -n "$found" ] || fail "$name pattern finds nothing in its owner $file; the invariant is broken, not the tree"
-  for line in "$@"; do
-    has_line "$found" "$file $line" \
-      || fail "$name pattern does not find the owner's known line in $file: $line"$'\n'"found:"$'\n'"$found"
-  done
+# shellcheck disable=SC2016  # fixture lines are literal source, never expanded
+test_a_malformed_or_misnamed_directive_fails() {
+  local tree
+  tree=$(new_tree malformed)
+  fixture "$tree" bin/malformed.sh <<'SH'
+@ALLOW@ ps-o
+comm=$(ps -o comm= -p "$pid" 2>/dev/null)
+@ALLOW@ digest - names the wrong invariant for bin/
+args=$(ps -o args= -p "$pid" 2>/dev/null)
+SH
+  run_invariants "$tree"
+  [ "$RC" -eq 1 ] || fail "malformed and misnamed directives must fail, got $RC:"$'\n'"$OUT"
+  case "$OUT" in
+    *"  bin/malformed.sh:1: malformed directive"*) ;;
+    *) fail "a directive with no reason was not reported malformed:"$'\n'"$OUT" ;;
+  esac
+  case "$OUT" in
+    *"  bin/malformed.sh:3: directive names \"digest\""*) ;;
+    *) fail "a directive naming another directory's invariant was not reported:"$'\n'"$OUT" ;;
+  esac
+  case "$OUT" in
+    *"  bin/malformed.sh:2: "*"  bin/malformed.sh:4: "*) ;;
+    *) fail "lines under directives that allow nothing must still be named:"$'\n'"$OUT" ;;
+  esac
+  pass "a directive with no reason, or naming the wrong invariant, fails and allows nothing"
 }
 
-# stale_entries <allowlist> <found>: allowlist entries with no line left to match.
-stale_entries() {
-  awk '
-    NR == FNR { if ($0 == "" || $0 ~ /^#/) next; want[++n] = $0; next }
-    { have[$0]++ }
-    END { for (i = 1; i <= n; i++) { k = want[i]; if (have[k] > 0) have[k]--; else print k } }
-  ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+test_an_owner_the_pattern_cannot_match_fails() {
+  local tree
+  tree=$(new_tree blind-owner)
+  # shellcheck disable=SC2016  # a literal source line, never expanded
+  printf '%s\n' 'pgid=$(fm_proc_pgid "$pid")' > "$tree/bin/fm-proc-lib.sh"
+  run_invariants "$tree"
+  [ "$RC" -eq 1 ] || fail "an owner with no match must fail the invariant, got $RC:"$'\n'"$OUT"
+  assert_contains "$OUT" "ps-o: the pattern finds nothing in its owner bin/fm-proc-lib.sh" \
+    "a blind pattern must be reported as a broken invariant"
+  tree=$(new_tree missing-owner)
+  rm -f "$tree/tests/lib.sh"
+  run_invariants "$tree"
+  [ "$RC" -eq 1 ] || fail "a missing owner must fail the invariant, got $RC:"$'\n'"$OUT"
+  assert_contains "$OUT" "digest: its owner tests/lib.sh does not exist" "a missing owner must be named"
+  pass "an owner the pattern cannot match, or no owner at all, fails instead of passing over the tree"
 }
 
-# unlisted_lines <allowlist> <found>: found lines no allowlist entry accounts for.
-unlisted_lines() {
-  awk '
-    NR == FNR { if ($0 == "" || $0 ~ /^#/) next; allow[$0]++; next }
-    $0 == "" { next }
-    { if (allow[$0] > 0) allow[$0]--; else print }
-  ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
-}
-
-# tree_lines <ere> <dir> <exclude>...: invariant_lines over every *.sh under
-# <dir>, minus the excluded paths.
-tree_lines() {
-  local ere=$1 dir=$2 path
-  local -a files=()
-  shift 2
-  while IFS= read -r path; do
-    files+=("$path")
-  done < <(tree_files "$dir" "$@")
-  invariant_lines "$ere" "${files[@]}"
-}
-
-# tree_files <dir> <exclude>...: every *.sh under <dir>, sorted, minus the
-# excluded paths.
-tree_files() {
-  local dir=$1 path skip excluded
-  shift
-  while IFS= read -r path; do
-    skip=0
-    for excluded in "$@"; do
-      [ "$path" != "$excluded" ] || skip=1
-    done
-    [ "$skip" -eq 1 ] || printf '%s\n' "$path"
-  done < <(find "$dir" -type f -name '*.sh' | LC_ALL=C sort)
-}
-
-PS_OWNER=bin/fm-proc-lib.sh
-
-PS_ALLOWLIST=$(cat <<'EOF'
-# The process-identity owner's fallback for a host with no /proc/<pid>/stat;
-# MSYS publishes that file, so Windows takes the /proc branch above it.
-bin/fm-wake-lib.sh out=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
-bin/fm-wake-lib.sh out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
-# The cmux ancestor walk; the cmux backend is macOS-only.
-bin/fm-backend.sh comm=$(ps -o comm= -p "$pid" 2>/dev/null) || comm=""
-bin/fm-backend.sh ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
-# A daemon lock that predates the recorded pid identity; an empty answer is no
-# match, which is the safe branch.
-bin/fm-afk-start.sh command=$(ps -p "$pid" -o command= 2>/dev/null || true)
-# argv[0] after /proc/<pid>/cmdline, which MSYS answers first.
-bin/fm-cursor-lib.sh fallback=$(LC_ALL=C ps -p "$pid" -o comm= 2>/dev/null || true)
-# A system-load probe, not an identity; it fails open to zero.
-bin/fm-lint.sh ps -A -o %cpu= 2>/dev/null | awk '{sum += $1} END {printf "%.2f", sum + 0}'
-# The remote-host orphan reaper, POSIX by decision (no Windows-hosted remote);
-# the scan dies loudly where -o is refused, before the walk is ever reached.
-bin/fm-remote-job-reap-orphans.sh walk=$(ps -p "$walk" -o ppid= 2>/dev/null | tr -d '[:space:]') || return 0
-bin/fm-remote-job-reap-orphans.sh scan=$(ps -u "$uid" -o pid=,command= 2>/dev/null) ||
-# tmux foreground process groups by pane tty; tmux panes only, and a tty or
-# process group has no MSYS meaning.
-bin/backends/tmux.sh LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
-bin/backends/tmux.sh LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
-bin/backends/tmux.sh args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
-bin/fm-tmux-lib.sh $(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
-bin/fm-tmux-lib.sh $(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
-bin/fm-tmux-lib.sh args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || args=
-# The leaked process-group reap, which returns before this for any backend but
-# tmux.
-bin/fm-teardown.sh pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || pgid=""
-bin/fm-teardown.sh own_pgid=$(ps -o pgid= -p "$$" 2>/dev/null) || own_pgid=""
-bin/fm-teardown.sh current_pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || current_pgid=""
-bin/fm-teardown.sh && [ "$(ps -o pgid= -p "$leader" 2>/dev/null | tr -d '[:space:]')" = "$pgid" ] \
-# NOT legitimate: a known open Windows defect, listed so this invariant can land
-# while it stays visible. herdr is the Windows backend, and on MSYS the idle-shell
-# proof refuses every pane, so a close never proves a shell idle and takes the
-# plain path (docs/windows/measurement.md, "The herdr idle-shell proof is not
-# the gate that fails"). The proof also needs a process-table listing and a
-# process state, which bin/fm-proc-lib.sh does not own yet. Delete these three
-# when the proof is ported; this test then fails until they are removed.
-bin/backends/herdr.sh comm=$("$1" -p "$2" -o comm= 2>/dev/null) || return 1
-bin/backends/herdr.sh rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1
-bin/backends/herdr.sh stat=$("$ps_bin" -p "$shell_pid" -o stat= 2>/dev/null | tr -d '[:space:]') || return 1
-EOF
-)
-
-DIGEST_OWNER=tests/lib.sh
-
-DIGEST_ALLOWLIST=$(cat <<'EOF'
-# The helper's own suite proves each tool's branch with the other masked, so it
-# must ask whether each tool exists before claiming that branch is proven.
-tests/fm-test-lib.test.sh command -v sha256sum >/dev/null 2>&1 || {
-tests/fm-test-lib.test.sh command -v shasum >/dev/null 2>&1 || {
-EOF
-)
-
-# shellcheck disable=SC2016,SC1003  # the shapes are literal source lines, never expanded
-test_process_listing_pattern_bites() {
-  expect_owner_lines "process-listing" "$PS_FIELD_FORM" "$PS_OWNER" \
-    'if [ "$FM_PROC_OS" = msys ] && LC_ALL=C ps -o comm= -p $$ >/dev/null 2>&1; then' \
-    'ps -o comm= -p "$1" 2>/dev/null' \
-    'ps -o args= -p "$1" 2>/dev/null' \
-    "ps -o ppid= -p \"\$1\" 2>/dev/null | tr -d '[:space:]'" \
-    "ps -o pgid= -p \"\$pid\" 2>/dev/null | tr -d '[:space:]'"
-  expect_shapes "process-listing" "$PS_FIELD_FORM" must \
-    'comm=$("$1" -p "$2" -o comm= 2>/dev/null) || return 1' \
-    'out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1' \
-    'rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1' \
-    'stat=$("$ps_bin" -p "$shell_pid" -o stat= 2>/dev/null)' \
-    'LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \' \
-    'ps -A -o %cpu= 2>/dev/null' \
-    'ps -o "comm=" -p "$pid"' \
-    'ps -eo pid,comm' \
-    'ps -o comm -p "$pid"'
-  expect_shapes "process-listing" "$PS_FIELD_FORM" never \
-    '--command=*)' \
-    "done < <(grep -Eo 'corr=[A-Fa-f0-9]{16}' \"\$payload\")" \
-    'git log --format=%H HEAD --not --remotes' \
-    'echo "exit-command=delivered agent-state=$state"' \
-    'sort -o "$out" "$in"'
-  pass "the process-listing pattern finds its owner's spellings and every shape bin/ writes"
-}
-
-test_process_listing_allowlist_is_live() {
-  local found stale
-  found=$(tree_lines "$PS_FIELD_FORM" bin "$PS_OWNER")
-  stale=$(stale_entries "$PS_ALLOWLIST" "$found")
-  [ -z "$stale" ] || fail "process-listing allowlist entries match no line in bin/ any more; remove them:"$'\n'"$stale"
-  pass "every process-listing allowlist entry still matches its line"
-}
-
-test_no_process_listing_outside_its_owner() {
-  local found unlisted
-  found=$(tree_lines "$PS_FIELD_FORM" bin "$PS_OWNER")
-  unlisted=$(unlisted_lines "$PS_ALLOWLIST" "$found")
-  [ -z "$unlisted" ] || fail "bin/ spells the ps -o field form outside $PS_OWNER; MSYS ps has no -o, so use fm_proc_* there:"$'\n'"$unlisted"
-  pass "no file under bin/ spells the ps -o field form outside $PS_OWNER and the allowlist"
-}
-
-# shellcheck disable=SC2016  # the shapes are literal source lines, never expanded
-test_digest_pattern_bites() {
-  expect_owner_lines "digest" "$DIGEST_CALL" "$DIGEST_OWNER" \
-    'if command -v sha256sum >/dev/null 2>&1; then' \
-    "digest=\$(sha256sum | awk '{print \$1}')" \
-    "digest=\$(shasum -a 256 | awk '{print \$1}')"
-  expect_shapes "digest" "$DIGEST_CALL" must \
-    "printf '%s' \"\$real\" | shasum -a 256 | awk '{print substr(\$1,1,8)}'" \
-    "before=\$(shasum -a 256 \"\$home/data/backlog.md\" | awk '{print \$1}')" \
-    '[ "$(shasum -a 256 "$state/domain.meta")" = "$meta_before" ] || fail "retirement changed metadata"' \
-    "shasum -a 256 \"\$file\" | awk '{print \$1}'" \
-    'elif command -v sha256sum >/dev/null 2>&1; then' \
-    'LC_ALL=C sha256sum "$file"' \
-    'hasher=sha256sum'
-  expect_shapes "digest" "$DIGEST_CALL" never \
-    'fm_install_stub_hasher "$fakebin" shasum' \
-    "printf '#!/usr/bin/env bash\\nexit 1\\n' > \"\$fakebin/shasum\"" \
-    "assert_grep 'shasum -a 256' \"\$hasher_log\" \"installer did not invoke shasum -a 256\"" \
-    'pass "digests with sha256sum alone (shasum proven unreachable)"' \
-    'if [ "$self" = shasum ]; then'
-  pass "the digest pattern finds the helper's spellings and every call shape tests have used"
-}
-
-test_digest_allowlist_is_live() {
-  local found stale
-  found=$(tree_lines "$DIGEST_CALL" tests "$DIGEST_OWNER" "$SELF")
-  stale=$(stale_entries "$DIGEST_ALLOWLIST" "$found")
-  [ -z "$stale" ] || fail "digest allowlist entries match no line in tests/ any more; remove them:"$'\n'"$stale"
-  pass "every digest allowlist entry still matches its line"
-}
-
-test_no_digest_outside_the_helper() {
-  local found unlisted
-  found=$(tree_lines "$DIGEST_CALL" tests "$DIGEST_OWNER" "$SELF")
-  unlisted=$(unlisted_lines "$DIGEST_ALLOWLIST" "$found")
-  [ -z "$unlisted" ] || fail "tests/ takes a digest outside $DIGEST_OWNER; use fm_test_sha256 or fm_test_sha256_stdin:"$'\n'"$unlisted"
-  pass "no test takes a digest outside fm_test_sha256 and the allowlist"
-}
-
-test_process_listing_pattern_bites
-test_process_listing_allowlist_is_live
-test_no_process_listing_outside_its_owner
-test_digest_pattern_bites
-test_digest_allowlist_is_live
-test_no_digest_outside_the_helper
+test_a_tree_that_keeps_each_spelling_with_its_owner_holds
+test_every_process_listing_shape_outside_the_owner_is_named
+test_every_digest_shape_outside_the_helper_is_named
+test_lookalikes_and_comments_are_not_findings
+test_a_directive_allows_only_the_line_directly_below_it
+test_a_dead_directive_fails
+test_a_malformed_or_misnamed_directive_fails
+test_an_owner_the_pattern_cannot_match_fails

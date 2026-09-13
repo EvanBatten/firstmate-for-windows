@@ -73,6 +73,7 @@ assert_both_forms_digest() {  # <out> <which>
 
 test_sha256_uses_sha256sum_when_shasum_is_absent() {
   local mask out rc=0
+  # fm-invariant: allow digest - the helper's own suite proves each tool's branch with the other masked, so it must ask whether this tool exists before claiming its branch is proven
   command -v sha256sum >/dev/null 2>&1 || {
     echo "skip: sha256sum not on this host, so its branch cannot be proven here"
     return 0
@@ -87,6 +88,7 @@ test_sha256_uses_sha256sum_when_shasum_is_absent() {
 
 test_sha256_falls_back_to_shasum_when_sha256sum_is_absent() {
   local mask out rc=0
+  # fm-invariant: allow digest - the helper's own suite proves each tool's branch with the other masked, so it must ask whether this tool exists before claiming its branch is proven
   command -v shasum >/dev/null 2>&1 || {
     echo "skip: shasum not on this host, so the fallback branch cannot be proven here"
     return 0

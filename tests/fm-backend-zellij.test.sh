@@ -116,7 +116,7 @@ zellij_expected_root_hash() {  # <root>
 }
 
 zellij_expected_home_label() {  # [home] [root]
-  local home=${1:-$ROOT} root=${2:-$ROOT} marker id prefix
+  local home=${1:-$ROOT} root=${2:-$ROOT} marker id prefix hash
   marker="$home/.fm-secondmate-home"
   if [ -f "$marker" ]; then
     id=$(tr -d '[:space:]' < "$marker" 2>/dev/null)
@@ -128,16 +128,18 @@ zellij_expected_home_label() {  # [home] [root]
   else
     prefix="firstmate"
   fi
-  printf '%s-%s' "$prefix" "$(zellij_expected_root_hash "$root")"
+  hash=$(zellij_expected_root_hash "$root") || return 1
+  printf '%s-%s' "$prefix" "$hash"
 }
 
 zellij_expected_scoped_title() {  # <fm-task-label> [home] [root]
-  local label=$1 home=${2:-$ROOT} root=${3:-$ROOT} rest
+  local label=$1 home=${2:-$ROOT} root=${3:-$ROOT} rest home_label
   case "$label" in
     fm-*) rest=${label#fm-} ;;
     *) rest=$label ;;
   esac
-  printf 'fm-%s-%s' "$(zellij_expected_home_label "$home" "$root")" "$rest"
+  home_label=$(zellij_expected_home_label "$home" "$root") || return 1
+  printf 'fm-%s-%s' "$home_label" "$rest"
 }
 
 # --- version_check / tool_check ----------------------------------------------
@@ -230,7 +232,7 @@ test_normalize_key() {
 test_scoped_title_uses_primary_home_label() {
   local dir out expected
   dir="$TMP_ROOT/scoped-title-primary"; mkdir -p "$dir"
-  expected=$(zellij_expected_scoped_title fm-task1 "$dir")
+  expected=$(zellij_expected_scoped_title fm-task1 "$dir") || fail "could not hash the expected home label"
   out=$( FM_HOME="$dir" bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_scoped_title fm-task1' "$ROOT" )
   [ "$out" = "$expected" ] || fail "primary scoped title should be $expected, got '$out'"
   pass "fm_backend_zellij_scoped_title: scopes a primary task title with firstmate plus root hash"
@@ -240,7 +242,7 @@ test_scoped_title_uses_secondmate_home_label() {
   local dir out expected
   dir="$TMP_ROOT/scoped-title-secondmate"; mkdir -p "$dir"
   printf 'sm-one\n' > "$dir/.fm-secondmate-home"
-  expected=$(zellij_expected_scoped_title fm-task1 "$dir")
+  expected=$(zellij_expected_scoped_title fm-task1 "$dir") || fail "could not hash the expected home label"
   out=$( FM_HOME="$dir" bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_scoped_title fm-task1' "$ROOT" )
   [ "$out" = "$expected" ] || fail "secondmate scoped title should be $expected, got '$out'"
   pass "fm_backend_zellij_scoped_title: scopes a secondmate task title with the home marker plus root hash"
@@ -250,8 +252,8 @@ test_scoped_title_changes_with_root_path() {
   local dir home root_one root_two out_one out_two expected_one expected_two
   dir="$TMP_ROOT/scoped-title-root-hash"; home="$dir/home"; root_one="$dir/root-one"; root_two="$dir/root-two"
   mkdir -p "$home" "$root_one" "$root_two"
-  expected_one=$(zellij_expected_scoped_title fm-task1 "$home" "$root_one")
-  expected_two=$(zellij_expected_scoped_title fm-task1 "$home" "$root_two")
+  expected_one=$(zellij_expected_scoped_title fm-task1 "$home" "$root_one") || fail "could not hash the expected home label"
+  expected_two=$(zellij_expected_scoped_title fm-task1 "$home" "$root_two") || fail "could not hash the expected home label"
   out_one=$( FM_HOME="$home" FM_ROOT_OVERRIDE="$root_one" bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_scoped_title fm-task1' "$ROOT" )
   out_two=$( FM_HOME="$home" FM_ROOT_OVERRIDE="$root_two" bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_scoped_title fm-task1' "$ROOT" )
   [ "$out_one" = "$expected_one" ] || fail "scoped title should include root-one hash as $expected_one, got '$out_one'"
@@ -303,8 +305,8 @@ test_list_live_scopes_to_own_home_tag() {
   local dir fb out own_title foreign_title other_root
   dir="$TMP_ROOT/list-live-scope"; mkdir -p "$dir/responses"
   other_root="$dir/other-root"; mkdir -p "$other_root"
-  own_title=$(zellij_expected_scoped_title fm-task1)
-  foreign_title=$(zellij_expected_scoped_title fm-task2 "$ROOT" "$other_root")
+  own_title=$(zellij_expected_scoped_title fm-task1) || fail "could not hash the expected home label"
+  foreign_title=$(zellij_expected_scoped_title fm-task2 "$ROOT" "$other_root") || fail "could not hash the expected home label"
   # 1: list-tabs --json -> our own home-scoped tab, a DIFFERENT installation's
   # home-scoped tab (same prefix shape, different FM_ROOT hash), and an
   # unrelated non-firstmate tab.
@@ -326,7 +328,7 @@ test_list_live_scopes_to_own_home_tag() {
 test_resolve_bare_selector_prefers_scoped_title() {
   local dir fb out title
   dir="$TMP_ROOT/resolve-scoped"; mkdir -p "$dir/responses"
-  title=$(zellij_expected_scoped_title fm-resolve1)
+  title=$(zellij_expected_scoped_title fm-resolve1) || fail "could not hash the expected home label"
   # 1: list-tabs --json -> the home-scoped tagged tab
   printf '[{"tab_id":6,"name":"%s"}]\n' "$title" > "$dir/responses/1.out"
   # 2: list-panes for tab 6
@@ -358,7 +360,7 @@ test_resolve_bare_selector_refuses_ambiguous_untagged() {
 test_resolve_bare_selector_prefers_later_session_scoped_title_over_legacy() {
   local dir fb out title
   dir="$TMP_ROOT/resolve-later-scoped"; mkdir -p "$dir/responses"
-  title=$(zellij_expected_scoped_title fm-resolve3)
+  title=$(zellij_expected_scoped_title fm-resolve3) || fail "could not hash the expected home label"
   zellij_tab_response "$dir" 1 3 fm-resolve3
   zellij_tab_response "$dir" 2 6 "$title"
   zellij_pane_response "$dir" 3 12 6
@@ -444,7 +446,7 @@ test_dispatch_busy_state_unknown_for_zellij() {
 test_create_task_refuses_duplicate_label() {
   local dir fb out status title
   dir="$TMP_ROOT/dup-task"; mkdir -p "$dir/responses"
-  title=$(zellij_expected_scoped_title fm-dup1)
+  title=$(zellij_expected_scoped_title fm-dup1) || fail "could not hash the expected home label"
   # 1: list-tabs --json -> existing tab already carrying the home-scoped title
   printf '[{"tab_id":2,"name":"%s","active":false}]\n' "$title" > "$dir/responses/1.out"
   fb=$(make_zellij_fakebin "$dir")
@@ -461,7 +463,7 @@ test_create_task_refuses_duplicate_label() {
 test_create_task_creates_and_parses_ids() {
   local dir fb out title
   dir="$TMP_ROOT/create-task"; mkdir -p "$dir/responses"
-  title=$(zellij_expected_scoped_title fm-newtask)
+  title=$(zellij_expected_scoped_title fm-newtask) || fail "could not hash the expected home label"
   # 1: list-tabs --json -> no existing tabs, none active
   printf '[]\n' > "$dir/responses/1.out"
   # 2: new-tab --cwd --name -> bare tab id on stdout
@@ -887,7 +889,7 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
     "worktree=$dir/missing-child-worktree" \
     "project=$project" \
     "kind=scout"
-  child_title=$(zellij_expected_scoped_title fm-childz "$home" "$home")
+  child_title=$(zellij_expected_scoped_title fm-childz "$home" "$home") || fail "could not hash the expected home label"
   zellij_pane_response "$dir" 1 7 4
   zellij_tab_response "$dir" 2 4 "$child_title"
   printf '[]\n' > "$dir/responses/3.out"

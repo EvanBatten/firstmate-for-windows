@@ -211,6 +211,7 @@ fm_backend_detect_cmux_app_is_ancestor() {
     if [ -n "$cmux_pid" ] && [ "$pid" = "$cmux_pid" ]; then
       return 0
     fi
+    # fm-invariant: allow ps-o - the cmux ancestor walk; the cmux backend is macOS-only
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || comm=""
     comm="${comm#"${comm%%[![:space:]]*}"}"
     comm="${comm%"${comm##*[![:space:]]}"}"
@@ -218,6 +219,7 @@ fm_backend_detect_cmux_app_is_ancestor() {
     case "$comm" in
       */cmux.app/Contents/MacOS/cmux) return 0 ;;
     esac
+    # fm-invariant: allow ps-o - the cmux ancestor walk; the cmux backend is macOS-only
     ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
     case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$ppid" -gt 1 ] || return 1

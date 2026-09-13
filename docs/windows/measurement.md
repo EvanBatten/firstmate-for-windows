@@ -2595,6 +2595,7 @@ Linux: linux-starttime=2034 cmdline-hex=6261...        ->  linux-starttime=2034 
 So the remote job library records the start half only, through `fm_pid_start_identity` and `fm_pid_start_identity_equal` in `bin/fm-wake-lib.sh`, and keeps pairing the worker lock with a separate command check.
 The pending-reply sender never execs, so it records the whole identity.
 On Git Bash an exec is a new Windows process with its own creation time, so no start recorded before an exec matches after it there; a live exec'd group leader still reads as stale on a crash reclaim, and the new exec case skips on MSYS saying so.
+So stopping or crash-reclaiming a running job does not work on Windows: the worker takes the live command group for dead, signals nothing, and leaves the job's command tree running unowned, which issue #40 tracks.
 The lane launch has the same shape and races the exec; six launches here read after the final exec every time the later read succeeded, within 8 ms of it.
 
 ### The loader's guard cost a second per source on WSL
@@ -2633,9 +2634,12 @@ The cd-check and pretool-check plugins have the same change and no unit case.
 ### The muse matcher lost its paths to MSYS conversion, then to path.join
 
 `fm_busy_muse_matching_logs` passes the sessions root and the worktree to node.
-MSYS rewrites both into `C:/...` first, so the worktree never equalled the POSIX one the session record holds and nothing matched.
+MSYS rewrites both into `C:/...` first, so the worktree never equalled the POSIX spelling the harness fixture's session record holds, and nothing matched.
 With that fixed alone, node's `path.join` printed `C:\...\session.jsonl`, which fails the binding's `prior_log=` equality.
 The call now turns conversion off, gives node the root it opens already converted by `cygpath -w`, and joins each printed path onto the shell's root with `path.posix.join`.
+muse is a native binary and is not installed here, so which spelling a real session record holds is unobserved, and the fixture's POSIX one is only an assumption.
+So the worktree comparison no longer requires any one spelling: both sides are reduced to a lowercased `c:/...` form, with backslashes, a `\\?\` prefix, a `/c/` or `/cygdrive/c/` mount and a trailing separator normalised, and a new case matches eight spellings of one worktree while refusing a sibling, a child and the parent.
+A record naming the same directory through an 8.3 short name, a junction or another mount still misses.
 The branch is keyed on `OSTYPE`, so Linux and macOS run nothing new.
 
 | Case (one-case copy) | Before | After |
@@ -2651,8 +2655,13 @@ The branch is keyed on `OSTYPE`, so Linux and macOS run nothing new.
 `fm-backend-herdr-focus-flash-e2e` ends `the idle-shell proof never ran` against herdr 0.8.2.
 A copy that prints the adapter's output and CLI calls shows the close plan fell back to `plain` when `bin/backends/herdr-workspace-move.py` failed, before any `pane process-info` call.
 So `fm_backend_herdr_pid_is_bare_shell` and its `ps -p <pid> -o comm=` never ran, and fixing that spelling cannot change the case.
-The proof has three further MSYS gaps: `ps -axo pid=,ppid=` and `ps -p <pid> -o stat=` in the sample, and a `kill -HUP` aimed at herdr's Win32 shell pid, which MSYS `kill` does not address.
 Part A of the same run showed herdr 0.8.2's explicit close keeps focus, so the plain fallback costs nothing visible on this release.
+
+The proof is now read through `bin/fm-proc-lib.sh` on both platforms: the shell's name through `fm_proc_comm`, the process table through `fm_proc_table`, its state through `fm_proc_state`, and herdr's Win32 shell pid is turned into the MSYS pid that `/proc` and `kill` address by `fm_proc_from_os_pid`, which the HUP and the KILL now use.
+Read-only `pane process-info` against herdr 0.8.2 on this host, 2026-09-13, showed the Windows spelling the proof had to accept: an idle pwsh pane reported `"name":"pwsh.exe"`, `"argv0":"C:\\Users\\ebatt\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.EXE"`, and one pid as `shell_pid`, foreground group and foreground process, so names are compared with the directory and `.exe` removed.
+The same call on a pane running Claude reported `shell_pid` 63628 and a foreground group and process of 88680, `claude.exe`.
+The behavioural consequence has not been observed on Windows, and for firstmate's own task panes it is unreachable: `fm_backend_herdr_task_tab_create` opens each pane in herdr's default pwsh and starts Git Bash inside it, so the pane's `shell_pid` is pwsh, which is not a recognised shell, and the foreground group is never the shell's, so the proof refuses those panes and every such close still takes the plain path.
+What is proven is the unit shape: `tests/fm-backend-herdr.test.sh` drives the pane-death close against a fake MSYS process table that names the shell by Win32 pid, and it succeeds only when the table, the state and the HUP all reach the MSYS pid.
 
 ### Linux
 
@@ -2674,9 +2683,10 @@ Measured on this box 2026-09-12 and 2026-09-13, at host time scale 35 to 40.
 
 ### The invariants, and proof that each pattern bites
 
-`tests/fm-repo-invariants.test.sh` asserts that no file under `bin/` spells the `ps -o` field form outside `bin/fm-proc-lib.sh`, and that no test takes a digest outside `fm_test_sha256`.
-Each invariant first proves its pattern finds its owner's known lines and every shape the repository writes, then that every allowlist entry still matches, and only then that nothing else matches.
-The planned patterns failed that first step, which is the reason it exists:
+`bin/fm-repo-invariants.sh`, run by `bin/fm-lint.sh`'s default path, fails when a file under `bin/` spells the `ps -o` field form outside `bin/fm-proc-lib.sh`, or a test takes a digest outside `fm_test_sha256`.
+A line may be excused only by a `# fm-invariant: allow <name> - <reason>` directive directly above it, and a directive with no spelling below it fails as dead.
+`tests/fm-repo-invariants.test.sh` drives the script against fixture trees holding every shape the repository has written, and the script refuses to pass when its pattern finds nothing in the owner.
+The planned patterns failed against those shapes, which is why that check exists:
 
 | Pattern | What the self-check printed |
 | --- | --- |
@@ -2686,8 +2696,8 @@ The planned patterns failed that first step, which is the reason it exists:
 
 A planted `"$ps_bin" -p "$pid" -o etime=` line in a `bin/` file and a planted `$(shasum -a 256 "$file" ...)` line in a test file each turned the matching case red with the offender printed.
 With `bin/fm-remote-entrypoint.sh` at its previous content the invariant printed both `ps -o ppid= -p $$` lines, which now read the parent through `fm_proc_ppid`.
-The three `bin/backends/herdr.sh` idle-shell proof lines are allowlisted as an open defect, not as legitimate, because the proof also needs a process-table listing and a process state that the proc library does not own.
-On WSL Ubuntu the file is green under gawk and under mawk, and `fm-remote-transport-lanes` stays green with the entrypoint change and goes red with its probe function removed.
+The three `bin/backends/herdr.sh` idle-shell proof lines are no longer excused: they read through the proc library, as described under the herdr idle-shell proof above.
+On WSL Ubuntu the first, test-file form of the invariants was green under gawk and under mawk, and `fm-remote-transport-lanes` stays green with the entrypoint change and goes red with its probe function removed.
 
 ### `fm-startup-network start` does not block behind its worker
 

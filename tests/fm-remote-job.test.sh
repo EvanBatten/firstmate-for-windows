@@ -133,6 +133,15 @@ PROC_START_FRESH=$(fm_pid_start_identity "$$") \
   || fail "the process identity owner could not read this shell's start identity"
 fm_pid_start_identity_equal "$PROC_START_FRESH" "$PROC_START_SELF" \
   || fail "two reads of one live shell's start identity did not compare equal"$'\n'"recorded: $PROC_START_SELF"$'\n'"current:  $PROC_START_FRESH"
+# The child must start more than one identity unit after this shell, or the two
+# genuinely read the same and the comparator would be right to say yes: macOS
+# has no /proc and reads `ps -o lstart=` to the second, and Git Bash compares
+# creation times within 100 ms. SECONDS counts whole seconds from this shell's
+# start with both ends truncated, so at 2 more than a full second has passed.
+# This is a lower bound on elapsed time, not a budget for an event.
+while [ "$SECONDS" -lt 2 ]; do
+  sleep 0.1
+done
 sleep 30 &
 PROC_START_OTHER_PID=$!
 PROC_START_OTHER=$(fm_remote_job_process_start "$PROC_START_OTHER_PID") \
@@ -446,7 +455,7 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "the first delayed jo
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the second delayed job could not be reaped"
 pass "queued jobs receive a fresh bounded execution window"
 
-EMPTY_SHA=$(: | fm_test_sha256_stdin)
+EMPTY_SHA=$(: | fm_test_sha256_stdin) || fail "could not hash an empty payload"
 mkdir -p "$REMOTE_HOME/state"
 REPLY_LOG_REL=state/parent-replies.status
 PREEMPT_SIDE_EFFECT="$TMP_ROOT/preempt-side-effect"

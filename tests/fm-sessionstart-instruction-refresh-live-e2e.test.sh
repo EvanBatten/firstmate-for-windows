@@ -218,7 +218,8 @@ if [ "$EXPECTATION" = updated ]; then
   }
   [ -f "$HOME_DIR/state/.session-start-agents-baseline" ] \
     || fail "Pi startup did not record the true-start instruction baseline"
-  [ "$(sed -n '2p' "$HOME_DIR/state/.session-start-agents-baseline")" != "sha256:$(fm_test_sha256 "$PROJECT/AGENTS.md")" ] \
+  AGENTS_DIGEST=$(fm_test_sha256 "$PROJECT/AGENTS.md") || fail "could not hash the updated AGENTS.md"
+  [ "$(sed -n '2p' "$HOME_DIR/state/.session-start-agents-baseline")" != "sha256:$AGENTS_DIGEST" ] \
     || fail "Pi compaction rewrote the true-start instruction baseline"
   pass "Pi $(pi --version 2>/dev/null | head -n 1) re-injects updated AGENTS.md after a real compact in an isolated session"
 else

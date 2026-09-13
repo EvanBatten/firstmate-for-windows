@@ -661,6 +661,54 @@ EOF
   pass "workspace bindings compare decoded paths literally"
 }
 
+# muse is a native binary, so on Windows nothing here has observed which
+# spelling of the worktree its session record holds. Every spelling of the same
+# worktree must match, and a neighbour or a child directory must not. On a host
+# with no cygpath the Git Bash branch is driven with a stand-in cygpath that
+# leaves the walk root openable and spells the worktree on drive C.
+test_windows_workspace_spellings_all_match() {
+  local dir root fakebin mixed windows drive rest lower_drive spelling n=0 out expected
+  dir="$TMP_ROOT/windows-spellings"
+  root="$dir/sessions"
+  fakebin="$dir/fakebin"
+  mkdir -p "$fakebin" "$dir/ws"
+  if ! command -v cygpath >/dev/null 2>&1; then
+    cat > "$fakebin/cygpath" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  -w) printf '%s\n' "$2" ;;
+  -m) printf 'C:%s\n' "$2" ;;
+  *) exit 1 ;;
+esac
+SH
+    chmod +x "$fakebin/cygpath"
+  fi
+  mixed=$(PATH="$fakebin:$PATH" cygpath -m "$dir/ws") || fail "cygpath could not spell the worktree"
+  windows=${mixed//\//\\}
+  drive=${mixed%%:*}
+  rest=${mixed#*:}
+  lower_drive=$(printf '%s' "$drive" | tr '[:upper:]' '[:lower:]')
+  expected=
+  for spelling in "$dir/ws" "$mixed" "$windows" "/$lower_drive$rest" "/cygdrive/$lower_drive$rest" \
+    "$lower_drive:$rest/" "$windows\\" "\\\\?\\$windows"; do
+    n=$((n + 1))
+    write_session_log "$root" 2026 08 05 "match$n" "${spelling//\\/\\\\}" >/dev/null </dev/null
+    expected="$expected$root/2026/08/05/match$n/session.jsonl"$'\n'
+  done
+  for spelling in "$mixed-2" "$windows\\sub" "${mixed%/*}"; do
+    n=$((n + 1))
+    write_session_log "$root" 2026 08 05 "decoy$n" "${spelling//\\/\\\\}" >/dev/null </dev/null
+  done
+  out=$(PATH="$fakebin:$PATH" bash -c '
+    . "$0/bin/fm-busy-lib.sh"
+    OSTYPE=msys
+    fm_busy_muse_matching_logs "$1" "$2"
+  ' "$ROOT" "$root" "$dir/ws") || fail "the Git Bash matcher failed outright"
+  [ "$(printf '%s' "$out" | LC_ALL=C sort)" = "$(printf '%s' "$expected" | LC_ALL=C sort)" ] \
+    || fail "the Git Bash matcher did not match exactly the worktree's spellings"$'\n'"got:"$'\n'"$out"$'\n'"expected:"$'\n'"$expected"
+  pass "on Git Bash every spelling of the worktree matches its session log, and no neighbour does"
+}
+
 test_binding_excludes_preexisting_log_when_mtimes_tie() {
   local dir state id root old current verdict
   dir="$TMP_ROOT/mtime-tie"
@@ -923,6 +971,7 @@ test_run_fold_tracks_open_and_settled_turns
 test_nested_terminal_record_does_not_settle_a_run
 test_binding_selects_the_matching_main_log
 test_workspace_binding_treats_glob_characters_literally
+test_windows_workspace_spellings_all_match
 test_binding_excludes_preexisting_log_when_mtimes_tie
 test_session_log_cache_reuses_and_refreshes_binding
 test_cached_session_revalidates_after_namespace_change

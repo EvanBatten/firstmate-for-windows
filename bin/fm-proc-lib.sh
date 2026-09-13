@@ -12,8 +12,10 @@
 # ON macOS AND LINUX EVERY HELPER RUNS EXACTLY THE COMMAND ITS CALLER RAN
 # BEFORE. fm_proc_comm is `ps -o comm= -p`, fm_proc_args is `ps -o args= -p`,
 # fm_proc_ppid is `ps -o ppid= -p` piped through `tr`, fm_proc_pgid is
-# `ps -o pgid= -p` piped through `tr`, fm_pid_alive is `kill -0`, and
-# fm_proc_chain_prime is a no-op that returns 0 without forking.
+# `ps -o pgid= -p` piped through `tr`, fm_proc_state is `ps -o stat= -p` piped
+# through `tr`, fm_proc_table is `ps -axo pid=,ppid=`, fm_proc_from_os_pid
+# prints its argument, fm_pid_alive is `kill -0`, and fm_proc_chain_prime is a
+# no-op that returns 0 without forking.
 # Those platforms must see no behavior change at all; the MSYS branches below
 # are the only new code that ever executes, and callers still start their walks
 # at $$ exactly as they did before.
@@ -422,6 +424,81 @@ fm_proc_pgid() {
     return 0
   fi
   ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+}
+
+# fm_proc_state <pid>: the process state code `ps -o stat=` prints (S, Ss+,
+# R, ...), whitespace stripped, or a non-zero status when it cannot be read.
+#
+# bin/backends/herdr.sh's idle-shell proof asks this of a pane shell. MSYS
+# publishes the same letter as field 3 of /proc/<pid>/stat, after the
+# parenthesised command name, which may itself hold spaces or parentheses; so
+# the field is taken after the LAST ") ", and a read costs no process.
+fm_proc_state() {
+  local pid=$1 stat=
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$FM_PROC_OS" = msys ]; then
+    { read -r stat < "$FM_PROC_MSYS_PROC_ROOT/$pid/stat"; } 2>/dev/null || true
+    case "$stat" in *') '*) ;; *) return 1 ;; esac
+    stat=${stat##*") "}
+    stat=${stat%% *}
+    case "$stat" in ''|*[!A-Za-z]*) return 1 ;; esac
+    printf '%s\n' "$stat"
+    return 0
+  fi
+  ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+}
+
+# fm_proc_table: one "pid ppid" row for every process this shell's process
+# table shows, or a non-zero status when it shows none.
+#
+# On macOS and Linux this is `ps -axo pid=,ppid=`, padding and all, so callers
+# split it on whitespace. On MSYS it is /proc/<pid>/ppid for every live MSYS
+# process, read without a fork: every child an MSYS shell starts, native
+# executables included, is an MSYS process there, so a shell's children are all
+# in this table. A native Windows process that no MSYS process started is not.
+fm_proc_table() {
+  local dir ppid printed=0
+  if [ "$FM_PROC_OS" != msys ]; then
+    ps -axo pid=,ppid= 2>/dev/null
+    return
+  fi
+  for dir in "$FM_PROC_MSYS_PROC_ROOT"/[0-9]*; do
+    ppid=
+    { read -r ppid < "$dir/ppid"; } 2>/dev/null || true
+    case "$ppid" in ''|*[!0-9]*) continue ;; esac
+    printf '%s %s\n' "${dir##*/}" "$ppid"
+    printed=1
+  done
+  [ "$printed" -eq 1 ]
+}
+
+# fm_proc_from_os_pid <pid>: the pid this shell's table and `kill` address for
+# a process the operating system itself names <pid>, as a native program
+# reports it - herdr's pane shell_pid is one.
+#
+# On macOS and Linux there is one pid space, so this prints <pid>. On MSYS a
+# native program can only know Win32 pids, and the MSYS table, /proc and `kill`
+# are keyed by MSYS pid, so this prints the MSYS pid whose /proc/<pid>/winpid
+# is <pid>, or returns 1 when no MSYS process has that Win32 id - a native
+# process, which /proc does not describe and MSYS `kill` cannot signal. It never
+# reads <pid> as an MSYS pid: the two spaces overlap, and a Win32 pid that
+# happens to name a live MSYS process would otherwise describe, and let a caller
+# signal, an unrelated process.
+fm_proc_from_os_pid() {
+  local want=$1 dir win
+  case "$want" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$FM_PROC_OS" != msys ]; then
+    printf '%s\n' "$want"
+    return 0
+  fi
+  for dir in "$FM_PROC_MSYS_PROC_ROOT"/[0-9]*; do
+    win=
+    { read -r win < "$dir/winpid"; } 2>/dev/null || true
+    [ "$win" = "$want" ] || continue
+    printf '%s\n' "${dir##*/}"
+    return 0
+  done
+  return 1
 }
 
 # fm_pid_alive <pid>: true when the pid names a live process.

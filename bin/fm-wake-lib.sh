@@ -354,8 +354,10 @@ _fm_pid_identity_read() {  # <pid> <with-command|start-only>
   # written under one locale but re-read under the machine's ambient locale, which
   # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
   if [ "$part" = start-only ]; then
+    # fm-invariant: allow ps-o - the identity owner's fallback for a host with no /proc/<pid>/stat; MSYS publishes that file, so Windows takes the /proc branch above
     out=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
   else
+    # fm-invariant: allow ps-o - the identity owner's fallback for a host with no /proc/<pid>/stat; MSYS publishes that file, so Windows takes the /proc branch above
     out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   fi
   [ -n "$out" ] || return 1

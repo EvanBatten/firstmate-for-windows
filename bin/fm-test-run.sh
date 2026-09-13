@@ -75,7 +75,12 @@
 #
 # Per-script machine-parseable markers (stdout):
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
-#   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false>
+#   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false> cases_ok=<n> cases_skipped=<n>
+#
+# cases_ok counts output lines starting "ok -" and cases_skipped counts lines
+# starting "skip:". Each --json scripts[] entry carries path, family,
+# expected_gate_skip, exit, duration_ms, gate_skip, cases_ok and cases_skipped;
+# its summary carries total, failed, skipped_gate and duration_ms.
 #
 # After all scripts (stdout):
 #   FM_TEST_SUMMARY total=<n> failed=<n> skipped_gate=<n> duration_ms=<n>
@@ -89,9 +94,13 @@
 # violates its isolation check. A script that exits 77 declares a gate skip: it
 # ran none of its cases because a stated precondition was absent. That is the
 # only thing a gate skip is. It remains successful and is counted as
-# skipped_gate. Exit 0 is a pass whatever the script printed, so a suite whose
-# first case prints "skip:" and then runs the rest still counts as a pass.
+# skipped_gate. Exit 0 is a pass whatever else the script printed, so a suite
+# whose first case prints "skip:" and then runs the rest still counts as a pass.
 # The category is a declaration by the script, never an inference from output.
+# Output can only refuse a declaration, never grant one, and each refusal is
+# counted as a failure: exit 0 with no "ok -" line ran no cases, exit 77 with
+# no "skip:" line is a tool's status leaking through, and exit 77 after an
+# "ok -" line is a skip declared once cases had already run.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -1225,7 +1234,7 @@ families_for_changed_path() {
       # lane's contract coverage re-runs.
       printf '%s\n' real-herdr-gated
       ;;
-    bin/fm-lint.sh|bin/fm-lint-workflows.sh|bin/fm-install-shellcheck.sh|\
+    bin/fm-lint.sh|bin/fm-lint-workflows.sh|bin/fm-repo-invariants.sh|bin/fm-install-shellcheck.sh|\
     bin/fm-install-actionlint.sh|\
     bin/fm-brief.sh|bin/fm-ensure-agents-md.sh|bin/fm-crew-state.sh|\
     bin/fm-captain-hold.sh|bin/fm-decision-hold.sh|bin/fm-supervision*|bin/fm-transition-lib.sh|\
@@ -1918,7 +1927,7 @@ family_bump() {
 
 record_script_result() {
   local script=$1 rc=$2 duration=$3 out=$4 end_iso=$5
-  local base family expected gate_skip fail_delta cases_ok cases_skipped
+  local base family expected gate_skip fail_delta cases_ok cases_skipped refused
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
@@ -1928,23 +1937,32 @@ record_script_result() {
     rc=1
   fi
 
-  # The gate skip is the exit status and nothing else. A script that exits 0 is
-  # a pass however much it printed, and one that exits 77 is a skip however
-  # little. The real exit is reported so a reader sees the declaration.
+  cases_ok=$(count_output_lines "$out" '^ok -')
+  cases_skipped=$(count_output_lines "$out" '^skip:')
+
+  # The gate skip is the exit status, and only the status can declare one. The
+  # counts can refuse an incoherent record but never promote one: each refusal
+  # below is a failure a reader sees, not a pass or a skip. The real exit is
+  # reported so a reader sees what the script declared.
   gate_skip=false
-  if [ "$rc" -eq "$GATE_SKIP_RC" ]; then
+  refused=
+  if [ "$rc" -eq 0 ] && [ "$cases_ok" -eq 0 ]; then
+    refused="ran no cases and exited 0; a suite that cannot run declares it with exit 77 (fm_test_gate_skip)"
+  elif [ "$rc" -eq "$GATE_SKIP_RC" ] && [ "$cases_skipped" -eq 0 ]; then
+    refused="exited 77 without a skip: line; a tool's status leaked as a gate skip"
+  elif [ "$rc" -eq "$GATE_SKIP_RC" ] && [ "$cases_ok" -gt 0 ]; then
+    refused="declared a gate skip after running $cases_ok cases"
+  elif [ "$rc" -eq "$GATE_SKIP_RC" ]; then
     gate_skip=true
     SKIPPED_GATE=$((SKIPPED_GATE + 1))
   fi
-
-  cases_ok=$(count_output_lines "$out" '^ok -')
-  cases_skipped=$(count_output_lines "$out" '^skip:')
+  [ -z "$refused" ] || log "$script $refused"
 
   printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s cases_ok=%s cases_skipped=%s\n' \
     "$end_iso" "$script" "$rc" "$duration" "$gate_skip" "$cases_ok" "$cases_skipped"
 
   fail_delta=0
-  if [ "$rc" -ne 0 ] && [ "$gate_skip" != true ]; then
+  if [ -n "$refused" ] || { [ "$rc" -ne 0 ] && [ "$gate_skip" != true ]; }; then
     FAILED=$((FAILED + 1))
     fail_delta=1
     AGG_RC=1

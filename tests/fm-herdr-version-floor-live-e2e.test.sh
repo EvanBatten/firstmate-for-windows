@@ -122,7 +122,7 @@ while IFS=$'\t' read -r TAG VERSION_PREFIX EXPECTED MACOS_AARCH64_DIGEST MACOS_X
     "https://github.com/ogulcancelik/herdr/releases/download/$TAG/$ASSET"; then
     fail "could not download the pinned Herdr $TAG $ASSET asset; the floor mapping is unverified"
   fi
-  GOT_DIGEST=$(fm_test_sha256 "$DIR/herdr")
+  GOT_DIGEST=$(fm_test_sha256 "$DIR/herdr") || fail "could not hash the downloaded Herdr $TAG $ASSET asset"
   [ "$GOT_DIGEST" = "$DIGEST" ] \
     || fail "Herdr $TAG $ASSET digest changed (expected $DIGEST, got $GOT_DIGEST); re-measure the floor mapping before trusting it"
   chmod +x "$DIR/herdr"

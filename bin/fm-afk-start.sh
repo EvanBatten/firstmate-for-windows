@@ -89,6 +89,7 @@ daemon_pid_matches() {
     fm_pid_identity_equal "$current" "$identity"
     return
   fi
+  # fm-invariant: allow ps-o - a daemon lock that predates the recorded pid identity; an empty answer is no match, which is the safe branch
   command=$(ps -p "$pid" -o command= 2>/dev/null || true)
   case "$command" in
     *"$FM_AFK_DAEMON"*|*"fm-supervise-daemon.sh"*) return 0 ;;

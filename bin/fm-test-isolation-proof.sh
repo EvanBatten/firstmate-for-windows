@@ -47,9 +47,11 @@
 #   FM_ISOLATION_SUMMARY total=<n> failed=<n> concurrency=<n> duration_ms=<n>
 #
 # Exit status is the aggregate of candidate exits: non-zero if any candidate
-# fails, gate-skips (exits 77), if isolation checks fail, or if the candidate
-# set is empty. A gate skip names the pool, candidate,
-# and missing prerequisite and cannot admit concurrency. A script that fails
+# fails, gate-skips (exits 77), exits 0 having printed no "ok -" line, if
+# isolation checks fail, or if the candidate set is empty. A gate skip names the
+# pool, candidate, and missing prerequisite and cannot admit concurrency, and a
+# candidate that ran no cases proves no concurrency either, the same rule
+# bin/fm-test-run.sh applies to a script. A script that fails
 # only under concurrency must be removed from the candidate set and investigated;
 # this harness never retries a failure into green.
 set -eu
@@ -433,6 +435,9 @@ wait_one_slot() {
     gate_skip=$(first_skip_line "$work/out/output")
     rc=1
     log "pool $POOL candidate gate-skipped without proving concurrency: $script: $gate_skip"
+  elif [ "$rc" -eq 0 ] && ! grep -q '^ok -' "$work/out/output" 2>/dev/null; then
+    rc=1
+    log "pool $POOL candidate ran no cases and exited 0 without proving concurrency: $script"
   fi
   printf 'FM_ISOLATION_CANDIDATE_END %s %s exit=%s duration_ms=%s worker=%s\n' \
     "$(now_iso)" "$script" "$rc" "$duration" "$idx"

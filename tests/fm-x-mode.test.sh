@@ -688,9 +688,11 @@ test_bootstrap_activates_on_env_token() {
   [ "$inherited" = "30" ] \
     || fail "sourcing the cadence config must export FM_CHECK_INTERVAL=30 to a child"
   # Idempotent: re-running changes nothing and does not duplicate the shim.
-  sum1=$(cat "$home/state/x-watch.check.sh" "$home/config/x-mode.env" | fm_test_sha256_stdin)
+  sum1=$(cat "$home/state/x-watch.check.sh" "$home/config/x-mode.env" | fm_test_sha256_stdin) \
+    || fail "could not hash the X-mode shim and config"
   FM_HOME="$home" "$ROOT/bin/fm-bootstrap.sh" >/dev/null 2>&1
-  sum2=$(cat "$home/state/x-watch.check.sh" "$home/config/x-mode.env" | fm_test_sha256_stdin)
+  sum2=$(cat "$home/state/x-watch.check.sh" "$home/config/x-mode.env" | fm_test_sha256_stdin) \
+    || fail "could not hash the X-mode shim and config"
   [ "$sum1" = "$sum2" ] || fail "bootstrap X-mode setup must be idempotent"
   n=$(find "$home/state" -maxdepth 1 -name 'x-watch*' | wc -l | tr -d ' ')
   [ "$n" = "1" ] || fail "bootstrap must not duplicate the shim (found $n)"

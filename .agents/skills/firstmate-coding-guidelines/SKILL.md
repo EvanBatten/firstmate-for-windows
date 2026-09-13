@@ -124,6 +124,7 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 - When a task names a specific tool, implement the work with that tool, or explicitly flag the substitution and its new dependency footprint for review before shipping.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
 - Tests must exercise behavior through an executable or public interface and must never assert implementation-source bytes, including through parsers, regexes, snapshots, or indirect wrappers.
+- A check on the repository's own source - a spelling that must stay with one owner, a shape no file may take - is a `bin/` script that `bin/fm-lint.sh`'s default path runs, and its test in `tests/` drives that script against fixture trees, never against the tracked tree.
 - A maintainer-verification record under `docs/verification/` records active empirical facts, not assumptions or task chronology.
 - Include the date, version, exact commands run, and exact output needed to support the current guarantee.
 - Keep incident chronology and delivery evidence in private task reports or PR evidence unless a concise rationale is required to maintain a current safety boundary.

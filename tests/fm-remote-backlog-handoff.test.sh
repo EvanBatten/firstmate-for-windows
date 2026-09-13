@@ -144,7 +144,7 @@ handoff_env() {
 
 printf 'complete handoff payload\n' > "$TMP_ROOT/complete-payload"
 complete_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/complete-payload" | tr -d ' ')
-complete_hash=$(fm_test_sha256 "$TMP_ROOT/complete-payload")
+complete_hash=$(fm_test_sha256 "$TMP_ROOT/complete-payload") || fail "could not hash the complete payload"
 if printf 'complete' | FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
   put state/handoff/integrity.outbox.md 1024 "$complete_bytes" "$complete_hash" 1 >/dev/null 2>&1; then
   fail "confined put published a truncated payload"
@@ -155,7 +155,7 @@ FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
   < "$TMP_ROOT/complete-payload" >/dev/null
 printf 'stale handoff payload\n' > "$TMP_ROOT/stale-payload"
 stale_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/stale-payload" | tr -d ' ')
-stale_hash=$(fm_test_sha256 "$TMP_ROOT/stale-payload")
+stale_hash=$(fm_test_sha256 "$TMP_ROOT/stale-payload") || fail "could not hash the stale payload"
 if FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
   put state/handoff/integrity.outbox.md 1024 "$stale_bytes" "$stale_hash" 1 \
   < "$TMP_ROOT/stale-payload" >/dev/null 2>&1; then
@@ -169,7 +169,7 @@ rm -f "$REMOTE/state/handoff/integrity.outbox.md" "$REMOTE/state/handoff/.integr
 mkdir -p "$REMOTE/state/handoff" "$TMP_ROOT/external-handoff"
 printf 'race-safe handoff\n' > "$TMP_ROOT/race-payload"
 race_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/race-payload" | tr -d ' ')
-race_hash=$(fm_test_sha256 "$TMP_ROOT/race-payload")
+race_hash=$(fm_test_sha256 "$TMP_ROOT/race-payload") || fail "could not hash the race payload"
 (
   set -o pipefail
   (

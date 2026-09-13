@@ -36,6 +36,10 @@ make_posix_ps() {  # <fakebin>
 #!/usr/bin/env bash
 set -u
 { printf 'ps'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >> "${FM_PS_LOG:-/dev/null}"
+if [ "$*" = "-axo pid=,ppid=" ]; then
+  printf '%s\n' '  600   700' '  700     1'
+  exit 0
+fi
 field= pid=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -55,6 +59,7 @@ case "$pid:$field" in
   600:args=) printf '%s\n' 'bash /repo/bin/fm-harness.sh' ;;
   600:ppid=) printf '%s\n' '  700 ' ;;
   600:pgid=) printf '%s\n' ' 600  ' ;;
+  600:stat=) printf '%s\n' ' Ss+ ' ;;
   *:comm=) printf '%s\n' bash ;;
   *:args=) printf '%s\n' bash ;;
   *:ppid=) printf '%s\n' 1 ;;
@@ -144,6 +149,10 @@ make_fake_proc() {  # <dir>
   printf '%s' 90601 > "$root/601/winpid"
   printf '%s' 601 > "$root/601/pgid"
   printf '/usr/bin/bash\0--login\0' > "$root/601/cmdline"
+  # Cygwin's stat line: the state is the field after the parenthesised name,
+  # and a name may itself hold ") ", so only the LAST one ends it.
+  printf '%s\n' '600 (bash) S 601 600 600 0 -1 0' > "$root/600/stat"
+  printf '%s\n' '601 (odd) name) T 1 601 601 0 -1 0' > "$root/601/stat"
   # A process whose pgid file exists but holds no number: the VALUE, not the
   # file's presence, has to decide the answer.
   mkdir -p "$root/602"
@@ -228,6 +237,32 @@ test_posix_pgid_runs_todays_ps_call() {
   [ ! -s "$dir/pgid.log" ] \
     || fail "a refused pid must run no ps at all: $(cat "$dir/pgid.log")"
   pass "proc-lib: fm_proc_pgid is today's exact ps call and refuses a non-pid without forking"
+}
+
+test_posix_state_table_and_os_pid_run_todays_ps_calls() {
+  local dir fakebin got
+  dir="$TMP_ROOT/posix-state"
+  fakebin=$(fm_fakebin "$dir")
+  make_posix_ps "$fakebin"
+  # bin/backends/herdr.sh's idle-shell proof matches the state on its first
+  # letter, so the padding real ps prints has to be gone.
+  got=$(FM_PS_LOG="$dir/state.log" lib_eval "$fakebin" 'fm_proc_state 600')
+  [ "$got" = Ss+ ] || fail "posix fm_proc_state returned '$got', expected the whitespace stripped"
+  [ "$(grep -c . "$dir/state.log")" = 1 ] \
+    || fail "fm_proc_state must run exactly one ps: $(cat "$dir/state.log")"
+  assert_grep 'ps -o stat= -p 600' "$dir/state.log" "fm_proc_state must run the proof's ps invocation"
+  got=$(FM_PS_LOG="$dir/table.log" lib_eval "$fakebin" 'fm_proc_table' | awk '{ printf "%s:%s ", $1, $2 }')
+  [ "$got" = '600:700 700:1 ' ] || fail "posix fm_proc_table returned '$got'"
+  assert_grep 'ps -axo pid=,ppid=' "$dir/table.log" "fm_proc_table must run the proof's ps invocation"
+  # One pid space: the pid a native program reports is the pid this shell uses.
+  got=$(FM_PS_LOG="$dir/os.log" lib_eval "$fakebin" 'fm_proc_from_os_pid 600')
+  [ "$got" = 600 ] || fail "posix fm_proc_from_os_pid must print its argument, got '$got'"
+  [ ! -s "$dir/os.log" ] || fail "posix fm_proc_from_os_pid must run no ps: $(cat "$dir/os.log")"
+  lib_eval "$fakebin" 'fm_proc_state abc >/dev/null' \
+    && fail "fm_proc_state must refuse a non-numeric pid"
+  lib_eval "$fakebin" 'fm_proc_from_os_pid "" >/dev/null' \
+    && fail "fm_proc_from_os_pid must refuse an empty pid"
+  pass "proc-lib: fm_proc_state and fm_proc_table are the proof's ps calls, and one pid space translates to itself"
 }
 
 test_posix_comm_propagates_a_dead_pid_as_nonzero() {
@@ -532,8 +567,39 @@ test_msys_pgid_reads_proc_and_forks_nothing() {
   pass "proc-lib: MSYS fm_proc_pgid reads /proc/<pid>/pgid and validates it, with no ps and no pwsh"
 }
 
+test_msys_state_table_and_os_pid_read_proc_by_msys_pid() {
+  local dir fakebin got
+  dir="$TMP_ROOT/msys-state"
+  fakebin=$(msys_env "$dir")
+  got=$(FM_PS_LOG="$dir/ps.log" FM_PWSH_LOG="$dir/pwsh.log" FM_PROC_MSYS_PROC_ROOT="$dir/proc" \
+    lib_eval "$fakebin" 'fm_proc_state 600; fm_proc_state 601' | tr '\n' ' ')
+  [ "$got" = 'S T ' ] || fail "msys fm_proc_state returned '$got', expected field 3 after the last ') '"
+  # 602 has no ppid file and is no row; every other /proc entry is one.
+  got=$(FM_PS_LOG="$dir/ps.log" FM_PWSH_LOG="$dir/pwsh.log" FM_PROC_MSYS_PROC_ROOT="$dir/proc" \
+    lib_eval "$fakebin" 'fm_proc_table' | LC_ALL=C sort | tr '\n' ' ')
+  [ "$got" = '600 601 601 1 ' ] || fail "msys fm_proc_table returned '$got'"
+  # herdr reports the shell by Win32 pid; /proc and kill know it by MSYS pid.
+  got=$(FM_PS_LOG="$dir/ps.log" FM_PWSH_LOG="$dir/pwsh.log" FM_PROC_MSYS_PROC_ROOT="$dir/proc" \
+    lib_eval "$fakebin" 'fm_proc_from_os_pid 90601')
+  [ "$got" = 601 ] || fail "msys fm_proc_from_os_pid 90601 returned '$got', expected the MSYS pid 601"
+  # 600 names a live MSYS process but no MSYS process has Win32 pid 600, so
+  # reading the input as an MSYS pid would describe an unrelated process.
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_from_os_pid 600 >/dev/null' \
+    && fail "fm_proc_from_os_pid must never read a Win32 pid as an MSYS pid"
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_from_os_pid 90777 >/dev/null' \
+    && fail "a native Windows process no MSYS process is must have no MSYS pid"
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_state 602 >/dev/null' \
+    && fail "a /proc entry with no stat file must make fm_proc_state fail"
+  FM_PROC_MSYS_PROC_ROOT="$dir/proc" lib_eval "$fakebin" 'fm_proc_state 604 >/dev/null' \
+    && fail "an absent /proc entry must make fm_proc_state fail"
+  [ ! -s "$dir/ps.log" ] || fail "the MSYS reads must run no ps: $(cat "$dir/ps.log")"
+  [ ! -s "$dir/pwsh.log" ] || fail "the MSYS reads must run no pwsh: $(cat "$dir/pwsh.log")"
+  pass "proc-lib: MSYS state, table and Win32-pid translation read /proc by MSYS pid, with no ps and no pwsh"
+}
+
 test_posix_helpers_run_todays_ps_calls
 test_posix_pgid_runs_todays_ps_call
+test_posix_state_table_and_os_pid_run_todays_ps_calls
 test_posix_comm_propagates_a_dead_pid_as_nonzero
 test_posix_prime_costs_nothing_and_memoises_nothing
 test_posix_chain_walks_and_stops_at_init
@@ -548,3 +614,4 @@ test_msys_prime_is_idempotent_for_a_memoised_pid
 test_msys_chain_terminates_cleanly_without_a_working_pwsh
 test_msys_liveness_falls_back_to_the_winpid_column
 test_msys_pgid_reads_proc_and_forks_nothing
+test_msys_state_table_and_os_pid_read_proc_by_msys_pid

@@ -12,7 +12,9 @@
 # production shell is already a canonical, source-aware root of this same run.
 # The default (no explicit-path) path also runs bin/fm-lint-workflows.sh so a
 # malformed GitHub workflow, including a self-broken ci.yml, fails locally
-# before merge instead of only failing to run as CI.
+# before merge instead of only failing to run as CI, and runs the repository
+# invariants in bin/fm-repo-invariants.sh over the whole tree, even when the
+# ShellCheck set is only the changed files.
 #
 # With no explicit paths, the file set depends on context:
 #   - In CI (GITHUB_ACTIONS=true or CI=true), on the main branch, or when no
@@ -115,11 +117,16 @@ fm_lint_usage() {
   ' "$SELF"
 }
 
-# Default no-args lint also validates GitHub workflows. Explicit paths stay a
-# ShellCheck-only override so callers can target one shell root.
+# Default no-args lint also validates GitHub workflows and the repository
+# invariants. Explicit paths stay a ShellCheck-only override so callers can
+# target one shell root. Both checks always run, so one failure cannot hide the
+# other.
 fm_lint_run_workflows() {
+  local rc=0
   [ "$EXPLICIT_PATHS" -eq 0 ] || return 0
-  "$SELF_DIR/fm-lint-workflows.sh"
+  "$SELF_DIR/fm-repo-invariants.sh" || rc=$?
+  "$SELF_DIR/fm-lint-workflows.sh" || rc=$?
+  return "$rc"
 }
 
 JOBS=${FM_LINT_JOBS:-2}
@@ -386,6 +393,7 @@ fm_lint_load_average() {
 }
 
 fm_lint_aggregate_cpu() {
+  # fm-invariant: allow ps-o - a system-load probe, not an identity; it fails open to zero
   ps -A -o %cpu= 2>/dev/null | awk '{sum += $1} END {printf "%.2f", sum + 0}'
 }
 

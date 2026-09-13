@@ -676,13 +676,13 @@ install_pi_watch_extension_fixture() {
 
 write_pi_watch_loaded_marker() {
   local home=$1 root=$2 pid=$3 version
-  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-pi-watch.ts")
+  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-pi-watch.ts") || fail "could not hash the Pi watch extension"
   printf '%s\n%s\n' "$version" "$pid" > "$home/state/.pi-watch-extension-loaded"
 }
 
 write_pi_turnend_loaded_marker() {
   local home=$1 root=$2 pid=$3 version
-  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-turnend-guard.ts")
+  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-turnend-guard.ts") || fail "could not hash the Pi turn-end extension"
   printf '%s\n%s\n' "$version" "$pid" > "$home/state/.pi-turnend-extension-loaded"
 }
 
@@ -2034,7 +2034,7 @@ EOF
   assert_contains "$startup" "SESSION START - $home" "true startup did not run the full digest"
   assert_present "$home/state/.session-start-agents-baseline" "true startup did not record an AGENTS baseline"
   baseline=$(cat "$home/state/.session-start-agents-baseline")
-  expected_hash=$(hash_file_for_test "$root/AGENTS.md")
+  expected_hash=$(hash_file_for_test "$root/AGENTS.md") || fail "could not hash AGENTS.md"
   [ "$(printf '%s\n' "$baseline" | sed -n '2p')" = "$expected_hash" ] \
     || fail "true startup baseline did not record the original AGENTS hash: $baseline"
 
@@ -2091,20 +2091,21 @@ EOF
   assert_absent "$home/state/.session-start-agents-baseline" \
     "a rebuild fabricated a baseline instead of preserving true-start-only ownership"
 
-  printf 'wrong-session\n%s\n' "$(hash_file_for_test "$root/AGENTS.md")" > "$home/state/.session-start-agents-baseline"
+  expected_hash=$(hash_file_for_test "$root/AGENTS.md") || fail "could not hash AGENTS.md"
+  printf 'wrong-session\n%s\n' "$expected_hash" > "$home/state/.session-start-agents-baseline"
   compact_first=$(FM_FAKE_HARNESS=pi run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH" --reemit --source compact)
   assert_contains "$compact_first" "FIRSTMATE_TEST_INSTRUCTION=updated" \
     "a wrong-session baseline did not trigger replacement instructions"
   baseline_after=$(cat "$home/state/.session-start-agents-baseline")
   [ "$baseline_after" = "wrong-session
-$(hash_file_for_test "$root/AGENTS.md")" ] \
+$expected_hash" ] \
     || fail "a wrong-session baseline was rewritten during a rebuild"
 
   pass "true-start AGENTS baselines stay immutable while every drifted Pi compact re-emits the current contract"
 }
 
 test_read_only_pi_compact_refreshes_against_its_own_session_identity() {
-  local rec root home fakebin holder_pid out baseline_before completion_before
+  local rec root home fakebin holder_pid out baseline_before completion_before agents_hash
   rec=$(new_world agents-refresh-read-only)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -2116,7 +2117,8 @@ EOF
 
   sleep 300 &
   holder_pid=$!
-  printf '%s\n%s\n' "$holder_pid" "$(hash_file_for_test "$root/AGENTS.md")" \
+  agents_hash=$(hash_file_for_test "$root/AGENTS.md") || fail "could not hash AGENTS.md"
+  printf '%s\n%s\n' "$holder_pid" "$agents_hash" \
     > "$home/state/.session-start-agents-baseline"
   printf '%s\n' "$holder_pid" > "$home/state/.lock"
   baseline_before=$(cat "$home/state/.session-start-agents-baseline")
@@ -2444,7 +2446,7 @@ EOF
   install_pi_turnend_extension_fixture "$root"
   install_pi_watch_extension_fixture "$root"
   marker="$home/state/.pi-watch-extension-loaded"
-  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-pi-watch.ts")
+  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-pi-watch.ts") || fail "could not hash the Pi watch extension"
   printf '%s\n999999\n' "$version" > "$marker"
   write_pi_turnend_loaded_marker "$home" "$root" "$holder_pid"
 

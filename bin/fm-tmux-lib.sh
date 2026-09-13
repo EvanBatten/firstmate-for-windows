@@ -100,10 +100,12 @@ fm_tmux_composer_caps() {
 # Prints "pi<TAB>idle" or "pi<TAB>working"; exits 1 when the pane is not a
 # live pi.
 fm_tmux_composer_identity() {  # <target>
-  local target=$1 tty pgid tpgid comm found=0 status
+  local target=$1 tty pgid tpgid comm found=0 status rows
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || tty=
   case "$tty" in
     /dev/*)
+      # fm-invariant: allow ps-o - tmux foreground process groups by pane tty; tmux panes only, and a tty or process group has no MSYS meaning
+      rows=$(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
       while read -r _ pgid tpgid comm; do
         [ -n "$comm" ] || continue
         [ "$pgid" = "$tpgid" ] || continue
@@ -111,7 +113,7 @@ fm_tmux_composer_identity() {  # <target>
           pi|pi-signed|pi-launcher|Pi) found=1 ;;
         esac
       done <<EOF
-$(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
+$rows
 EOF
       ;;
   esac
@@ -173,18 +175,21 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
 # matches fm_tmux_composer_identity, so a pane whose agent exited to a shell has
 # no Cursor foreground process and gets no reclassification.
 fm_tmux_pane_is_cursor() {  # <target>
-  local target=$1 tty pid pgid tpgid comm args argv0
+  local target=$1 tty pid pgid tpgid comm args argv0 rows
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 1
   case "$tty" in /dev/*) ;; *) return 1 ;; esac
+  # fm-invariant: allow ps-o - tmux foreground process groups by pane tty; tmux panes only, and a tty or process group has no MSYS meaning
+  rows=$(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
   while read -r pid pgid tpgid comm; do
     [ -n "$comm" ] || continue
     [ "$pgid" = "$tpgid" ] || continue
+    # fm-invariant: allow ps-o - a tmux foreground process's argv[0]; tmux panes only, which have no MSYS meaning
     args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || args=
     args=${args#"${args%%[![:space:]]*}"}
     argv0=${args%%[[:space:]]*}
     fm_cursor_process_matches "$comm" '' "$argv0" && return 0
   done <<EOF
-$(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
+$rows
 EOF
   return 1
 }

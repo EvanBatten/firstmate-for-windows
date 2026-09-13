@@ -56,7 +56,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
-  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, and pinned actionlint workflow lint), and both CI and the no-mistakes pre-push gate run its full-analysis default with no explicit paths.
+  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, pinned actionlint workflow lint, and the repository invariants in `bin/fm-repo-invariants.sh`), and both CI and the no-mistakes pre-push gate run its full-analysis default with no explicit paths.
   Its header and `--help` output own the exact local lint modes and flags.
   A malformed `.github/workflows/*.yml`, including a self-broken `ci.yml`, fails that local lint path before merge because a broken workflow cannot report its own breakage.
   It pins one exact shellcheck version and one exact actionlint version and refuses to run under any other.
@@ -131,7 +131,7 @@ When the awaited event can land while `bin/fm-watch.sh` is still starting or in 
 Tests that need a real optional backend or an explicit opt-in (real herdr/zellij/cmux smoke tests, the live Pi regression) skip themselves and print the tool or environment gate needed to enable them, so the portable suite remains safe on machines without those tools.
 A suite that runs none of its cases says so with `fm_test_gate_skip "<reason>"` from `tests/lib.sh`, which prints the `skip:` line and exits 77; a suite that does not source the library prints its own line and exits 77 directly.
 Exit 77 is the only thing `bin/fm-test-run.sh` counts as a gate skip, so a single case that cannot run prints `skip: <reason>` and returns 0 instead: the suite ran, and it is counted green.
-`tests/fm-test-run.test.sh` fails on any gate that prints `skip:` and then exits 0, because such a gate is published as a pass that ran nothing.
+The runner counts a script as failed when it exits 0 without printing an `ok -` line, exits 77 without a `skip:` line, or exits 77 after an `ok -` line, so a gate that still exits 0 turns red instead of passing having run nothing.
 The [Herdr backend guide](docs/herdr-backend.md#destructive-lab-safety) owns the lane's isolation boundary, while [runtime backend verification](docs/verification/runtime-backends.md#herdr) owns active empirical evidence; live harness credential tests remain opt-in.
 
 ## Questions

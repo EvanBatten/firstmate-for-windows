@@ -105,10 +105,28 @@ state_snapshot() {
         printf 'link %s %s\n' "$file" "$(readlink "$file")"
       else
         printf 'file %s %s ' "$file" "$(file_mode "$file")"
-        fm_test_sha256 "$file"
+        fm_test_sha256 "$file" || exit 1
       fi
     done
   )
+}
+
+# expect_snapshot_unchanged <before> <message> <snapshot-command>...: a fresh
+# snapshot equals <before>. A snapshot whose digest could not be taken fails the
+# case instead, so two snapshots that hashed nothing can never compare equal.
+expect_snapshot_unchanged() {
+  local before=$1 message=$2 after
+  shift 2
+  after=$("$@") || fail "could not snapshot $*"
+  [ "$after" = "$before" ] || fail "$message"
+}
+
+# expect_digest_unchanged <file> <before> <message>: the file's digest still
+# equals <before>, and a digest that could not be taken fails the case.
+expect_digest_unchanged() {
+  local file=$1 before=$2 message=$3 after
+  after=$(fm_test_sha256 "$file") || fail "could not hash $file"
+  [ "$after" = "$before" ] || fail "$message"
 }
 
 make_case() {
@@ -398,53 +416,53 @@ test_invalid_entrypoints_have_zero_side_effects() {
   chmod 0600 "$dir/home/state/task-a.check.sh" "$dir/home/state/task-a.pr-poll"
 
   for value in "${INVALID_URLS[@]}"; do
-    before=$(state_snapshot "$dir/home/state")
+    before=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     set +e
     run_check_entry "$dir" task-a "$value" > "$dir/stdout" 2> "$dir/stderr"
     rc=$?
     set -e
     [ "$rc" -ne 0 ] || fail "direct entrypoint accepted invalid URL"
     [ "$(cat "$dir/stderr")" = 'error: invalid PR check request' ] || fail "direct invalid URL diagnostic was not fixed"
-    after=$(state_snapshot "$dir/home/state")
+    after=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     [ "$after" = "$before" ] || fail "direct invalid URL changed prior state"
   done
 
   for value in "${INVALID_IDS[@]}"; do
-    before=$(state_snapshot "$dir/home/state")
+    before=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     set +e
     run_check_entry "$dir" "$value" https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
     rc=$?
     set -e
     [ "$rc" -ne 0 ] || fail "direct entrypoint accepted invalid task ID"
-    after=$(state_snapshot "$dir/home/state")
+    after=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     [ "$after" = "$before" ] || fail "invalid task ID changed state or traversed a path"
   done
 
   for value in "${INVALID_URLS[@]}"; do
-    before=$(state_snapshot "$dir/home/state")
+    before=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     set +e
     run_merge_entry "$dir" task-a "$value" > "$dir/stdout" 2> "$dir/stderr"
     rc=$?
     set -e
     [ "$rc" -ne 0 ] || fail "merge entrypoint accepted invalid URL"
     [ "$(cat "$dir/stderr")" = 'error: invalid PR merge request' ] || fail "merge invalid URL diagnostic was not fixed"
-    after=$(state_snapshot "$dir/home/state")
+    after=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     [ "$after" = "$before" ] || fail "merge invalid URL changed prior state"
   done
 
   for value in "${INVALID_IDS[@]}"; do
-    before=$(state_snapshot "$dir/home/state")
+    before=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     set +e
     run_merge_entry "$dir" "$value" https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
     rc=$?
     set -e
     [ "$rc" -ne 0 ] || fail "merge entrypoint accepted invalid task ID"
-    after=$(state_snapshot "$dir/home/state")
+    after=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     [ "$after" = "$before" ] || fail "merge invalid task ID changed state"
   done
 
   for value in "${UNSAFE_LIFECYCLE_IDS[@]}"; do
-    before=$(state_snapshot "$dir/home/state")
+    before=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     set +e
     FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/root" FM_TEST_GUARD_LOG="$dir/guard.log" \
       "$TEARDOWN" "$value" --force > "$dir/stdout" 2> "$dir/stderr"
@@ -453,7 +471,7 @@ test_invalid_entrypoints_have_zero_side_effects() {
     [ "$rc" -ne 0 ] || fail "teardown accepted invalid task ID"
     [ "$(cat "$dir/stderr")" = 'error: invalid teardown request' ] \
       || fail "teardown invalid task ID diagnostic was not fixed"
-    after=$(state_snapshot "$dir/home/state")
+    after=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
     [ "$after" = "$before" ] || fail "teardown invalid task ID changed state"
   done
 
@@ -670,13 +688,13 @@ test_rejected_metacharacter_bytes_are_inert() {
 
   FM_TEST_GH_STATE=OPEN run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>/dev/null \
     || fail "could not seed a prior valid static poll"
-  before=$(state_snapshot "$dir/home/state")
+  before=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
   set +e
   run_check_entry "$dir" task-a "${families[0]}" >/dev/null 2>/dev/null
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "rejected replacement was accepted"
-  after=$(state_snapshot "$dir/home/state")
+  after=$(state_snapshot "$dir/home/state") || fail "could not snapshot $dir/home/state"
   [ "$after" = "$before" ] || fail "rejected replacement changed a prior valid static poll"
   pass "rejected metacharacter bytes remain inert at generation and watcher time"
 }
@@ -1443,7 +1461,7 @@ poll_artifact_snapshot() {
       printf 'link %s %s\n' "$suffix" "$(readlink "$path")"
     elif [ -f "$path" ]; then
       printf 'file %s %s ' "$suffix" "$(file_mode "$path")"
-      fm_test_sha256 "$path"
+      fm_test_sha256 "$path" || return 1
     else
       printf 'other %s\n' "$suffix"
     fi
@@ -1778,10 +1796,10 @@ test_persistent_secondmate_retirement_is_poll_only() {
   printf 'working: persistent endpoint remains healthy\n' > "$state/domain.status"
   printf -- '- domain | scope: test | home: %s\n' "$dir/secondmate-home" > "$dir/home/data/secondmates.md"
   printf 'endpoint-alive\n' > "$dir/endpoint-sentinel"
-  meta_before=$(fm_test_sha256 "$state/domain.meta")
-  status_before=$(fm_test_sha256 "$state/domain.status")
-  registry_before=$(fm_test_sha256 "$dir/home/data/secondmates.md")
-  endpoint_before=$(fm_test_sha256 "$dir/endpoint-sentinel")
+  meta_before=$(fm_test_sha256 "$state/domain.meta") || fail "could not hash $state/domain.meta"
+  status_before=$(fm_test_sha256 "$state/domain.status") || fail "could not hash $state/domain.status"
+  registry_before=$(fm_test_sha256 "$dir/home/data/secondmates.md") || fail "could not hash $dir/home/data/secondmates.md"
+  endpoint_before=$(fm_test_sha256 "$dir/endpoint-sentinel") || fail "could not hash $dir/endpoint-sentinel"
   seed_canonical_poll "$dir" domain https://github.com/o/r/pull/2
 
   set +e
@@ -1790,10 +1808,10 @@ test_persistent_secondmate_retirement_is_poll_only() {
   set -e
   [ "$rc" -eq 0 ] || fail "persistent secondmate merged watcher failed: $(cat "$dir/watch.err")"
   assert_poll_absent "$state" domain
-  [ "$(fm_test_sha256 "$state/domain.meta")" = "$meta_before" ] || fail "retirement changed secondmate metadata"
-  [ "$(fm_test_sha256 "$state/domain.status")" = "$status_before" ] || fail "retirement changed secondmate status"
-  [ "$(fm_test_sha256 "$dir/home/data/secondmates.md")" = "$registry_before" ] || fail "retirement changed secondmate registry"
-  [ "$(fm_test_sha256 "$dir/endpoint-sentinel")" = "$endpoint_before" ] || fail "retirement changed secondmate endpoint evidence"
+  expect_digest_unchanged "$state/domain.meta" "$meta_before" "retirement changed secondmate metadata"
+  expect_digest_unchanged "$state/domain.status" "$status_before" "retirement changed secondmate status"
+  expect_digest_unchanged "$dir/home/data/secondmates.md" "$registry_before" "retirement changed secondmate registry"
+  expect_digest_unchanged "$dir/endpoint-sentinel" "$endpoint_before" "retirement changed secondmate endpoint evidence"
   [ -d "$dir/secondmate-home" ] || fail "retirement removed the persistent secondmate home"
   pass "merged poll retirement preserves every persistent secondmate lifecycle artifact"
 }
@@ -1932,7 +1950,7 @@ test_external_merge_transition_retires_only_terminal_poll() {
   write_poll_meta "$state" task-a https://github.com/o/r/pull/19
   seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/19
   add_stop_custom_check "$dir"
-  before=$(poll_artifact_snapshot "$state" task-a)
+  before=$(poll_artifact_snapshot "$state" task-a) || fail "could not snapshot $state task-a"
 
   for label in open-green open-red closed-unmerged forge-error malformed; do
     rm -f "$state/.last-check"
@@ -1955,7 +1973,7 @@ test_external_merge_transition_retires_only_terminal_poll() {
     set -e
     [ "$rc" -eq 0 ] || fail "$label watcher cycle failed: $(cat "$dir/$label.err")"
     case "$(cat "$dir/$label.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "$label did not reach the control check" ;; esac
-    [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "$label changed the armed poll"
+    expect_snapshot_unchanged "$before" "$label changed the armed poll" poll_artifact_snapshot "$state" task-a
     ack_watcher_cycle "$state" || fail "$label control wake acknowledgement failed"
   done
 
@@ -1980,10 +1998,10 @@ test_retirement_refuses_replacement_and_nonterminal_results() {
   fm_pr_poll_snapshot_capture "$state" task-a "$POLL" || fail "could not snapshot replacement fixture"
   write_poll_meta "$state" task-a https://github.com/o/r/pull/7
   seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/7
-  before=$(state_snapshot "$state")
+  before=$(state_snapshot "$state") || fail "could not snapshot $state"
   fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
     && fail "stale terminal snapshot retired a replacement poll"
-  [ "$(state_snapshot "$state")" = "$before" ] || fail "snapshot mismatch changed replacement artifacts"
+  expect_snapshot_unchanged "$before" "snapshot mismatch changed replacement artifacts" state_snapshot "$state"
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "replacement poll was not left canonical"
 
   fm_pr_poll_snapshot_capture "$state" task-a "$POLL" || fail "could not snapshot nonterminal fixture"
@@ -1991,13 +2009,13 @@ test_retirement_refuses_replacement_and_nonterminal_results() {
     fm_pr_poll_retirement_publish "$state" task-a "$POLL" "$result" \
       && fail "nonterminal result '$result' received retirement authority"
   done
-  [ "$(state_snapshot "$state")" = "$before" ] || fail "nonterminal result changed canonical artifacts"
+  expect_snapshot_unchanged "$before" "nonterminal result changed canonical artifacts" state_snapshot "$state"
 
   printf '# tamper\n' >> "$state/task-a.check.sh"
-  before=$(state_snapshot "$state")
+  before=$(state_snapshot "$state") || fail "could not snapshot $state"
   fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged \
     && fail "tampered check received a retirement receipt"
-  [ "$(state_snapshot "$state")" = "$before" ] || fail "tampered retirement attempt changed state"
+  expect_snapshot_unchanged "$before" "tampered retirement attempt changed state" state_snapshot "$state"
 
   dir=$(make_case retirement-rearm-race)
   state="$dir/home/state"
@@ -2007,16 +2025,16 @@ test_retirement_refuses_replacement_and_nonterminal_results() {
   fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged || fail "could not publish rearm-race receipt"
   write_poll_meta "$state" task-a https://github.com/o/r/pull/21
   seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/21
-  replacement_check=$(fm_test_sha256 "$state/task-a.check.sh")
-  replacement_data=$(fm_test_sha256 "$state/task-a.pr-poll")
-  replacement_registration=$(fm_test_sha256 "$state/task-a.pr-poll-registration")
-  replacement_meta=$(fm_test_sha256 "$state/task-a.meta")
+  replacement_check=$(fm_test_sha256 "$state/task-a.check.sh") || fail "could not hash $state/task-a.check.sh"
+  replacement_data=$(fm_test_sha256 "$state/task-a.pr-poll") || fail "could not hash $state/task-a.pr-poll"
+  replacement_registration=$(fm_test_sha256 "$state/task-a.pr-poll-registration") || fail "could not hash $state/task-a.pr-poll-registration"
+  replacement_meta=$(fm_test_sha256 "$state/task-a.meta") || fail "could not hash $state/task-a.meta"
   fm_pr_poll_retirement_recover_one "$state" task-a "$POLL" || fail "stale receipt did not yield to a canonical replacement"
   [ ! -e "$state/task-a.pr-poll-retirement" ] || fail "stale receipt survived canonical replacement recovery"
-  [ "$(fm_test_sha256 "$state/task-a.check.sh")" = "$replacement_check" ] || fail "stale receipt changed replacement check"
-  [ "$(fm_test_sha256 "$state/task-a.pr-poll")" = "$replacement_data" ] || fail "stale receipt changed replacement data"
-  [ "$(fm_test_sha256 "$state/task-a.pr-poll-registration")" = "$replacement_registration" ] || fail "stale receipt changed replacement registration"
-  [ "$(fm_test_sha256 "$state/task-a.meta")" = "$replacement_meta" ] || fail "stale receipt changed replacement metadata"
+  expect_digest_unchanged "$state/task-a.check.sh" "$replacement_check" "stale receipt changed replacement check"
+  expect_digest_unchanged "$state/task-a.pr-poll" "$replacement_data" "stale receipt changed replacement data"
+  expect_digest_unchanged "$state/task-a.pr-poll-registration" "$replacement_registration" "stale receipt changed replacement registration"
+  expect_digest_unchanged "$state/task-a.meta" "$replacement_meta" "stale receipt changed replacement metadata"
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "replacement poll lost canonical provenance"
 
   dir=$(make_case retirement-template-update-rearm-race)
@@ -2035,17 +2053,17 @@ test_retirement_refuses_replacement_and_nonterminal_results() {
     || fail "could not publish pre-update rearm receipt"
   write_poll_meta "$state" task-a https://github.com/o/r/pull/24
   seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/24 "$current_poll"
-  replacement_check=$(fm_test_sha256 "$state/task-a.check.sh")
-  replacement_data=$(fm_test_sha256 "$state/task-a.pr-poll")
-  replacement_registration=$(fm_test_sha256 "$state/task-a.pr-poll-registration")
-  replacement_meta=$(fm_test_sha256 "$state/task-a.meta")
+  replacement_check=$(fm_test_sha256 "$state/task-a.check.sh") || fail "could not hash $state/task-a.check.sh"
+  replacement_data=$(fm_test_sha256 "$state/task-a.pr-poll") || fail "could not hash $state/task-a.pr-poll"
+  replacement_registration=$(fm_test_sha256 "$state/task-a.pr-poll-registration") || fail "could not hash $state/task-a.pr-poll-registration"
+  replacement_meta=$(fm_test_sha256 "$state/task-a.meta") || fail "could not hash $state/task-a.meta"
   fm_pr_poll_retirement_recover_one "$state" task-a "$current_poll" \
     || fail "template update blocked stale receipt recovery"
   [ ! -e "$state/task-a.pr-poll-retirement" ] || fail "pre-update receipt survived canonical replacement recovery"
-  [ "$(fm_test_sha256 "$state/task-a.check.sh")" = "$replacement_check" ] || fail "pre-update receipt changed replacement check"
-  [ "$(fm_test_sha256 "$state/task-a.pr-poll")" = "$replacement_data" ] || fail "pre-update receipt changed replacement data"
-  [ "$(fm_test_sha256 "$state/task-a.pr-poll-registration")" = "$replacement_registration" ] || fail "pre-update receipt changed replacement registration"
-  [ "$(fm_test_sha256 "$state/task-a.meta")" = "$replacement_meta" ] || fail "pre-update receipt changed replacement metadata"
+  expect_digest_unchanged "$state/task-a.check.sh" "$replacement_check" "pre-update receipt changed replacement check"
+  expect_digest_unchanged "$state/task-a.pr-poll" "$replacement_data" "pre-update receipt changed replacement data"
+  expect_digest_unchanged "$state/task-a.pr-poll-registration" "$replacement_registration" "pre-update receipt changed replacement registration"
+  expect_digest_unchanged "$state/task-a.meta" "$replacement_meta" "pre-update receipt changed replacement metadata"
   fm_pr_poll_artifacts_valid "$state" task-a "$current_poll" || fail "updated replacement poll lost canonical provenance"
 
   dir=$(make_case custom-merged-not-retired)
@@ -2074,7 +2092,7 @@ test_retirement_queue_failure_and_receipt_tampering() {
   # a directory at .wake-queue would now (correctly) trigger re-arm recovery
   # before the poll runs, so it no longer exercises the terminal append path.
   mkdir "$state/.wake-queue.seq"
-  before=$(poll_artifact_snapshot "$state" task-a)
+  before=$(poll_artifact_snapshot "$state" task-a) || fail "could not snapshot $state task-a"
   set +e
   FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=MERGED \
     run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
@@ -2082,7 +2100,7 @@ test_retirement_queue_failure_and_receipt_tampering() {
   set -e
   [ "$rc" -ne 0 ] || fail "watcher retired despite queue publication failure"
   [ -s "$dir/gh.log" ] || fail "queue failure fixture did not reach the authenticated poll"
-  [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "queue failure changed poll artifacts"
+  expect_snapshot_unchanged "$before" "queue failure changed poll artifacts" poll_artifact_snapshot "$state" task-a
   [ ! -e "$state/task-a.pr-poll-retirement" ] || fail "queue failure published a receipt"
 
   dir=$(make_case retirement-receipt-tamper)
@@ -2092,10 +2110,10 @@ test_retirement_queue_failure_and_receipt_tampering() {
   fm_pr_poll_snapshot_capture "$state" task-a "$POLL" || fail "could not snapshot receipt tamper fixture"
   fm_pr_poll_retirement_publish "$state" task-a "$POLL" merged || fail "could not publish receipt tamper fixture"
   printf 'extra\n' >> "$state/task-a.pr-poll-retirement"
-  before=$(state_snapshot "$state")
+  before=$(state_snapshot "$state") || fail "could not snapshot $state"
   fm_pr_poll_retirement_recover_one "$state" task-a "$POLL" \
     && fail "malformed receipt authorized poll deletion"
-  [ "$(state_snapshot "$state")" = "$before" ] || fail "malformed receipt changed poll state"
+  expect_snapshot_unchanged "$before" "malformed receipt changed poll state" state_snapshot "$state"
   set +e
   run_check_entry "$dir" task-a https://github.com/o/r/pull/10 > "$dir/rearm.out" 2> "$dir/rearm.err"
   rc=$?
@@ -2103,16 +2121,16 @@ test_retirement_queue_failure_and_receipt_tampering() {
   [ "$rc" -ne 0 ] || fail "rearm accepted an invalid pending retirement receipt"
   [ "$(cat "$dir/rearm.err")" = 'error: pending PR poll retirement could not be validated' ] \
     || fail "rearm did not report the invalid pending receipt"
-  [ "$(state_snapshot "$state")" = "$before" ] || fail "refused rearm changed poll state"
+  expect_snapshot_unchanged "$before" "refused rearm changed poll state" state_snapshot "$state"
 
   rm -f "$state/task-a.pr-poll-retirement"
   external="$dir/external-receipt"
   printf 'external\n' > "$external"
   ln -s "$external" "$state/task-a.pr-poll-retirement"
-  before=$(state_snapshot "$state")
+  before=$(state_snapshot "$state") || fail "could not snapshot $state"
   fm_pr_poll_retirement_recover_one "$state" task-a "$POLL" \
     && fail "receipt symlink authorized poll deletion"
-  [ "$(state_snapshot "$state")" = "$before" ] || fail "receipt symlink changed poll state"
+  expect_snapshot_unchanged "$before" "receipt symlink changed poll state" state_snapshot "$state"
   [ "$(cat "$external")" = external ] || fail "receipt symlink target was changed"
   pass "queue failure and untrusted receipts preserve canonical poll evidence"
 }
