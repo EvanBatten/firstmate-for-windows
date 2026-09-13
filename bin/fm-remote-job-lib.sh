@@ -1128,20 +1128,28 @@ fm_remote_job_worker_owned_alive() {
   return 1
 }
 
+# A worker's code identity is its root and every file its serve loop sources:
+# the loop keeps what it loaded at start, so a change to any of them must
+# replace the worker. The per-file hashes fold into one, so the identity stays
+# two hashes long however many files it covers.
 fm_remote_job_code_identity() { # <remote-root> <account-home>
-  local root=$1 account_home=$2 git_bin root_hash library_hash worker_hash
+  local root=$1 account_home=$2 git_bin root_hash code_hashes code_hash file
+  local code_files=()
   root=$(fm_remote_job_canonical_existing_dir "$root") || return 1
-  [ -f "$root/bin/fm-remote-job-lib.sh" ] && [ ! -L "$root/bin/fm-remote-job-lib.sh" ] || return 1
-  [ -f "$root/bin/fm-remote-job-worker.sh" ] && [ ! -L "$root/bin/fm-remote-job-worker.sh" ] || return 1
+  for file in fm-remote-job-lib.sh fm-remote-job-worker.sh fm-private-lib.sh fm-wake-lib.sh fm-proc-lib.sh; do
+    [ -f "$root/bin/$file" ] && [ ! -L "$root/bin/$file" ] || return 1
+    code_files+=("$root/bin/$file")
+  done
   fm_remote_job_compose_operator_path "$account_home" >/dev/null
   git_bin=$(fm_remote_job_operator_tool git 2>/dev/null || true)
   [ -n "$git_bin" ] || return 1
   root_hash=$(printf '%s' "$root" | "$git_bin" hash-object --stdin 2>/dev/null) || return 1
-  library_hash=$("$git_bin" hash-object -- "$root/bin/fm-remote-job-lib.sh" 2>/dev/null) || return 1
-  worker_hash=$("$git_bin" hash-object -- "$root/bin/fm-remote-job-worker.sh" 2>/dev/null) || return 1
-  case "$root_hash:$library_hash:$worker_hash" in *[!0-9a-f:]*) return 1 ;; esac
-  [ -n "$root_hash" ] && [ -n "$library_hash" ] && [ -n "$worker_hash" ] || return 1
-  printf '%s:%s:%s\n' "$root_hash" "$library_hash" "$worker_hash"
+  code_hashes=$("$git_bin" hash-object -- "${code_files[@]}" 2>/dev/null) || return 1
+  case "$code_hashes" in ''|*[!0-9a-f$'\n']*) return 1 ;; esac
+  code_hash=$(printf '%s\n' "$code_hashes" | "$git_bin" hash-object --stdin 2>/dev/null) || return 1
+  case "$root_hash:$code_hash" in *[!0-9a-f:]*) return 1 ;; esac
+  [ -n "$root_hash" ] && [ -n "$code_hash" ] || return 1
+  printf '%s:%s\n' "$root_hash" "$code_hash"
 }
 
 fm_remote_job_worker_identity_matches() { # <remote-root> <account-home>

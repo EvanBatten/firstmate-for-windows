@@ -360,6 +360,22 @@ fm_remote_job_worker_identity_matches "$REMOTE_ROOT" "$ACCOUNT_HOME" \
   || fail "the replacement worker did not publish the current code identity"
 pass "ensure replaces a live worker after its code changes"
 
+# The serve loop keeps the libraries it sourced at start, including the process
+# identity readers it compares every ownership record with, so a change to any
+# one of them alone must replace the worker too.
+for WORKER_LIBRARY in fm-private-lib.sh fm-wake-lib.sh fm-proc-lib.sh; do
+  OLD_WORKER_PID=$NEW_WORKER_PID
+  printf '\n' >> "$REMOTE_ROOT/bin/$WORKER_LIBRARY"
+  fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
+    || fail "$FM_REMOTE_JOB_ERROR"
+  NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
+  [ "$NEW_WORKER_PID" != "$OLD_WORKER_PID" ] \
+    || fail "ensure retained a worker running a stale $WORKER_LIBRARY"
+  fm_remote_job_worker_identity_matches "$REMOTE_ROOT" "$ACCOUNT_HOME" \
+    || fail "the worker replaced for $WORKER_LIBRARY did not publish the current code identity"
+done
+pass "ensure replaces a live worker after a library it sources changes"
+
 RELOCATED_ROOT="$TMP_ROOT/relocated-root"
 cp -R "$REMOTE_ROOT" "$RELOCATED_ROOT"
 OLD_WORKER_PID=$NEW_WORKER_PID

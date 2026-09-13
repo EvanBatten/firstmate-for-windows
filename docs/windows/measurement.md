@@ -2630,10 +2630,22 @@ The two upgrade cases skip off Linux: macOS reads the same `ps -o lstart=` form,
 
 Upgrade cost on Linux: a record written by the previous build holds a `ps` string that never compares equal, so the live worker is stopped and replaced once, whichever root the first command arrives through (the code change forces that replacement anyway), each job claim is reclaimed once, and a recovery in flight is reconciled once.
 
+### The worker's code identity covers every library its serve loop keeps
+
+`fm_remote_job_code_identity` decides whether `ensure` replaces a live worker, and it hashed only `bin/fm-remote-job-lib.sh` and `bin/fm-remote-job-worker.sh`.
+The serve loop also keeps `bin/fm-private-lib.sh`, `bin/fm-wake-lib.sh` and `bin/fm-proc-lib.sh` as they were when it started, and the last two now read every start identity it records and compares.
+An update that changed only one of them left the old loop running beside lanes and entrypoints that write records in the new form, so a later crash reclaim could take a live job group for a reused pid.
+The identity now hashes all five files and folds their hashes into one, so it fits the identity file's 256-byte bound even where git hashes with SHA-256.
+The identity changes at this upgrade, which forces the same one-time replacement described above.
+After it, a change to any of the three libraries alone replaces a live worker at the next `ensure`, and stops a job that worker is running.
+A new `fm-remote-job` case changes each library alone and expects a replacement.
+With the previous identity it fails with `ensure retained a worker running a stale fm-private-lib.sh`; with the fix the suite passes on WSL Ubuntu with 32 ok, both previous-build upgrade cases among them.
+
 ## Three operational defects filed as timing
 
 Plan p6 section 6 named three product defects hiding under issue #8's timing label.
-Two were real and are fixed; the third was reproduced red for a different reason, and porting its proof, described below, does not change that case.
+Two were real and are fixed; the third was reproduced red for a different reason.
+Its proof now reads processes through the proc library, described below, which leaves that case red and does not let the proof pass for a Firstmate task pane.
 
 ### Node cannot start a shebang script, and seven sites asked it to
 
@@ -2680,10 +2692,14 @@ A copy that prints the adapter's output and CLI calls shows the close plan fell 
 So `fm_backend_herdr_pid_is_bare_shell` and its `ps -p <pid> -o comm=` never ran, and fixing that spelling cannot change the case.
 Part A of the same run showed herdr 0.8.2's explicit close keeps focus, so the plain fallback costs nothing visible on this release.
 
-The proof is now read through `bin/fm-proc-lib.sh` on both platforms: the shell's name through `fm_proc_comm`, the process table through `fm_proc_table`, its state through `fm_proc_state`, and herdr's Win32 shell pid is turned into the MSYS pid that `/proc` and `kill` address by `fm_proc_from_os_pid`, which the HUP and the KILL now use.
+The proof's process reads now go through `bin/fm-proc-lib.sh` on both platforms: the shell's name through `fm_proc_comm`, the process table through `fm_proc_table`, its state through `fm_proc_state`, and herdr's Win32 shell pid is turned into the MSYS pid that `/proc` and `kill` address by `fm_proc_from_os_pid`, which the HUP and the KILL now use.
 Read-only `pane process-info` against herdr 0.8.2 on this host, 2026-09-13, showed the Windows spelling the proof had to accept: an idle pwsh pane reported `"name":"pwsh.exe"`, `"argv0":"C:\\Users\\ebatt\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.EXE"`, and one pid as `shell_pid`, foreground group and foreground process, so names are compared with the directory and `.exe` removed.
 The same call on a pane running Claude reported `shell_pid` 63628 and a foreground group and process of 88680, `claude.exe`.
-The behavioural consequence has not been observed on Windows, and for firstmate's own task panes it is unreachable: `fm_backend_herdr_task_tab_create` opens each pane in herdr's default pwsh and starts Git Bash inside it, so the pane's `shell_pid` is pwsh, which is not a recognised shell, and the foreground group is never the shell's, so the proof refuses those panes and every such close still takes the plain path.
+The proof still cannot pass for Firstmate's own task panes.
+`fm_backend_herdr_task_tab_create` opens each pane in herdr's default pwsh and starts Git Bash inside it, so `pane process-info` names pwsh as the pane's shell and reports a foreground group that is not pwsh's.
+The proof refuses on those fields before it reads anything through the proc library, and every such close still takes the plain path.
+Seeing through pwsh to the Git Bash inside it would be a separate feature, which this change does not build.
+No close through the proof has been observed on Windows.
 What is proven is the unit shape: `tests/fm-backend-herdr.test.sh` drives the pane-death close against a fake MSYS process table that names the shell by Win32 pid, and it succeeds only when the table, the state and the HUP all reach the MSYS pid.
 
 ### Linux
@@ -2708,6 +2724,8 @@ Measured on this box 2026-09-12 and 2026-09-13, at host time scale 35 to 40.
 
 `bin/fm-repo-invariants.sh`, run by `bin/fm-lint.sh`'s default path, fails when a file under `bin/` spells the `ps -o` field form outside `bin/fm-proc-lib.sh`, or a test takes a digest outside `fm_test_sha256`.
 A line may be excused only by a `# fm-invariant: allow <name> - <reason>` directive directly above it, and a directive with no spelling below it fails as dead.
+`tests/fm-lint-workflows.test.sh` pins the lint gate's call with a failing stand-in beside a valid workflow: the run must end with the stand-in's status and still lint the workflow.
+Removing the call, dropping its status, or returning on it each turns that case red.
 `tests/fm-repo-invariants.test.sh` drives the script against fixture trees holding every shape the repository has written, and the script refuses to pass when its pattern finds nothing in the owner.
 The planned patterns failed against those shapes, which is why that check exists:
 

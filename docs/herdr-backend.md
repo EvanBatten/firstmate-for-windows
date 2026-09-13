@@ -337,6 +337,7 @@ Herdr names a pane's shell by its Win32 pid, so the proof first looks up the MSY
 Process names are compared with the directory and a trailing `.exe` removed, because Herdr 0.8.2 reports them in that Windows spelling.
 A pane whose shell is Herdr's Windows default shell never passes the proof.
 Every Firstmate task pane is one, because the adapter starts Git Bash inside that shell, so those panes always take the unproved-shell fallbacks described above.
+The proof refuses those panes on Herdr's own process fields, before any of the reads above, so on Windows the reads matter only when Herdr itself reports a POSIX shell as a pane's shell.
 
 ## Active limits
 
