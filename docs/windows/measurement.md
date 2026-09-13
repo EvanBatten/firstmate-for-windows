@@ -2610,11 +2610,21 @@ The guard is `declare -F` now, which asks about functions only: 115 ms for five 
 The previous build recorded the worker lock owner's start as `ps -o lstart=`, which this build never compares equal.
 That worker keeps its heartbeat fresh, so its lock is never free to take, and the replacement path stopped only a worker whose lock record matched.
 Measured on WSL Ubuntu with a worker started from base `c0113c0`, then this build's files moved into its root in place: `ensure` failed after 68 s with `remote job worker did not report ready after startup`, the old worker kept running, and five supervisors that could never take the lock were left behind.
-`fm_remote_job_worker_owned_alive` now falls back when the lock record does not match, the same way it already handled a lock that records no owner: the live worker is `worker.pid`, which has to be the pid the lock records, is alive under a fresh heartbeat, and runs this root's worker.
-The same run after the fix: `ensure` succeeded in 1 s, stopped the old worker, and rewrote the lock start as `linux-starttime=`; a second `ensure` repaired nothing, the next job ran, and one supervisor remained.
-`fm-remote-job`'s upgrade case writes that previous-build start into a live worker's lock and changes the code under it. Before the fix that case failed with the same error; after it, the suite passes on WSL with 29 ok.
+`fm_pid_start_identity_comparable` in `bin/fm-wake-lib.sh` says whether two start readings are in the same dialect, and `fm_remote_job_lock_owner_matches_process` uses it to tell two mismatches apart.
+A recorded start this build can compare that does not match is still no match, whichever root is asking.
+A start it cannot compare, with the recorded pid and command matching the live process, names that worker, and `fm_remote_job_worker_owned_alive` trusts or replaces it from any root, as it does a record that matches.
+Every other caller of the lock check still reads that case as no match.
 
-Upgrade cost: a record written by the previous build holds a `ps` string that never compares equal, so the live worker is stopped and replaced once (the code change forces that replacement anyway), each job claim is reclaimed once, and a recovery in flight is reconciled once.
+An earlier version of this fix named the worker only when `worker.pid` ran the ensuring root's worker, but worker state is per account, so a first command through another root still wedged.
+Measured with the previous-build worker serving one root and both roots upgraded in place, the first command arriving through the second: `ensure` failed after 67 s, the old worker kept running, and ten worker processes were left.
+The same run now: `ensure` succeeded in 1 s, stopped the old worker, and rewrote the lock start as `linux-starttime=`; a second `ensure` repaired nothing, the job ran from the second root, and one worker tree remained.
+
+`fm-remote-job` has three cases here: a start this build can compare that does not match names no worker from either root, a previous-build start is replaced once through the worker's own root, and again through a relocated root.
+The earlier library fails the first case; with that case removed it passes the same-root upgrade and fails the relocated one with the wedge error.
+With the fix the suite passes on WSL with 31 ok.
+The two upgrade cases skip off Linux: macOS reads the same `ps -o lstart=` form, and on Git Bash the previous build never ran a worker.
+
+Upgrade cost on Linux: a record written by the previous build holds a `ps` string that never compares equal, so the live worker is stopped and replaced once, whichever root the first command arrives through (the code change forces that replacement anyway), each job claim is reclaimed once, and a recovery in flight is reconciled once.
 
 ## Three operational defects filed as timing
 

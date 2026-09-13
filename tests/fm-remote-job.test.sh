@@ -401,31 +401,59 @@ wait "$OTHER_PID" 2>/dev/null || true
 OTHER_PID=
 pass "stale ownership is reclaimed without signaling a reused pid"
 
-# The previous build recorded the lock owner's start as `ps -o lstart=`, which
-# this build never compares equal, and its live worker keeps the heartbeat
-# fresh, so the lock is never free to take. Upgrading the code under that
-# worker must replace it exactly once and then serve the next command.
-PREDECESSOR_PID=$(cat "$STATE_ROOT/worker.pid")
-PREDECESSOR_PGID=$(fm_remote_job_process_pgid "$PREDECESSOR_PID") \
-  || fail "the upgrade fixture could not resolve the live worker's process group"
-printf 'Sun Sep 13 02:17:13 2026\n' > "$STATE_ROOT/worker.lock/start"
-printf '\n' >> "$REMOTE_ROOT/bin/fm-remote-job-worker.sh"
-fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
-  || fail "$FM_REMOTE_JOB_ERROR"
-UPGRADED_PID=$(cat "$STATE_ROOT/worker.pid")
-[ "$UPGRADED_PID" != "$PREDECESSOR_PID" ] || fail "ensure kept the previous build's worker after the code changed"
-! kill -0 -- "-$PREDECESSOR_PGID" 2>/dev/null \
-  || fail "the previous build's worker tree survived its replacement"
-fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
-  || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_REPAIRED" -eq 0 ] && [ "$(cat "$STATE_ROOT/worker.pid")" = "$UPGRADED_PID" ] \
-  || fail "the upgraded worker was reclaimed a second time"
-fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh < /dev/null > /dev/null
-JOB_ID=$FM_REMOTE_JOB_ID
-fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the upgraded worker did not serve the next command"
-fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the post-upgrade probe could not be reaped"
-pass "a live worker whose lock the previous build wrote is replaced once, then serves"
+# A lock whose recorded start this build can compare, and which does not match,
+# does not name the live worker from any root, while the same lock with the
+# worker's own start names it from every root. This shell started seconds before
+# the worker, so its start is a comparable reading of a different process.
+LIVE_WORKER_START=$(cat "$STATE_ROOT/worker.lock/start")
+fm_remote_job_process_start "$$" > "$STATE_ROOT/worker.lock/start" \
+  || fail "could not read this shell's start identity"
+for OWNER_ROOT in "$REMOTE_ROOT" "$RELOCATED_ROOT"; do
+  if fm_remote_job_worker_owned_alive "$OWNER_ROOT" "$ACCOUNT_HOME"; then
+    fail "a comparable start that does not match named the live worker from $OWNER_ROOT"
+  fi
+done
+printf '%s\n' "$LIVE_WORKER_START" > "$STATE_ROOT/worker.lock/start"
+for OWNER_ROOT in "$REMOTE_ROOT" "$RELOCATED_ROOT"; do
+  fm_remote_job_worker_owned_alive "$OWNER_ROOT" "$ACCOUNT_HOME" \
+    || fail "the worker's own lock record did not name it from $OWNER_ROOT"
+done
+pass "a lock start this build can compare names the live worker only when it matches"
+
+# The previous build recorded the lock owner's start as `ps -o lstart=`, and its
+# live worker keeps the heartbeat fresh, so the lock is never free to take. The
+# first command after the upgrade can arrive through any root on the account,
+# and from each it must replace that worker exactly once and then be served.
+assert_upgrade_replaces_once() { # <root>
+  local root=$1 predecessor predecessor_pgid upgraded
+  predecessor=$(cat "$STATE_ROOT/worker.pid")
+  predecessor_pgid=$(fm_remote_job_process_pgid "$predecessor") \
+    || fail "the upgrade fixture could not resolve the live worker's process group"
+  printf 'Sun Sep 13 02:17:13 2026\n' > "$STATE_ROOT/worker.lock/start"
+  fm_remote_job_ensure_worker "$root" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+  upgraded=$(cat "$STATE_ROOT/worker.pid")
+  [ "$upgraded" != "$predecessor" ] || fail "ensure through $root kept the previous build's worker"
+  ! kill -0 -- "-$predecessor_pgid" 2>/dev/null \
+    || fail "the previous build's worker tree survived its replacement through $root"
+  fm_remote_job_ensure_worker "$root" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+  [ "$FM_REMOTE_JOB_REPAIRED" -eq 0 ] && [ "$(cat "$STATE_ROOT/worker.pid")" = "$upgraded" ] \
+    || fail "the worker upgraded through $root was reclaimed a second time"
+  fm_remote_job_stage "$ACCOUNT_HOME" "$root" "$REMOTE_HOME" fm-probe-job.sh < /dev/null > /dev/null
+  JOB_ID=$FM_REMOTE_JOB_ID
+  fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+  [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the worker upgraded through $root did not serve the next command"
+  fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the post-upgrade probe could not be reaped"
+}
+if [ "$(uname -s)" != Linux ]; then
+  printf 'skip: previous-build worker lock upgrade: only Linux reads a start the ps -o lstart= form cannot be compared with\n'
+else
+  printf '\n' >> "$REMOTE_ROOT/bin/fm-remote-job-worker.sh"
+  assert_upgrade_replaces_once "$REMOTE_ROOT"
+  pass "a live worker whose lock the previous build wrote is replaced once, then serves"
+  assert_upgrade_replaces_once "$RELOCATED_ROOT"
+  fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+  pass "a previous-build worker serving another root is replaced once, then serves"
+fi
 
 FM_REMOTE_JOB_TIMEOUT=1
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-timeout-job.sh < /dev/null > /dev/null

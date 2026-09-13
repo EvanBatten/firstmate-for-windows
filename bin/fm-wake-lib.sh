@@ -449,6 +449,20 @@ fm_pid_start_identity_equal() {  # <current> <recorded>
   [ "$delta" -le "$FM_PID_IDENTITY_TOLERANCE_MS" ]
 }
 
+# Whether two fm_pid_start_identity strings are in the same dialect, which is
+# what makes fm_pid_start_identity_equal's "no" mean a different process rather
+# than a reading it cannot compare. A string under none of the keys above is the
+# ps fallback's, and so is a record a build wrote before those keys existed: it
+# is comparable on a host that reads the ps fallback, and not on one that reads
+# /proc.
+fm_pid_start_identity_comparable() {  # <current> <recorded>
+  local current_key='' recorded_key=''
+  [ -n "$1" ] && [ -n "$2" ] || return 1
+  case "$1" in linux-starttime=*|proc-createtime-ms=*|proc-starttime=*) current_key=${1%%=*} ;; esac
+  case "$2" in linux-starttime=*|proc-createtime-ms=*|proc-starttime=*) recorded_key=${2%%=*} ;; esac
+  [ "$current_key" = "$recorded_key" ]
+}
+
 fm_path_mtime() {
   if [ "$_FM_UNAME" = Darwin ]; then
     stat -f %m "$1" 2>/dev/null
