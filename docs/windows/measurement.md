@@ -2606,6 +2606,68 @@ The guard is `declare -F` now, which asks about functions only: 115 ms for five 
 
 Upgrade cost: a record written by the previous build holds a `ps` string that never compares equal, so each live worker and job claim is reclaimed once, and a recovery in flight is reconciled once.
 
+## Three operational defects filed as timing
+
+Plan p6 section 6 named three product defects hiding under issue #8's timing label.
+Two were real and are fixed; the third was reproduced red for a different reason and is left unchanged.
+
+### Node cannot start a shebang script, and seven sites asked it to
+
+Native node on this box fails `spawn("<script>.sh")` with `EFTYPE` and runs `spawn("bash", [script])`.
+Seven product sites used the first form: the four OpenCode primary plugins, the OpenCode operational-input encoder under `.opencode/plugins/lib/`, and the two per-task busy adapters `bin/fm-spawn.sh` writes for OpenCode and Pi.
+The plan counted six; the encoder is the seventh, and the OpenCode turn-end guard needs it to deliver its prompt.
+The two adapters swallowed the error, so an OpenCode or Pi crewmate stayed `busy fm-spawn` for the life of the task, and an OpenCode primary ran no guard, seatbelt or nudge.
+Every site now spawns `bash` with the script first, the shape `.pi/extensions/fm-primary-turnend-guard.ts` already used.
+
+| Case (one-case copy unless noted) | Before | After |
+| --- | --- | --- |
+| `fm-busy-adapter-wiring`, whole suite | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | 8 ok |
+| `fm-busy-adapter-wiring` OpenCode plugin lifecycle | `session busy must classify 'busy opencode-plugin', got 'busy fm-spawn'` | ok |
+| `fm-operational-input` OpenCode adapter | `EFTYPE`, `could not invoke the canonical owner` | ok |
+| `fm-turnend-guard` OpenCode plugin anchored to worktree | `expected exit 0, got 1` | ok |
+| `fm-sessionstart-nudge` OpenCode exact nudge | `expected exit 0, got 1` | ok |
+
+The turn-end guard case stays red with either of its two sites reverted, so both are proven.
+The cd-check and pretool-check plugins have the same change and no unit case.
+
+### The muse matcher lost its paths to MSYS conversion, then to path.join
+
+`fm_busy_muse_matching_logs` passes the sessions root and the worktree to node.
+MSYS rewrites both into `C:/...` first, so the worktree never equalled the POSIX one the session record holds and nothing matched.
+With that fixed alone, node's `path.join` printed `C:\...\session.jsonl`, which fails the binding's `prior_log=` equality.
+The call now turns conversion off, gives node the root it opens already converted by `cygpath -w`, and joins each printed path onto the shell's root with `path.posix.join`.
+The branch is keyed on `OSTYPE`, so Linux and macOS run nothing new.
+
+| Case (one-case copy) | Before | After |
+| --- | --- | --- |
+| `fm-muse-harness` binding written and torn down | no `prior_log=` line | ok |
+| same, conversion fixed but native join | `prior_log=C:\Users\...\session.jsonl` | - |
+| `fm-control` muse interrupt acknowledgement | `cancel=unconfirmed` | ok |
+
+`fm-muse-harness` as a whole went to 25 of 25 green here.
+
+### The herdr idle-shell proof is not the gate that fails
+
+`fm-backend-herdr-focus-flash-e2e` ends `the idle-shell proof never ran` against herdr 0.8.2.
+A copy that prints the adapter's output and CLI calls shows the close plan fell back to `plain` when `bin/backends/herdr-workspace-move.py` failed, before any `pane process-info` call.
+So `fm_backend_herdr_pid_is_bare_shell` and its `ps -p <pid> -o comm=` never ran, and fixing that spelling cannot change the case.
+The proof has three further MSYS gaps: `ps -axo pid=,ppid=` and `ps -p <pid> -o stat=` in the sample, and a `kill -HUP` aimed at herdr's Win32 shell pid, which MSYS `kill` does not address.
+Part A of the same run showed herdr 0.8.2's explicit close keeps focus, so the plain fallback costs nothing visible on this release.
+
+### Linux
+
+Measured on WSL Ubuntu at `d874791` and at the two fixes, whole suites:
+
+| Suite | `d874791` | After both fixes |
+| --- | --- | --- |
+| `fm-busy-adapter-wiring` | 8 ok | 8 ok |
+| `fm-operational-input` | 7 ok | 7 ok |
+| `fm-turnend-guard` | 78 ok | 78 ok |
+| `fm-sessionstart-nudge` | 30 ok | 30 ok |
+| `fm-muse-harness` | 25 ok | 25 ok |
+| `fm-control` | 35 ok | 35 ok |
+
+
 ## What the spike did not know
 
 - The upstream spike sources `bin/fm-backend.sh` on `windows-latest`; `actions/checkout` there uses Git for Windows defaults, so row 1 applies to CI too until `.gitattributes` lands.
