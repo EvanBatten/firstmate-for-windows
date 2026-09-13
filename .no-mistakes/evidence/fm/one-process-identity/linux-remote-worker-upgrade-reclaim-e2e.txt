@@ -1,0 +1,62 @@
+# WSL Ubuntu (Linux 5.15.167.4-microsoft-standard-WSL2). A real remote job worker started by base c0113c0, then its code root(s) upgraded in place while it runs.
+# Script: start worker via base lib -> copy new build bin files over both roots -> ensure through a root -> second ensure -> stage and wait one job.
+
+## [target cfd76fd, same root] 1. previous build (base c0113c0) starts a worker through root-1
+worker.pid=62967  lock start (previous build's form): Sun Sep 13 09:48:11 2026
+worker processes: 62906 62967 
+## [target cfd76fd, same root] 2. both roots upgraded in place to the new build while that worker is live
+## [target cfd76fd, same root] 3. first command after the upgrade: ensure through root-1
+ensure ok after 0s, repaired=1
+worker.pid=63622 (was 62967); old worker alive: no
+lock start now: linux-starttime=135456
+worker processes: 63553 63622 
+## [target cfd76fd, same root] 4. second ensure, then a job through the same root
+second ensure ok, repaired=0, worker.pid=63622
+job exit=0 stdout: served by root=<tmp>/root-1 home=<tmp>/home
+worker processes: 63553 63622 
+after cleanup, worker processes: 
+
+## [target cfd76fd, other root] 1. previous build (base c0113c0) starts a worker through root-1
+worker.pid=65170  lock start (previous build's form): Sun Sep 13 09:48:15 2026
+worker processes: 65109 65170 
+## [target cfd76fd, other root] 2. both roots upgraded in place to the new build while that worker is live
+## [target cfd76fd, other root] 3. first command after the upgrade: ensure through root-2 (a different code root)
+ensure ok after 0s, repaired=1
+worker.pid=65826 (was 65170); old worker alive: no
+lock start now: linux-starttime=135766
+worker processes: 65757 65826 
+## [target cfd76fd, other root] 4. second ensure, then a job through the same root
+second ensure ok, repaired=0, worker.pid=65826
+job exit=0 stdout: served by root=<tmp>/root-2 home=<tmp>/home
+worker processes: 65757 65826 
+after cleanup, worker processes: 
+
+## [pre-fix build 8092869, same root] 1. previous build (base c0113c0) starts a worker through root-1
+worker.pid=67442  lock start (previous build's form): Sun Sep 13 09:48:18 2026
+worker processes: 67381 67442 
+## [pre-fix build 8092869, same root] 2. both roots upgraded in place to the new build while that worker is live
+## [pre-fix build 8092869, same root] 3. first command after the upgrade: ensure through root-1
+ensure FAILED after 68s: remote job worker did not report ready after startup
+worker.pid=67442 (was 67442); old worker alive: yes
+lock start now: Sun Sep 13 09:48:18 2026
+worker processes: 67381 67442 67914 108553 132148 147496 
+## [pre-fix build 8092869, same root] 4. second ensure, then a job through the same root
+second ensure FAILED: remote job worker did not report ready after startup
+job exit=0 stdout: served by root=<tmp>/root-1 home=<tmp>/home
+worker processes: 67381 67442 67914 108553 163004 229610 266209 277790 287779 300882 
+after cleanup, worker processes: 
+
+## [pre-fix build 8092869, other root] 1. previous build (base c0113c0) starts a worker through root-1
+worker.pid=310394  lock start (previous build's form): Sun Sep 13 09:50:37 2026
+worker processes: 310333 310394 
+## [pre-fix build 8092869, other root] 2. both roots upgraded in place to the new build while that worker is live
+## [pre-fix build 8092869, other root] 3. first command after the upgrade: ensure through root-2 (a different code root)
+ensure FAILED after 68s: remote job worker did not report ready after startup
+worker.pid=310394 (was 310394); old worker alive: yes
+lock start now: Sun Sep 13 09:50:37 2026
+worker processes: 310333 310394 310866 351427 374834 390058 
+## [pre-fix build 8092869, other root] 4. second ensure, then a job through the same root
+second ensure FAILED: remote job worker did not report ready after startup
+job exit=126 stdout: 
+worker processes: 310333 310394 310866 351427 405526 472709 507830 519526 530286 542824 
+after cleanup, worker processes: 

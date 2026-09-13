@@ -1,0 +1,7 @@
+$ # Git Bash on Windows, target commit cfd76fd
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-muse-harness.test.sh   # one-case copy of tests/fm-muse-harness.test.sh
+# host time scale 37 (about 147 ms per exec)
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - muse spawn writes a session binding that teardown removes
+ok - on Git Bash every spelling of the worktree matches its session log, and no neighbour does
+[exit=0 after 254s]

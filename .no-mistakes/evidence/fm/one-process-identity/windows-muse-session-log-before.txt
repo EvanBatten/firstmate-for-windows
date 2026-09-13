@@ -1,0 +1,6 @@
+$ # Git Bash on Windows, base commit c0113c0 (before this branch)
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-muse-harness.test.sh   # same binding case, base libraries
+# host time scale 40 (about 208 ms per exec)
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+not ok - muse binding did not exclude the pre-existing session: sessions_root=/tmp/fm-muse-harness.TRocWm/binding/xdgdata/muse/sessions;workspace_root=/tmp/fm-muse-harness.TRocWm/binding/wt;binding_id=21327.7218.1789306400;
+[exit=1 after 124s]

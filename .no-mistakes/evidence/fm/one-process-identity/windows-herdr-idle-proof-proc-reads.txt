@@ -1,0 +1,31 @@
+$ # Git Bash on Windows: the idle-shell proof's process reads for a live idle bash, old spelling vs bin/fm-proc-lib.sh
+live shell: MSYS pid 23756, Win32 pid (what herdr pane process-info reports) 95696
+$ ps -p 23756 -o comm=        # base: fm_backend_herdr_pid_is_bare_shell
+ps: unknown option -- o
+Try `ps --help' for more information.
+[exit=1]
+$ ps -axo pid=,ppid=           # base: the idle-shell proof's process table
+ps: unknown option -- x
+Try `ps --help' for more information.
+[exit=1]
+$ ps -p 23756 -o stat=        # base: the idle-shell proof's state read
+ps: unknown option -- o
+Try `ps --help' for more information.
+[exit=1]
+$ fm_proc_from_os_pid 95696
+23756 [exit=0]
+$ fm_proc_comm 23756
+/usr/bin/sleep
+[exit=0]
+$ fm_proc_state 23756
+S
+[exit=0]
+$ fm_proc_table | awk -v p=23756 '$1==p'
+23756 23752
+[exit=0]
+$ fm_proc_from_os_pid 23756    # an MSYS pid is not a Win32 pid; must refuse
+[exit=1]
+
+$ # the adapter's own bare-shell check, against a real idle bash (blocked in read, no children) and a real sleep
+Win32 pid 114320 -> MSYS pid 24153, comm /usr/bin/bash, state S: fm_backend_herdr_pid_is_bare_shell says bare shell
+Win32 pid 114880 -> MSYS pid 24154, comm /usr/bin/sleep, state S: fm_backend_herdr_pid_is_bare_shell says not a bare shell

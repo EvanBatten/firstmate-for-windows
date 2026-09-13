@@ -1,0 +1,5 @@
+$ # Git Bash on Windows (MINGW64_NT-10.0-26200), base commit c0113c0 (before this branch), extracted to a temp dir
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-pending-reply.test.sh   # same one-case copy, base libraries
+# host time scale 40 (about 167 ms per exec)
+not ok - recovery should send after completed turn + grace
+[exit=1 after 32s]

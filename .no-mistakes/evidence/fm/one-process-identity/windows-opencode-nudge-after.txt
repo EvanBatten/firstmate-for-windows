@@ -1,0 +1,5 @@
+$ # Git Bash on Windows, node v24.19.0, target commit cfd76fd
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-sessionstart-nudge.test.sh   # one-case copy: node imports .opencode/plugins/fm-primary-sessionstart-nudge.js and fires session.created twice
+# host time scale 40 (about 218 ms per exec)
+ok - OpenCode session.created delivers the exact wrapper nudge once per session
+[exit=0 after 19s]

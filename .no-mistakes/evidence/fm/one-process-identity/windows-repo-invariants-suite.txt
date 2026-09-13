@@ -1,0 +1,15 @@
+$ # Git Bash on Windows, target commit cfd76fd
+$ MSYS=winsymlinks:nativestrict bin/fm-test-run.sh tests/fm-repo-invariants.test.sh
+FM_TEST_BEGIN 2026-09-13T13:54:02Z tests/fm-repo-invariants.test.sh family=pure-contract-unit expected_gate_skip=none
+# host time scale 40 (about 456 ms per exec)
+ok - a tree that keeps each spelling in its owner holds
+ok - every ps field form bin/ has written is named outside bin/fm-proc-lib.sh, nested directories included
+ok - every digest call shape tests have used is named outside tests/lib.sh
+ok - a mention, a stub name, an argument or a comment is not a spelling
+ok - a directive allows the one line directly below it, and a copy without one is still named
+ok - a directive whose next line is not a spelling fails, so an exception cannot outlive its reason
+ok - a directive with no reason, or naming the wrong invariant, fails and allows nothing
+ok - an owner the pattern cannot match, or no owner at all, fails instead of passing over the tree
+FM_TEST_END 2026-09-13T13:55:08Z tests/fm-repo-invariants.test.sh exit=0 duration_ms=64070 gate_skip=false cases_ok=8 cases_skipped=0
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=70090
+[exit=0 after 72s]

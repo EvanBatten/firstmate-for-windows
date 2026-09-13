@@ -1,0 +1,25 @@
+$ # Git Bash on Windows, target commit cfd76fd
+$ MSYS=winsymlinks:nativestrict bin/fm-test-run.sh tests/fm-proc-lib.test.sh
+FM_TEST_BEGIN 2026-09-13T13:55:36Z tests/fm-proc-lib.test.sh family=pure-contract-unit expected_gate_skip=none
+# host time scale 40 (about 223 ms per exec)
+ok - proc-lib: the POSIX helpers run exactly the ps invocations their callers ran before
+ok - proc-lib: fm_proc_pgid is today's exact ps call and refuses a non-pid without forking
+ok - proc-lib: fm_proc_state and fm_proc_table are the proof's ps calls, and one pid space translates to itself
+ok - proc-lib: fm_proc_comm propagates ps's non-zero status for a vanished pid
+ok - proc-lib: fm_proc_chain_prime is a free no-op on macOS and Linux
+ok - proc-lib: fm_proc_chain walks the POSIX table and stops at init
+ok - proc-lib: fm_pid_alive is kill -0 and nothing else on macOS and Linux
+ok - proc-lib: the branch is chosen by ps capability, not by uname alone
+ok - proc-lib: the MSYS chain reads /proc for MSYS processes and pwsh for the Win32 ancestors
+ok - proc-lib: Win32 command names are normalized into what the harness matchers expect
+ok - proc-lib: a primed MSYS ancestry walk costs exactly one pwsh process
+ok - proc-lib: an unprimed lookup answers from /proc or its own Win32 walk
+ok - proc-lib: a prime rooted at a Win32 pid serves every field from one pwsh process
+ok - proc-lib: a prime for a memoised pid costs nothing, one for a new pid still walks, and an inherited memo is never read
+ok - proc-lib: with no usable pwsh the chain stops at the MSYS boundary instead of failing or lying
+ok - proc-lib: MSYS liveness falls back to the ps -W WINPID column for native processes
+ok - proc-lib: MSYS fm_proc_pgid reads /proc/<pid>/pgid and validates it, with no ps and no pwsh
+ok - proc-lib: MSYS state, table and Win32-pid translation read /proc by MSYS pid, with no ps and no pwsh
+FM_TEST_END 2026-09-13T13:57:50Z tests/fm-proc-lib.test.sh exit=0 duration_ms=132094 gate_skip=false cases_ok=18 cases_skipped=0
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=137985
+[exit=0 after 141s]

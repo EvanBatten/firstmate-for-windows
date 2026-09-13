@@ -1,0 +1,15 @@
+# native node v24.19.0 on Git Bash. Each plugin's tool.execute.before is called for a bash tool command in a fixture
+# worktree whose guard script is a stand-in that always denies (exit 2, reason on stderr), as bin/fm-cd-pretool-check.sh
+# and bin/fm-arm-pretool-check.sh do for a command they refuse. The plugin must block the call with the guard's reason.
+
+## target cfd76fd
+$ node harness.mjs .opencode/plugins/fm-primary-cd-check.js FmPrimaryCdCheck <fixture>
+  FmPrimaryCdCheck: tool call BLOCKED with: denied by fm-cd-pretool-check.sh: cd projects/clone && git status
+$ node harness.mjs .opencode/plugins/fm-primary-pretool-check.js FmPrimaryPretoolCheck <fixture>
+  FmPrimaryPretoolCheck: tool call BLOCKED with: denied by fm-arm-pretool-check.sh: cd projects/clone && git status
+
+## base c0113c0
+$ node harness.mjs .opencode/plugins/fm-primary-cd-check.js FmPrimaryCdCheck <fixture>
+  FmPrimaryCdCheck: tool call BLOCKED with: spawn EFTYPE
+$ node harness.mjs .opencode/plugins/fm-primary-pretool-check.js FmPrimaryPretoolCheck <fixture>
+  FmPrimaryPretoolCheck: tool call BLOCKED with: spawn EFTYPE

@@ -1,0 +1,5 @@
+$ # Git Bash on Windows, base commit c0113c0 (before this branch)
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-sessionstart-nudge.test.sh
+# host time scale 40 (about 183 ms per exec)
+not ok - OpenCode exact nudge delivery: expected exit 0, got 1
+[exit=1 after 15s]

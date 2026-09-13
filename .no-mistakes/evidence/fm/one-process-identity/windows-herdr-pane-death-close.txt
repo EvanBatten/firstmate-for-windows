@@ -1,0 +1,8 @@
+$ # Git Bash on Windows, target commit cfd76fd plus this phase's fixture fix to tests/fm-backend-herdr.test.sh
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-backend-herdr.test.sh   # one-case copy of tests/fm-backend-herdr.test.sh
+# host time scale 40 (about 218 ms per exec)
+tests/lib.sh: line 793: 24891 Hangup                  sleep 300
+ok - herdr presentation cleanup: on MSYS the idle-shell proof and its HUP address the shell herdr names by Win32 pid
+ok - herdr presentation cleanup: emptying close behind focus ends the exact shell without a move or focus change
+ok - fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id
+[exit=0 after 76s]

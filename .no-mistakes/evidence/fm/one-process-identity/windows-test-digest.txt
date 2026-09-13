@@ -1,0 +1,16 @@
+$ # Git Bash on Windows: tests/lib.sh fm_test_sha256 on each tool with the other masked, and with neither
+$ MSYS=winsymlinks:nativestrict bin/fm-test-run.sh tests/fm-test-lib.test.sh
+FM_TEST_BEGIN 2026-09-13T13:39:47Z tests/fm-test-lib.test.sh family=unclassified expected_gate_skip=none
+# host time scale 40 (about 173 ms per exec)
+ok - fm_test_sha256 digests a file and stdin with sha256sum alone (shasum proven unreachable)
+ok - fm_test_sha256 digests a file and stdin with shasum -a 256 alone (sha256sum proven unreachable)
+ok - fm_test_sha256 fails with nothing on stdout when no digest can be taken
+FM_TEST_END 2026-09-13T13:40:05Z tests/fm-test-lib.test.sh exit=0 duration_ms=17196 gate_skip=false cases_ok=3 cases_skipped=0
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=22460
+[exit=0]
+
+$ # the shape the helper replaced, on a host missing the tool: two digests of different files compare equal
+old: a=[] b=[]
+old: README.md and CONTRIBUTING.md "match"
+fm_test_sha256: neither sha256sum nor shasum -a 256 produced a digest
+new: fm_test_sha256 README.md failed (rc=1) with a=[]

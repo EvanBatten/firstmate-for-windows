@@ -1,0 +1,4 @@
+$ # native node v24.19.0 on MINGW64_NT-10.0-26200: the old spawn shape vs the shape the OpenCode plugins now use
+$ node spawn-demo.mjs
+before  spawn("<root>/bin/hook.sh")         : spawn threw EFTYPE; the script never ran
+after   spawn("bash", ["<root>/bin/hook.sh"]): exit 0, stdout: hook ran under bash 5.2.37(1)-release

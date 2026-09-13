@@ -1,0 +1,61 @@
+# Six throwaway suites, run through bin/fm-test-run.sh on Git Bash (MINGW64_NT-10.0-26200). Each suite body:
+#   tests/demo-ran-cases.test.sh             echo "ok - the one case ran";exit 0;
+#   tests/demo-gate-skip.test.sh             echo "skip: frobnicator not found";exit 77;
+#   tests/demo-ran-nothing-exit0.test.sh     echo "# host time scale 40 (about 312 ms per exec)";echo "skip: set FM_DEMO_E2E=1 to run the real regression";exit 0;
+#   tests/demo-skip-after-cases.test.sh      echo "ok - case 1";echo "skip: the rest need a tool";exit 77;
+#   tests/demo-status-leak-77.test.sh        echo "a tool this suite ran returned 77";exit 77;
+#   tests/demo-first-case-skips.test.sh      echo "skip: pi not installed, so case 1 cannot run";echo "ok - case 2";echo "ok - case 3";exit 0;
+
+## target commit cfd76fd
+$ bin/fm-test-run.sh --json lane.json tests/demo-ran-cases.test.sh tests/demo-gate-skip.test.sh tests/demo-ran-nothing-exit0.test.sh tests/demo-skip-after-cases.test.sh tests/demo-status-leak-77.test.sh tests/demo-first-case-skips.test.sh
+ok - the one case ran
+FM_TEST_END 2026-09-13T13:38:22Z tests/demo-ran-cases.test.sh exit=0 duration_ms=1408 gate_skip=false cases_ok=1 cases_skipped=0
+skip: frobnicator not found
+FM_TEST_END 2026-09-13T13:38:27Z tests/demo-gate-skip.test.sh exit=77 duration_ms=975 gate_skip=true cases_ok=0 cases_skipped=1
+# host time scale 40 (about 312 ms per exec)
+skip: set FM_DEMO_E2E=1 to run the real regression
+fm-test-run: tests/demo-ran-nothing-exit0.test.sh ran no cases and exited 0; a suite that cannot run declares it with exit 77 (fm_test_gate_skip)
+FM_TEST_END 2026-09-13T13:38:34Z tests/demo-ran-nothing-exit0.test.sh exit=0 duration_ms=1781 gate_skip=false cases_ok=0 cases_skipped=1
+ok - case 1
+skip: the rest need a tool
+fm-test-run: tests/demo-skip-after-cases.test.sh declared a gate skip after running 1 cases
+FM_TEST_END 2026-09-13T13:38:38Z tests/demo-skip-after-cases.test.sh exit=77 duration_ms=2554 gate_skip=false cases_ok=1 cases_skipped=1
+a tool this suite ran returned 77
+fm-test-run: tests/demo-status-leak-77.test.sh exited 77 without a skip: line; a tool's status leaked as a gate skip
+FM_TEST_END 2026-09-13T13:38:42Z tests/demo-status-leak-77.test.sh exit=77 duration_ms=537 gate_skip=false cases_ok=0 cases_skipped=0
+skip: pi not installed, so case 1 cannot run
+ok - case 2
+ok - case 3
+FM_TEST_END 2026-09-13T13:38:47Z tests/demo-first-case-skips.test.sh exit=0 duration_ms=1289 gate_skip=false cases_ok=2 cases_skipped=1
+FM_TEST_SUMMARY total=6 failed=3 skipped_gate=1 duration_ms=30151
+fm-test-run: wrote timing artifact: lane.json
+[runner exit=1]
+$ jq -c '.scripts[] | {path, exit, gate_skip, cases_ok, cases_skipped}' lane.json; jq -c .summary lane.json
+{"path":"tests/demo-ran-cases.test.sh","exit":0,"gate_skip":false,"cases_ok":1,"cases_skipped":0}
+{"path":"tests/demo-gate-skip.test.sh","exit":77,"gate_skip":true,"cases_ok":0,"cases_skipped":1}
+{"path":"tests/demo-ran-nothing-exit0.test.sh","exit":0,"gate_skip":false,"cases_ok":0,"cases_skipped":1}
+{"path":"tests/demo-skip-after-cases.test.sh","exit":77,"gate_skip":false,"cases_ok":1,"cases_skipped":1}
+{"path":"tests/demo-status-leak-77.test.sh","exit":77,"gate_skip":false,"cases_ok":0,"cases_skipped":0}
+{"path":"tests/demo-first-case-skips.test.sh","exit":0,"gate_skip":false,"cases_ok":2,"cases_skipped":1}
+{"duration_ms":30151,"failed":3,"skipped_gate":1,"total":6}
+
+## base commit c0113c0 (before this branch), same six suites
+$ bin/fm-test-run.sh tests/demo-ran-cases.test.sh tests/demo-gate-skip.test.sh tests/demo-ran-nothing-exit0.test.sh tests/demo-skip-after-cases.test.sh tests/demo-status-leak-77.test.sh tests/demo-first-case-skips.test.sh
+ok - the one case ran
+FM_TEST_END 2026-09-13T13:39:00Z tests/demo-ran-cases.test.sh exit=0 duration_ms=1708 gate_skip=false
+skip: frobnicator not found
+FM_TEST_END 2026-09-13T13:39:04Z tests/demo-gate-skip.test.sh exit=77 duration_ms=1844 gate_skip=false
+# host time scale 40 (about 312 ms per exec)
+skip: set FM_DEMO_E2E=1 to run the real regression
+FM_TEST_END 2026-09-13T13:39:07Z tests/demo-ran-nothing-exit0.test.sh exit=0 duration_ms=1702 gate_skip=false
+ok - case 1
+skip: the rest need a tool
+FM_TEST_END 2026-09-13T13:39:11Z tests/demo-skip-after-cases.test.sh exit=77 duration_ms=2375 gate_skip=false
+a tool this suite ran returned 77
+FM_TEST_END 2026-09-13T13:39:15Z tests/demo-status-leak-77.test.sh exit=77 duration_ms=2743 gate_skip=false
+skip: pi not installed, so case 1 cannot run
+ok - case 2
+ok - case 3
+FM_TEST_END 2026-09-13T13:39:20Z tests/demo-first-case-skips.test.sh exit=0 duration_ms=2639 gate_skip=true
+FM_TEST_SUMMARY total=6 failed=3 skipped_gate=1 duration_ms=25180
+[runner exit=1]

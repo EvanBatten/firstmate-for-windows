@@ -1,0 +1,41 @@
+# tests/fm-backend-herdr.test.sh at target 1fe24b4, the committed form of the fixture fix.
+# `git diff cfd76fd 1fe24b4` touches only this test file; bin/, .opencode/ and docs are byte-identical,
+# so the product evidence recorded against cfd76fd in the other files still describes this commit.
+
+## WSL Ubuntu (Linux 5.15.167.4-microsoft-standard-WSL2), `git archive 1fe24b4`
+## one-case copy of test_container_ensure_starts_server_and_workspace, 40 runs each, same product code,
+## run while the whole herdr suite was loading the same host
+fixed fixture (1fe24b4) x40: pass=40 fail=0
+pre-fix fixture (cfd76fd's test file) x40: pass=25 fail=15
+  first failure: not ok - container_ensure should echo '<session>:<workspace_id>\t<seeded_default_tab_id>', got ''
+
+## mutation: bin/backends/herdr.sh server_ensure no longer launches the server
+1688c1688
+<   ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
+---
+>   : # mutated: no server launch
+not ok - container_ensure did not start the herdr server
+mutated rc=1
+ok - fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id
+restored rc=0
+
+## whole suite through the test lane
+$ bin/fm-test-run.sh tests/fm-backend-herdr.test.sh
+FM_TEST_END 2026-09-13T14:42:48Z tests/fm-backend-herdr.test.sh exit=0 duration_ms=784712 gate_skip=false cases_ok=182 cases_skipped=0
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=784833
+[runner exit=0 after 785s]
+
+## Git Bash on Windows (MINGW64_NT-10.0-26200), `git archive 1fe24b4`, MSYS=winsymlinks:nativestrict
+$ bash tests/nmcase-fixed.test.sh     # the fixed case alone, 5 runs
+run 1..5: ok - fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id   (5 of 5, 22-25s each)
+
+$ bash tests/nmcase-windows.test.sh   # the MSYS pane-death cases plus the fixed case
+# host time scale 40 (about 296 ms per exec)
+tests/lib.sh: line 793: 23662 Hangup                  sleep 300
+ok - herdr presentation cleanup: on MSYS the idle-shell proof and its HUP address the shell herdr names by Win32 pid
+ok - herdr presentation cleanup: emptying close behind focus ends the exact shell without a move or focus change
+ok - herdr presentation cleanup: emptying close before focus moves the doomed workspace to the end and ends its exact shell
+tests/nmcase-windows.test.sh: line 2144: 25439 Hangup                  sleep 300
+ok - fm_backend_herdr_kill: one session lock covers the focus-safe emptying removal
+ok - fm_backend_herdr_container_ensure: version-gates, starts the server, ensures the firstmate workspace, echoes session:workspace_id + the seeded default tab id
+[exit=0 after 158s]

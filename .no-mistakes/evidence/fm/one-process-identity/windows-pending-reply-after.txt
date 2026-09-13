@@ -1,0 +1,7 @@
+$ # Git Bash on Windows (MINGW64_NT-10.0-26200), target commit cfd76fd
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-pending-reply.test.sh   # one-case copy of tests/fm-pending-reply.test.sh
+# host time scale 40 (about 248 ms per exec)
+ok - recovery sender identity reads on this host and tells two processes apart
+ok - completed turn with no report triggers exactly one recovery
+ok - tick end-to-end: miss -> one recovery -> escalate -> durable
+[exit=0 after 275s]

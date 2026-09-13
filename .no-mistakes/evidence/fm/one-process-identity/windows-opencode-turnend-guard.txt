@@ -1,0 +1,10 @@
+$ # Git Bash on Windows, node v24.19.0, target commit cfd76fd
+$ MSYS=winsymlinks:nativestrict bash tests/nmcase-turnend-guard.test.sh   # one-case copy: node imports .opencode/plugins/fm-primary-turnend-guard.js, fires session.idle, expects the guard's typed follow-up prompt
+# host time scale 40 (about 199 ms per exec)
+ok - .opencode primary plugin: guard path is anchored to worktree, not directory
+[exit=0 after 14s]
+
+$ # base commit c0113c0 (before this branch), same one-case copy
+# host time scale 40 (about 223 ms per exec)
+not ok - OpenCode plugin must run the guard from worktree even when directory is elsewhere: expected exit 0, got 1
+[exit=1 after 16s]

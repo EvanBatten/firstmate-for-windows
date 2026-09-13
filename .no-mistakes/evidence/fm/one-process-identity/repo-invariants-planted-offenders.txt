@@ -1,0 +1,13 @@
+# WSL Ubuntu: bin/fm-repo-invariants.sh (run by bin/fm-lint.sh's default path) against a scratch copy of the target tree
+$ bin/fm-repo-invariants.sh --root <copy>          # as committed
+fm-repo-invariants.sh: ps-o and digest hold
+[exit=0]
+
+# planted: 'ps -p "$1" -o etime=' in bin/fm-send.sh, 'shasum -a 256' in tests/fm-brief.test.sh, a directive with no spelling below it in bin/fm-spawn.sh
+$ bin/fm-repo-invariants.sh --root <copy>
+fm-repo-invariants.sh: ps-o: these lines spell the ps field form outside bin/fm-proc-lib.sh, where MSYS ps reads empty; use fm_proc_* or put a directive with its reason on the line above
+  bin/fm-send.sh:1063: ps -p "$1" -o etime=
+  bin/fm-spawn.sh:3173: dead directive, the next line is not a spelling it could allow: # fm-invariant: allow ps-o - a stale excuse whose spelling was removed
+fm-repo-invariants.sh: digest: these lines take a digest outside tests/lib.sh; use fm_test_sha256 or fm_test_sha256_stdin, or put a directive with its reason on the line above
+  tests/fm-brief.test.sh:788: shasum -a 256 "$1" | awk '{print $1}'
+[exit=1]

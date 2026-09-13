@@ -1,0 +1,31 @@
+# tests/fm-backend-herdr.test.sh test_container_ensure_starts_server_and_workspace
+# A pre-existing flake (the case and bin/backends/herdr.sh server_ensure are unchanged
+# since upstream #186/#215). It stopped the whole WSL suite at case 23 twice at the
+# target commit; the same one-case copy is equally red at base.
+
+## 12 runs each of a one-case copy, WSL Ubuntu, before the fixture fix
+/home/ebatt/.cache/fm-nm-01M2D8: pass=8 fail=4          (target cfd76fd)
+/home/ebatt/.cache/fm-nm-01M2D8-base: pass=8 fail=4     (base c0113c0)
+
+## the fake herdr's call log for a failing run (identical at base and target)
+DIAG fail: container_ensure should echo '<session>:<workspace_id>\t<seeded_default_tab_id>', got ''
+HERDR_SESSION=fmtest status --json
+HERDR_SESSION=fmtest status --json --session fmtest
+HERDR_SESSION=fmtest status --json --session fmtest     <- the first poll took response slot 3
+HERDR_SESSION=fmtest server --session fmtest            <- the backgrounded launch landed after it, took slot 4 ("running": true)
+HERDR_SESSION=fmtest status --json --session fmtest     <- every later poll reads slots 5, 6, ... and never sees running
+... (20 polls) ...
+error: herdr server for session 'fmtest' did not report running within 10s
+
+## the fixture fix (tests/fm-backend-herdr.test.sh only)
+# make_herdr_fakebin logs `herdr server` but gives it no response number, the case's
+# responses are renumbered 3..5, and the launch's log line is awaited with
+# fm_test_wait_until 5 instead of read once, because the launch is backgrounded.
+
+## after the fix, WSL Ubuntu
+after fix, one-case copy x20 on WSL: pass=20 fail=0
+# mutation: bin/backends/herdr.sh server_ensure no longer launches the server
+not ok - container_ensure did not start the herdr server
+mutated rc=1
+# whole suite: FM_TEST_END tests/fm-backend-herdr.test.sh exit=0 cases_ok=182
+# Git Bash: see windows-herdr-pane-death-close.txt (the fixed case passes there too)
