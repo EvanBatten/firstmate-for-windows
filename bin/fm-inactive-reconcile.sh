@@ -12,14 +12,18 @@
 # immediately during a locked session start. Each scan uses an aggregate
 # FM_INACTIVE_RECONCILE_BUDGET_SECS deadline (default 10, valid 1..30) and
 # resumes after its last visited child on the next scan.
-# The scan enforces that budget itself through a whole-second deadline, and the
-# first due child of every scan is always visited with at least a one-second
-# state-read bound: whole-second arithmetic can otherwise round a small budget
-# to zero mid-scan, and an invocation that exits having visited nothing would
-# advance the durable cursor past a child it never examined. A process-group
-# kill one second after the budget remains as a backstop for a scan wedged in
-# an unbounded wait (for example a live-held wake-queue lock), so the clean
-# deadline path is not racing its own backstop.
+# The scan enforces that budget itself through a whole-second deadline counted
+# from its own process start, and the first due child of every scan is always
+# visited with at least a one-second state-read bound: whole-second arithmetic
+# can otherwise round a small budget to zero mid-scan, and an invocation that
+# exits having visited nothing would advance the durable cursor past a child it
+# never examined. Every lock wait the scan performs (the scan lock, a child's
+# metadata lock, the wake-queue lock) gives up at the same deadline, so a
+# live-held lock ends the scan the way a slow child does: it releases what it
+# holds and leaves the cursor on that child for the next scan to resume from.
+# A process-group kill at twice the budget remains only as a backstop for a
+# scan wedged outside every bounded section, so the clean deadline path is not
+# racing its own backstop.
 #
 # It considers only a direct ordinary crewmate whose newest meta, status, or
 # turn-ended mtime is older than that interval and whose last status is not
@@ -48,6 +52,9 @@
 # The scan reads only durable local state and fm-crew-state.sh; it never invokes
 # gh, gh-axi, curl, fm-pr-check.sh, fm-pr-poll.sh, or a state *.check.sh.
 set -u
+# The scan's budget is counted from here, before any library is sourced, so its
+# deadline and the outer backstop measure the same stretch of time.
+SCAN_EPOCH=$(date +%s)
 export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -94,6 +101,7 @@ if [ "$FM_INACTIVE_RECONCILE_BUDGET_SECS" -gt 30 ]; then
   printf 'fm-inactive-reconcile: FM_INACTIVE_RECONCILE_BUDGET_SECS must be a whole number from 1 to 30\n' >&2
   exit 2
 fi
+SCAN_DEADLINE=$((SCAN_EPOCH + FM_INACTIVE_RECONCILE_BUDGET_SECS))
 
 if [ "$(uname)" = Darwin ]; then
   file_mtime() { stat -f %m "$1" 2>/dev/null; }
@@ -200,33 +208,41 @@ mark_reported() { # <record>
   mv -f "$record" "$reported"
 }
 
-queue_key_exists() { # <key>
+# The scan's lock waits give up at SCAN_DEADLINE (see _scan-locked), so a queue
+# operation that failed once it has passed is a deadline stop (3), not an error.
+scan_deadline_passed() {
+  [ "$(date +%s)" -ge "$SCAN_DEADLINE" ]
+}
+
+queue_key_exists() { # <key>; 0 queued, 1 not queued, 3 deadline stop
   local key=$1 queued
-  queued=$(fm_wake_queued_keys check 2>/dev/null || true)
+  queued=$(fm_wake_queued_keys check 2>/dev/null) || return 3
   printf '%s\n' "$queued" | grep -Fx -- "$key" >/dev/null 2>&1
 }
 
 queue_notice_once() { # <record> <key> <payload>
-  local record=$1 key=$2 payload=$3 notified
+  local record=$1 key=$2 payload=$3 notified queued=0
   notified=$(record_value "$record" notice_emitted)
   [ "$notified" = 1 ] && return 1
-  if queue_key_exists "$key"; then
+  queue_key_exists "$key" || queued=$?
+  [ "$queued" -ne 3 ] || return 3
+  if [ "$queued" -eq 0 ]; then
     record_field_set "$record" notice_emitted 1 || return 2
     return 1
   fi
-  fm_wake_append check "$key" "$payload" || return 2
+  fm_wake_append check "$key" "$payload" || { scan_deadline_passed && return 3; return 2; }
   record_field_set "$record" notice_emitted 1 || return 2
   printf 'actionable: %s\n' "$payload"
   return 0
 }
 
 queue_presentation() { # <record> <fingerprint> <payload>
-  local record=$1 fingerprint=$2 payload=$3 key
+  local record=$1 fingerprint=$2 payload=$3 key queued=0
   key="inactive-outcome:$fingerprint"
-  if queue_key_exists "$key"; then
-    return 1
-  fi
-  fm_wake_append check "$key" "$payload" || return 2
+  queue_key_exists "$key" || queued=$?
+  [ "$queued" -ne 3 ] || return 3
+  [ "$queued" -ne 0 ] || return 1
+  fm_wake_append check "$key" "$payload" || { scan_deadline_passed && return 3; return 2; }
   printf 'actionable: %s\n' "$payload"
   return 0
 }
@@ -378,20 +394,22 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
       if ! fm_secondmate_parent_record_parse "$FM_HOME/.fm-secondmate-parent"; then
         payload="$payload (missing or unreadable parent binding .fm-secondmate-parent)"
       fi
-      queue_notice_once "$RECORD_PENDING" "inactive-reconcile:$fingerprint" "$payload" || true
+      queue_notice_once "$RECORD_PENDING" "inactive-reconcile:$fingerprint" "$payload" \
+        || [ "$?" -ne 3 ] || return 3
     fi
     return 0
   fi
   record_phase_set "$RECORD_PENDING" presentation || return 1
   payload="inactive terminal outcome awaiting captain presentation: child=$id state=$state"
   [ -z "$pr" ] || payload="$payload pr=$pr"
-  queue_presentation "$RECORD_PENDING" "$fingerprint" "$payload" || true
+  queue_presentation "$RECORD_PENDING" "$fingerprint" "$payload" || [ "$?" -ne 3 ] || return 3
 }
 
 reconcile_direct_child() { # <id> <meta> <secondmate-id-or-empty> <timeout>
   local id=$1 meta=$2 self=${3:-} timeout=$4 lock rc=0
   lock=$(fm_meta_lock_path "$meta") || return 1
-  fm_lock_acquire_wait "$lock" || return 1
+  # The only way this wait fails is giving up at the scan deadline.
+  fm_lock_acquire_wait "$lock" || return 3
   reconcile_direct_child_locked "$id" "$meta" "$self" "$timeout" || rc=$?
   fm_lock_release "$lock"
   return "$rc"
@@ -454,7 +472,7 @@ scan() {
       return 0
     fi
   fi
-  deadline=$(( $(date +%s) + FM_INACTIVE_RECONCILE_BUDGET_SECS ))
+  deadline=$SCAN_DEADLINE
   SCAN_FIRST_VISIT_PENDING=1
   scan_pass "$cursor" after "$deadline" "$self" || rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$cursor" ]; then
@@ -497,11 +515,13 @@ case "$mode" in
       --startup) startup=1 ;;
       *) printf 'usage: fm-inactive-reconcile.sh scan [--startup]\n' >&2; exit 2 ;;
     esac
-    # The scan's own whole-second deadline enforces the budget; this outer
-    # process-group kill is only the backstop for a scan wedged outside every
-    # bounded section (an unbounded lock wait), so it fires one second after
-    # the deadline instead of racing the clean bounded exit it exists to guard.
-    if fm_run_timed $((FM_INACTIVE_RECONCILE_BUDGET_SECS + 1)) "$0" _scan-locked "$startup"; then
+    # The scan ends itself at its own deadline: the pass stops visiting children
+    # and every lock wait gives up, and a deadline stop exits 0 with the cursor
+    # kept. This process-group kill only catches a scan wedged outside every
+    # bounded section. Its margin is a whole budget, not a fixed second, because
+    # the scan's start-up and release cost is host-dependent and a backstop
+    # that fires on a healthy scan kills it holding its lock.
+    if fm_run_timed $((2 * FM_INACTIVE_RECONCILE_BUDGET_SECS)) "$0" _scan-locked "$startup"; then
       :
     elif [ "$?" -ne 124 ]; then
       exit 1
@@ -509,8 +529,15 @@ case "$mode" in
     ;;
   _scan-locked)
     [ "$#" -eq 2 ] || exit 2
-    fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
+    # Bounds every fm_lock_acquire_wait in this shell and its subshells; not
+    # exported, so no child process inherits it.
+    FM_LOCK_WAIT_DEADLINE=$SCAN_DEADLINE
+    # Armed before the acquire so no window holds the lock without a release
+    # path; releasing a lock this process does not hold is a no-op.
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
+    # Giving up the scan lock is a deadline stop like any other: the next scan
+    # resumes from the cursor this one never touched.
+    fm_lock_acquire_wait "$SCAN_LOCK" || exit 0
     scan "$2"
     ;;
   acknowledge)
