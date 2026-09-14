@@ -328,20 +328,72 @@ fm_busy_muse_binding_field() {  # <state-dir> <id> <key>
 # subagent/<child-session-id>/session.jsonl and carry their own independent run
 # lifecycle - folding a child's log would report the parent busy long after the
 # parent's turn ended.
+#
+# Every path this prints stays in the shell's spelling, because the binding and
+# the log-path validity check compare it with `=` and a `"$root"/*` prefix. On
+# Git Bash that takes two things node will not do by itself: MSYS rewrites a
+# `/`-leading argument into `C:/...` before node.exe sees it, and node's own
+# path.join answers in backslashes. So conversion is off for the call, node is
+# handed the one argument it must open - the root - already converted, and the
+# printed path is joined onto the shell's root with POSIX separators
+# (bin/fm-arm-pretool-check.sh and bin/fm-arm-command-policy.mjs record the
+# same two lessons).
+#
+# The workspace comparison is different on Git Bash, because muse is a native
+# binary and nothing here has observed which spelling its session record holds:
+# the shell's `/c/...`, `C:/...`, `C:\...`, or one differing in drive-letter
+# case or a trailing separator. So both sides are reduced to one spelling
+# first - separators to `/`, a `\\?\` prefix dropped, a `/c/` or
+# `/cygdrive/c/` mount to `c:/`, a trailing separator dropped, and the whole
+# path lowercased, as Windows compares paths - and the shell's worktree is
+# offered both as written and through `cygpath -m`, so a record in the shell's
+# own non-drive spelling (`/tmp/...`) still matches. A record that names the
+# same directory another way still misses: an 8.3 short name, a junction or
+# symlink, or a different mount of the same volume. On macOS and Linux the walk
+# root and the printed root are the same string, path.posix is node's path, and
+# the workspace is compared byte for byte, exactly as before.
 fm_busy_muse_matching_logs() {  # <sessions-root> <workspace-root>
-  local root=$1 ws=$2
+  local root=$1 ws=$2 walk_root=$1 spelling=posix ws_windows=
   [ -d "$root" ] || return 1
   command -v node >/dev/null 2>&1 || return 1
-  node - "$root" "$ws" <<'NODE'
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      walk_root=$(cygpath -w "$root" 2>/dev/null) && [ -n "$walk_root" ] || return 1
+      ws_windows=$(cygpath -m "$ws" 2>/dev/null) || ws_windows=
+      spelling=windows
+      local -x MSYS2_ARG_CONV_EXCL='*'
+      ;;
+  esac
+  node - "$walk_root" "$root" "$ws" "$spelling" "$ws_windows" <<'NODE'
 const fs = require("fs");
 const path = require("path");
-const [root, workspace] = process.argv.slice(2);
+const [walkRoot, root, workspace, spelling, workspaceWindows] = process.argv.slice(2);
+
+function windowsKey(value) {
+  if (typeof value !== "string" || value === "") return null;
+  let key = value.replace(/\\/g, "/").replace(/^\/\/\?\//, "");
+  const mount = /^\/cygdrive\/([A-Za-z])(\/|$)/.exec(key) || /^\/([A-Za-z])(\/|$)/.exec(key);
+  if (mount) key = `${mount[1]}:/${key.slice(mount[0].length)}`;
+  key = key.replace(/\/+$/, "");
+  if (/^[A-Za-z]:$/.test(key)) key += "/";
+  return key === "" ? null : key.toLowerCase();
+}
+
+const wanted = spelling === "windows"
+  ? new Set([workspace, workspaceWindows].map(windowsKey).filter((key) => key !== null))
+  : null;
+
+function workspaceMatches(recorded) {
+  if (wanted === null) return recorded === workspace;
+  const key = windowsKey(recorded);
+  return key !== null && wanted.has(key);
+}
 
 function directories(parent) {
   try {
     return fs.readdirSync(parent, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(parent, entry.name));
+      .map((entry) => entry.name);
   } catch {
     return [];
   }
@@ -364,17 +416,19 @@ function metadataWorkspace(file) {
   }
 }
 
-for (const year of directories(root)) {
-  for (const month of directories(year)) {
-    for (const day of directories(month)) {
-      for (const session of directories(day)) {
-        const file = path.join(session, "session.jsonl");
+for (const year of directories(walkRoot)) {
+  for (const month of directories(path.join(walkRoot, year))) {
+    for (const day of directories(path.join(walkRoot, year, month))) {
+      for (const session of directories(path.join(walkRoot, year, month, day))) {
+        const file = path.join(walkRoot, year, month, day, session, "session.jsonl");
         try {
           if (!fs.lstatSync(file).isFile()) continue;
         } catch {
           continue;
         }
-        if (metadataWorkspace(file) === workspace) process.stdout.write(`${file}\n`);
+        if (workspaceMatches(metadataWorkspace(file))) {
+          process.stdout.write(`${path.posix.join(root, year, month, day, session, "session.jsonl")}\n`);
+        }
       }
     }
   }

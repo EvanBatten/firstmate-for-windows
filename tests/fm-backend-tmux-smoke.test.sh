@@ -26,7 +26,7 @@ wait_for_capture_text() {  # <target> <text> [samples]
   return 1
 }
 
-command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
+command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 77; }
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-backend-smoke-$$"
 SHIM_DIR=

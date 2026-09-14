@@ -192,6 +192,7 @@ fm_cursor_argv0_for_pid() {  # <pid> [comm-fallback]
     [ -n "$argv0" ] && { printf '%s\n' "$argv0"; return 0; }
   fi
   if [ -z "$fallback" ]; then
+    # fm-invariant: allow ps-o - argv[0] after /proc/<pid>/cmdline, which MSYS answers first
     fallback=$(LC_ALL=C ps -p "$pid" -o comm= 2>/dev/null || true)
   fi
   [ -n "$fallback" ] || return 1

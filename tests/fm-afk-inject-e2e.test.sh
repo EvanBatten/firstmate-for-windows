@@ -33,7 +33,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$ROOT/bin/fm-supervise-daemon.sh"
 
 # Skip gracefully if tmux is not installed.
-command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
+command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 77; }
 
 REAL_TMUX=$(command -v tmux)
 SOCKET="afk-e2e-$$"

@@ -28,20 +28,24 @@ pass() { printf 'ok - %s\n' "$1"; }
 
 if [ "${FM_HERDR_VERSION_FLOOR_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_HERDR_VERSION_FLOOR_LIVE_E2E=1 to run the real-release Herdr version-floor guard"
-  exit 0
+  exit 77
 fi
 
-for tool in herdr jq curl shasum; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
+
+for tool in herdr jq curl; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 77; }
 done
-[ -x "$LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $LAB_HELPER"; exit 0; }
+fm_test_sha256_stdin </dev/null >/dev/null 2>&1 || { echo "skip: neither sha256sum nor shasum found"; exit 77; }
+[ -x "$LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $LAB_HELPER"; exit 77; }
 
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) ASSET=herdr-macos-aarch64 ;;
   Darwin/x86_64) ASSET=herdr-macos-x86_64 ;;
   Linux/aarch64|Linux/arm64) ASSET=herdr-linux-aarch64 ;;
   Linux/x86_64) ASSET=herdr-linux-x86_64 ;;
-  *) echo "skip: no pinned Herdr release asset for $(uname -s)/$(uname -m)"; exit 0 ;;
+  *) echo "skip: no pinned Herdr release asset for $(uname -s)/$(uname -m)"; exit 77 ;;
 esac
 
 # Digests are pinned for every supported asset measured on 2026-08-05.
@@ -59,6 +63,7 @@ LAB_SESSION=$("$LAB_HELPER" name fm-herdr-version-floor)
 cleanup() {
   local status=$?
   rm -rf "$TMP_ROOT"
+  fm_test_cleanup
   exit "$status"
 }
 trap cleanup EXIT
@@ -117,7 +122,7 @@ while IFS=$'\t' read -r TAG VERSION_PREFIX EXPECTED MACOS_AARCH64_DIGEST MACOS_X
     "https://github.com/ogulcancelik/herdr/releases/download/$TAG/$ASSET"; then
     fail "could not download the pinned Herdr $TAG $ASSET asset; the floor mapping is unverified"
   fi
-  GOT_DIGEST=$(shasum -a 256 "$DIR/herdr" | awk '{print $1}')
+  GOT_DIGEST=$(fm_test_sha256 "$DIR/herdr") || fail "could not hash the downloaded Herdr $TAG $ASSET asset"
   [ "$GOT_DIGEST" = "$DIGEST" ] \
     || fail "Herdr $TAG $ASSET digest changed (expected $DIGEST, got $GOT_DIGEST); re-measure the floor mapping before trusting it"
   chmod +x "$DIR/herdr"

@@ -832,6 +832,7 @@ $ cat /proc/$$/pgid          # 13823, and $$ is 13823
 `bin/fm-sessionstart-nudge.sh` also had a second Windows defect in the same four lines: its `kill -0 "$lock_pid"` liveness probe. Slice 1 made the session lock record the harness's **Win32** pid on a Windows userland, and `kill -0` reports a Win32 pid as absent. Both now go through the library, and the walk gets the `fm_proc_chain_prime` call every other caller has, so an MSYS-to-Win32 ancestry costs one pwsh process instead of one per hop.
 
 `bin/fm-teardown.sh`'s three `ps -o pgid=` reads and `bin/fm-remote-entrypoint.sh`'s two `ps -o ppid=` reads are deliberately untouched: the first is inside a tmux-only `lsof`-unavailable fallback that fails safe (it prints a warning and returns 0) and is unreachable on a herdr backend, and the second runs on the remote host, which is never Windows. Both are named here so the next sweep does not have to rediscover them.
+Both have since moved onto the library, teardown's reads through `fm_proc_pgid` and the entrypoint's through `fm_proc_ppid`, and `bin/fm-repo-invariants.sh` now keeps the `ps -o` field form out of `bin/` (see "Two repository invariants" below).
 
 ### `\uHHHH` in a test fixture depends on the ambient locale
 
@@ -981,12 +982,14 @@ Issue #7 later moved every such fixture onto `tests/lib.sh`'s process-identity w
 `fm-x-mode`, `fm-test-run` and `fm-pr-merge` stay red: all three are row 21, and the D6 decision that unblocks them is Phase C's first move, not this slice's.
 
 The five `.opencode/plugins/*.js` cannot spawn a firstmate `.sh` on Windows (the EFTYPE finding above). `tests/fm-sessionstart-nudge.test.sh` therefore stays red one case later than it was.
+All seven node sites that start a firstmate script, these five among them, now start it through `bash` (see "Three operational defects filed as timing" below).
 
 `tests/fm-watcher-lock.test.sh` fails `expected exactly one lock winner under concurrency, got 2` on this host - byte-for-byte the same failure at `HEAD` as with this slice applied, so it is a pre-existing Windows red rather than a regression. It lives in the portable serial lane and is triaged with it. It is worth flagging as a lead: it is the watcher SINGLETON lock, so if it is a real defect rather than a fixture assumption it matters more than its lane suggests.
 
 Four test files still build fixtures out of shell `\uHHHH` escapes and will have the composer-lib problem on any host with no `LANG`. All four are in the portable serial lane.
 
 `bin/fm-teardown.sh` and `bin/fm-remote-entrypoint.sh` still read `ps -o` directly, for the reasons given above.
+Both have since moved onto the library; see above.
 
 `tests/fm-cursor-primary.test.sh` (run here because it copies `bin/fm-sessionstart-nudge.sh` into a fixture) stops on its first case with `a C compiler is required to build the fake Cursor process`. Git for Windows ships no `cc`, so that is a toolchain gap in the serial lane rather than anything this slice touched, and it means the copy-list change above is verified by lint and by inspection there rather than by a run. Issue #21 closed that gap by faking the harness with a copy of bash named `cursor-agent` instead of a compiled C program (a copy rather than a symlink so the identity holds however the parent is read: the classifier matches the command name, which a symlink keeps on Linux and on MSYS, but `/proc/<pid>/exe` would resolve a symlink back to bash; and every body handed to the fake ends in `exit "$?"` so bash cannot exec away the process the adapter is asserting against); the first Windows run of the suite came back 28 of 28 green in 657 s, and Linux is unchanged at 28 of 28 both at the branch and at its base.
 
@@ -1889,33 +1892,33 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-watch-triage | `watcher did not surface a turn-end whose crew is not provably working` | platform: spawn cost | read. Closed by issue #8 slice 1. |
 | fm-wake-daemon-lifecycle-e2e | `watcher did not exit for the routine signal` | platform: spawn cost | read. Closed by issue #8 slice 1: 2 of 2 green. |
 | fm-home-summary-refresh | `the real watcher did not begin polling` | platform: spawn cost | read. Re-measured under issue #8 slice 1: at `5ed6c5e` the suite stops earlier, on case 3's provenance assertion, which is not a timing budget; still open. |
-| fm-pending-reply | `recovery should send after completed turn + grace` | platform: spawn cost | read. A grace window in wall-clock seconds. |
+| fm-pending-reply | `recovery should send after completed turn + grace` | platform: spawn cost | read. A grace window in wall-clock seconds. Reclassified as product and fixed under "One process identity" below: the recovery sender's identity could not be read, so no recovery was sent; the suite now stops at `recorded Kimi spinner was not observed as busy`. |
 | fm-spawn-worktree-settle | `already-settled pane took 31s to confirm` | platform: spawn cost | read. The assertion is a wall-clock bound sized for a fast spawn. |
 | fm-startup-network | `start blocked for 10s behind a 10s worker` | platform: spawn cost | read. A parallelism assertion in wall-clock seconds. |
 | fm-session-lock-ancestry | `the fixture hook never finished` | platform: spawn cost | read. Slice 9 measured the severed-shape identity proof at 5.5 s; this fixture waits less than a loaded machine needs. |
 | fm-backlog-handoff | `reconciliation-race handoff never reached backend delivery` | platform: spawn cost | read. A race the fixture stages with sleeps. |
 | fm-control-relaunch | `relaunch did not reach trace delivery` | platform: spawn cost | read. |
-| fm-control | `the result should report muse's cancelled terminal acknowledgement` | platform: spawn cost | read. |
+| fm-control | `the result should report muse's cancelled terminal acknowledgement` | platform: spawn cost | read. Reclassified as product and fixed under "Three operational defects filed as timing" below: the muse session matcher lost its paths to MSYS conversion, and the case now passes. |
 | fm-inactive-reconcile | `main did not queue terminal presentation` | platform: spawn cost | read. |
-| fm-remote-transport-lanes | `the worker did not publish its readiness heartbeat` | platform: spawn cost | read. |
-| fm-remote-job-orphan-reap | `could not start the fixture remote job worker` | platform: spawn cost | read. |
-| fm-remote-job | `the default queue bound is too short` | platform: spawn cost | read. The bound is a wall-clock constant. |
+| fm-remote-transport-lanes | `the worker did not publish its readiness heartbeat` | platform: spawn cost | read. Re-measured under "One process identity" below: the heartbeat was the identity defect and now publishes; the suite stops at `home B's job waited ... behind home A's long job`, still spawn cost. |
+| fm-remote-job-orphan-reap | `could not start the fixture remote job worker` | platform: spawn cost | read. Re-measured under "One process identity" below: the fixture finds its worker with `pgrep`, which this box does not have, so the red is toolchain; still open. |
+| fm-remote-job | `the default queue bound is too short` | platform: spawn cost | read. The bound is a wall-clock constant. Re-measured under "One process identity" below: that case was the identity defect and now passes; the suite stops at `the worker did not publish its readiness heartbeat`, because its fixture PATH holds no `git`. |
 | fm-remote-reply | `the remote reply delta was not durably captured` | platform: spawn cost | read. |
 | fm-remote-secondmate-lifecycle-e2e | `serialized successful seed failed` | platform: spawn cost | read. |
-| fm-backend-herdr-focus-flash-e2e | `the idle-shell proof never ran` | platform: spawn cost | read. The fixture waits for a pane shell to go idle. |
-| fm-muse-harness | `muse binding did not exclude the pre-existing session` | platform: spawn cost | read. |
+| fm-backend-herdr-focus-flash-e2e | `the idle-shell proof never ran` | platform: spawn cost | read. The fixture waits for a pane shell to go idle. Re-measured under "Three operational defects filed as timing" below: the close plan fell back to `plain` when `bin/backends/herdr-workspace-move.py` failed, before the proof was asked, so this is not spawn cost; still open. |
+| fm-muse-harness | `muse binding did not exclude the pre-existing session` | platform: spawn cost | read. Reclassified as product and fixed under "Three operational defects filed as timing" below: the muse session matcher lost its paths to MSYS conversion; 25 of 25 green. |
 | fm-fleet-snapshot-view | `view should render bold in-flight row from snapshot` | platform: spawn cost | read. The row is missing from a snapshot the fixture expects to have been refreshed by then. |
 | fm-bearings-snapshot | `bearings did not disclose bounded parent activity evidence` | platform: spawn cost | read. Ledger row 30's CRLF defect lives in this script but is not this assertion. |
-| fm-busy-adapter-wiring | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | platform: spawn cost | read. A settle window the fixture times. |
+| fm-busy-adapter-wiring | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | platform: spawn cost | read. A settle window the fixture times. Reclassified as product and fixed under "Three operational defects filed as timing" below: Windows node could not start the adapter's script; 8 of 8 green. |
 | fm-pi-watch-extension | `must surface an external healthy watcher as an owned-wake failure` | platform: spawn cost | read. |
 | fm-secondmate-reconcile | `the window was shorter than four hours` | platform: spawn cost | read. A cooldown computed from wall-clock stamps. |
 | fm-teardown-endpoint-safety | `recorded target pid no longer belongs to the expected child` | platform: spawn cost | read. A pid-identity assertion against a child the fixture outlived. |
 | fm-claude-stop-autoarm | `the superseded owner must exit 0 instead of double-translating: expected exit 0, got 2` | unclassified at the time; **fixed** by issue #10: a six-second supersession window that a slow spawn outruns (see the "Issue #10" section under Integration) | measured three ways: in the lane after 603 s, alone at HEAD after 574 s, and alone in a worktree at slice 9's own commit `d80757f` - 36 cases pass and then the same line, every time. Diagnosed 2026-09-05: owner A was never superseded before it legitimately won; a parked-arm barrier replaces the sleep. |
-| fm-turnend-guard | `OpenCode plugin must run the guard from worktree even when directory is elsewhere` | unclassified, but **not** load and **not** a regression | measured the same three ways: 43 cases pass and then the same line, in the lane, alone at HEAD, and alone at `d80757f`. |
+| fm-turnend-guard | `OpenCode plugin must run the guard from worktree even when directory is elsewhere` | unclassified, but **not** load and **not** a regression | measured the same three ways: 43 cases pass and then the same line, in the lane, alone at HEAD, and alone at `d80757f`. Classified as product and fixed under "Three operational defects filed as timing" below: Windows node could not start the guard script, and the case now passes. |
 | fm-kimi-harness | `Kimi hook removal failed` | unclassified | measured. Converting its three fakebins to `fm_fakebin_link` did not move the first case, so the cause is elsewhere; the speculative change was reverted rather than left in. |
-| fm-on | `remote exit status was not preserved (got 64)` | unclassified | read. 64 is a usage refusal from the fixture's ssh stub, so the stub and the product are not separated. |
-| fm-operational-input | `OpenCode cross-language adapter could not invoke the canonical owner` | unclassified | read. A node/bash boundary that needs its own look. |
-| fm-sessionstart-nudge | `OpenCode exact nudge delivery: expected exit 0, got 1` | unclassified | read. The `BASE_PATH` fix did not move it. |
+| fm-on | `remote exit status was not preserved (got 64)` | unclassified | read. 64 is a usage refusal from the fixture's ssh stub, so the stub and the product are not separated. Fixed under "One process identity" below, together with the operator PATH composer: this case and the child PATH case now pass. |
+| fm-operational-input | `OpenCode cross-language adapter could not invoke the canonical owner` | unclassified | read. A node/bash boundary that needs its own look. Classified as product and fixed under "Three operational defects filed as timing" below: the encoder's `spawn` failed with `EFTYPE`, and the case now passes. |
+| fm-sessionstart-nudge | `OpenCode exact nudge delivery: expected exit 0, got 1` | unclassified | read. The `BASE_PATH` fix did not move it. Classified as product and fixed under "Three operational defects filed as timing" below: Windows node could not start the nudge script, and the case now passes. |
 | fm-pi-branch-extension | `file:///C:/Users/ebatt/firstmate-gnhf/[eval1]:10` | unclassified | read. A Windows ESM specifier form inside a node `--eval`; worth its own measurement. |
 | fm-pr-check-security | `parser accepted a rejected raw-byte URL class` | unclassified | read. A security-parser assertion, which is exactly the kind that must not be waved through as timing. |
 | fm-secondmate-safety | `fm-pr-check failed under FM_HOME` | unclassified | read. Plausibly row 21's mode gate again, but not measured. |
@@ -1923,7 +1926,7 @@ Forty-five of the 65 are **read** and twenty are **measured**; that is the hones
 | fm-tool-update-check | `commits behind the origin branch were not reported`, with `origin has no branch main` | unclassified | read. The product answered that about a fixture remote it had just created; a `file://` remote with a drive-letter path is the first suspect. |
 
 Counted by class: 12 fixed this slice (6 of them fully green), 7 row 21, 5 toolchain, 29 spawn cost, 1 product, 11 unclassified - 65.
-Those counts are slice 11's snapshot: one of the eleven unclassified rows, `fm-claude-stop-autoarm`, was later closed by issue #10 and its suite now runs green.
+Those counts are slice 11's snapshot; a row closed or reclassified since says so in its own reason.
 
 ### The four fixture defects this slice fixed
 
@@ -2494,12 +2497,290 @@ A second directive on `bin/fm-teardown.sh` would suppress no finding that fires 
 Its cost is wall time, measured here as 744 s to 1333 s, a factor of 1.79, and the ratio rather than the absolute is what transfers, because two workers occupy only two of the runner's four cores, so the job's wall is the slower shard under two workers and the two shards added under one.
 That lever was taken: `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1` on the lint step, which makes the job's peak the largest single root rather than the sum of two, 7.95 GiB against the 12 GiB budget.
 A reliably green gate was judged worth more than the extra ten minutes, and unlike the second directive it gives up no coverage anywhere.
-The pre-push gate takes the same lever for the same reason: `.no-mistakes.yaml` runs `git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint`.
+The pre-push gate takes the same lever for the same reason: `.no-mistakes.yaml`'s `commands.lint` passes `--jobs 1` to `bin/fm-lint.sh`.
 It is the same gate in the other place, and it has less headroom rather than more - this box has 15 GiB against the runner's 16 GB - while its changed-file set on any branch that touches both `bin/fm-teardown.sh` and `bin/fm-watch.sh` carries the whole of that summed peak.
-Spelled as the script's own `--jobs` option, not an environment prefix, because no-mistakes hands `commands.lint` to cmd.exe on Windows, which can read a POSIX `FM_LINT_JOBS=1` prefix no more than it can run the bare script (issue #20).
+Why that line is spelled for cmd.exe, with no environment prefix and nothing that depends on quoting, is owned by the comment above it (issue #20).
 
 The directive was proved live rather than assumed: a copy of the file with an unreachable command appended draws no SC2317 with the directive and draws it once that one line is removed, while SC2034 keeps firing in both halves, so the copy was being read and only the flow-graph family changed.
-No green Linux lint run exists yet, so the end-to-end proof is still outstanding, and the Lint job on the pull request carrying this change is what will supply it.
+The first green Linux lint run of the port was the Lint job on PR #38, 17 minutes 38 seconds with one worker.
+
+The process-identity change in PR #42 took two roots back over the ceiling without adding a file to the lint set, because ShellCheck inlines a sourced file at every directive site rather than once per unit.
+The pending-reply library gained a top-level load of the wake library while three lock helpers kept their own directive-bearing reloads, and teardown kept a guarded reload inside a function, so each of those roots re-analysed the wake subtree several times over.
+Measured 2026-09-13 on WSL2 Ubuntu with ShellCheck 0.11.0, `bin/fm-teardown.sh` went from the 8289836 KiB in the ranking above to more than 15698236 KiB, killed at 973 s, and `bin/fm-watch.sh` from 4441636 KiB to more than 15715988 KiB, killed at 446 s; the CI Lint job died with exit 143 at 11 minutes 45 seconds having printed no finding.
+The fix marks the reloads in the pending-reply library's three lock helpers and teardown's guarded reload `source=/dev/null`, which changes nothing at runtime and gives up no coverage, since every definition is already in the unit from the first load and the wake library is still analysed in full as its own root.
+With it, `bin/fm-teardown.sh` peaks at 5296720 KiB in 48 s and `bin/fm-watch.sh` at 3124808 KiB in 26 s, both below their ranking figures, with no finding on either.
+The teardown root still follows the wake library at three sites, `bin/fm-teardown.sh:204`, `bin/fm-public-followup-lib.sh:346` and `bin/fm-pending-reply-lib.sh:120`, and the 5296720 KiB above was measured with all three in place; issue #45 tracks them.
+The extended-analysis directive held in reserve for those two roots was not needed.
+
+## How a skipped suite is counted, and the two results that change category
+
+A gate skip is now exit status 77 and nothing else.
+`bin/fm-test-run.sh` used to decide the category by reading a script's first non-empty output line and asking whether it started with `skip:`.
+That is an inference about a decision only the script can make, and it was measurably wrong in both directions on both platforms.
+
+On this box, `tests/lib.sh` prints `# host time scale N` when it is sourced on a slow host, so a suite that sources the library before it gates prints that comment first and its real gate never reached the first line.
+Two suites were probed through the runner here on 2026-09-12 and both were published as passes having run nothing:
+
+```
+# host time scale 40 (about 312 ms per exec)
+skip: set FM_AFK_PI_HERDR_E2E=1 to run the real Pi/Herdr away-return regression
+FM_TEST_END 2026-09-12T19:38:33Z tests/fm-afk-pi-herdr-return-e2e.test.sh exit=0 duration_ms=18160 gate_skip=false
+# host time scale 40 (about 266 ms per exec)
+skip: set FM_SEND_MARKER_HERDR_E2E=1 to run the real Pi/Herdr secondmate-marker regression
+FM_TEST_END 2026-09-12T19:38:52Z tests/fm-send-secondmate-marker-herdr-e2e.test.sh exit=0 duration_ms=15959 gate_skip=false
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=42991
+```
+
+On Linux the same rule erred the other way, because a suite whose *first case* skips looks identical to a suite that gated.
+Run 34178916846 (2026-09-08) published `total=166 failed=0 skipped_gate=27`.
+Two of those 27 had run cases: `tests/fm-pi-branch-extension.test.sh` ran 29 green and `tests/fm-calm-pi-extension.test.sh` ran 2 green, both verified from the serial 1 and serial 3 job logs, and both skipped their first case only because the pi package is absent on the runner.
+
+So exactly two results change category with this rule, on every platform that runs them, and both are named here:
+
+| Suite | Before | After |
+| --- | --- | --- |
+| `tests/fm-pi-branch-extension.test.sh` | gate-skip | pass, 29 cases ran |
+| `tests/fm-calm-pi-extension.test.sh` | gate-skip | pass, 2 cases ran |
+
+The Linux aggregate therefore goes from 27 gate-skips to 25, and its green count rises by 2.
+That is the truth being restored rather than a number being moved: the 25 remaining are real whole-suite gates (opt-in env, no cmux, no zellij, no herdr lab helper, no pi).
+The rule can only move a result from skip to pass, never the reverse, because nothing a script prints can grant a skip.
+
+No published Windows number is currently wrong.
+The parallel lanes' 19 green / 4 red / 1 gate-skip is exact: the scale comment appears there, but the single gate-skip is `tests/fm-pi-primary-types.test.sh`, which does not source `tests/lib.sh`, so its skip line was still first.
+The serial lane's slice 11 count, `total=135 failed=65 skipped_gate=26`, was measured 2026-08-30 and the scale comment landed 2026-09-05 in `63987a0`, so that count predates the hazard and no serial lane has been published since.
+It was armed, though: a serial re-run here at that commit would have published the two probed suites above as green.
+
+`FM_TEST_END` and the JSON artifact now also carry `cases_ok` and `cases_skipped` per script.
+The runner uses those counts only to refuse, never to grant: an exit status they contradict, including a gate still exiting 0 having run nothing, is counted as a failure, and the `bin/fm-test-run.sh` header owns the three refusals.
+
+## One process identity: the remote job and pending-reply libraries
+
+`bin/fm-remote-job-lib.sh` and `bin/fm-pending-reply-lib.sh` were the last two places outside `bin/fm-wake-lib.sh` that spelled a process identity themselves, as `ps -p <pid> -o lstart=` and `-o command=`.
+Git Bash's `ps` has no `-o`, so every one of those reads returned 1 here.
+Two consequences were operational, not test artifacts: a remote job worker could never publish its lock owner, so staging failed at its first line, and a pending-reply recovery returned before sending, so a secondmate reply left pending after a completed turn was never recovered on Windows.
+
+### Before and after, measured on this box 2026-09-12
+
+Each row is a one-case copy inside `tests/`, run against the libraries before the change and after it.
+
+| Case | Before | After |
+| --- | --- | --- |
+| `fm-remote-job` start identity reads, with a negative control | `could not read this shell's start identity` | ok |
+| `fm-pending-reply` sender identity reads, with a stale-sender control | `the recovery sender's identity could not be read on this host` | ok |
+| `fm-remote-job` staging (the default bounds case) | `the default queue bound is too short`, after `cat` found no job | ok |
+| `fm-pending-reply` `recovery should send after completed turn + grace` | red | ok |
+| `fm-remote-transport-lanes` readiness heartbeat | red | readiness passes; the case now fails on `home B's job waited 65s behind home A's long job` |
+| `fm-on` case 1 and the child PATH case | `got 64`, then the PATH contract | both ok |
+
+The two negative controls were each shown to fail with their comparator stubbed to always answer yes, so neither unit case can pass by never saying no.
+
+The readiness row needed the PATH composer from `29b50ca` as well: with identity fixed, the worker got one step further and died on `cannot publish worker code identity`, because the composed PATH had no `git`.
+Its remaining red is timing: a diagnostic run showed home A's job finished at t=129, home B's job ran at t=172 with exit 0 and an empty worker log, so B was neither blocked by A nor reclaimed; the worker took about 50 seconds to launch B's lane against a 3-second bound.
+That row therefore stays in issue #8's spawn-cost family, now for the right reason.
+
+Whole suites at the final commit, run one at a time here:
+
+| Suite | Result | What it stops on now |
+| --- | --- | --- |
+| `fm-pending-reply` | 33 ok, 1 not ok, exit 0, 2766 s | `recorded Kimi spinner was not observed as busy`, a capture-fallback case; the suite exits 0 because that case's body is a subshell whose `fail` the run list does not propagate |
+| `fm-remote-job` | 7 ok, 1 skip, then red | `the worker did not publish its readiness heartbeat`: the fixture starts the worker with `PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin"`, where `git` does not resolve, so the composer has nothing to append and the worker logs `cannot publish worker code identity` 17 times in 300 s |
+| `fm-remote-entrypoint` | 2 ok | - |
+| `fm-remote-job-orphan-reap` | red at its first case | `could not start the fixture remote job worker`: the fixture finds the worker with `pgrep`, which this box does not have |
+| `fm-remote-transport-lanes` | 1 ok, then red | `home B's job waited 89s behind home A's long job` |
+
+So the `fm-pending-reply` row in the slice 11 verdict table, carried as spawn cost, was this defect, and the suite now reaches its thirty-third case.
+The `fm-remote-transport-lanes` and `fm-remote-job-orphan-reap` rows there are still red, for the reasons above rather than for identity.
+
+On WSL Ubuntu the six suites this change touches give the same verdicts at base `2e0cee7` and at the final commit, with the new cases added: `fm-remote-job` 25 to 28 ok, `fm-remote-transport-lanes` 12 and 12, `fm-pending-reply` 33 to 34, `fm-remote-entrypoint` 2 and 2; `fm-on` stops at the same missing `tasks-axi` and `fm-remote-job-orphan-reap` at the same init-reparenting precondition in both.
+
+### A whole identity does not survive an exec, on either platform
+
+A job's group leader is recorded while it waits to be armed, and only then execs the job command.
+A probe of that shape, reading `fm_pid_identity` before arming and again after the exec:
+
+```
+MSYS:  proc-createtime-ms=...0733 cmdline-hex=6261...  ->  proc-createtime-ms=...3131 cmdline-hex=736c...  NOT EQUAL
+Linux: linux-starttime=2034 cmdline-hex=6261...        ->  linux-starttime=2034 cmdline-hex=736c...        NOT EQUAL
+```
+
+So the remote job library records the start half only, through `fm_pid_start_identity` and `fm_pid_start_identity_equal` in `bin/fm-wake-lib.sh`, and keeps pairing the worker lock with a separate command check.
+The pending-reply sender never execs, so it records the whole identity.
+On Git Bash an exec is a new Windows process with its own creation time, so no start recorded before an exec matches after it there; a live exec'd group leader still reads as stale on a crash reclaim, and the new exec case skips on MSYS saying so.
+So stopping or crash-reclaiming a running job does not work on Windows: the worker takes the live command group for dead, signals nothing, and leaves the job's command tree running unowned, which issue #40 tracks.
+The lane launch has the same shape and races the exec; six launches here read after the final exec every time the later read succeeded, within 8 ms of it.
+
+### The loader's guard cost a second per source on WSL
+
+Both libraries load the wake library once at source time, guarded by whether its comparator is already defined.
+The first guard was `command -v`, which searches PATH for a name that is not a function, and WSL's PATH carries the Windows interop directories.
+Sourcing `bin/fm-remote-job-lib.sh` there went from 62 ms for five sources to 6512 ms, and `fm-remote-job` went from 3 of 3 green to 3 of 3 red, each run on a different start or readiness bound.
+The guard is `declare -F` now, which asks about functions only: 115 ms for five sources and 3 of 3 green with 28 cases.
+
+### A live Linux worker from the previous build wedged the upgrade
+
+The previous build recorded the worker lock owner's start as `ps -o lstart=`, which this build never compares equal.
+That worker keeps its heartbeat fresh, so its lock is never free to take, and the replacement path stopped only a worker whose lock record matched.
+Measured on WSL Ubuntu with a worker started from base `c0113c0`, then this build's files moved into its root in place: `ensure` failed after 68 s with `remote job worker did not report ready after startup`, the old worker kept running, and five supervisors that could never take the lock were left behind.
+`fm_pid_start_identity_comparable` in `bin/fm-wake-lib.sh` says whether two start readings are in the same dialect, and `fm_remote_job_lock_owner_matches_process` uses it to tell two mismatches apart.
+A recorded start this build can compare that does not match is still no match, whichever root is asking.
+A start it cannot compare, with the recorded pid and command matching the live process, names that worker, and `fm_remote_job_worker_owned_alive` trusts or replaces it from any root, as it does a record that matches.
+Every other caller of the lock check still reads that case as no match.
+
+An earlier version of this fix named the worker only when `worker.pid` ran the ensuring root's worker, but worker state is per account, so a first command through another root still wedged.
+Measured with the previous-build worker serving one root and both roots upgraded in place, the first command arriving through the second: `ensure` failed after 67 s, the old worker kept running, and ten worker processes were left.
+The same run now: `ensure` succeeded in 1 s, stopped the old worker, and rewrote the lock start as `linux-starttime=`; a second `ensure` repaired nothing, the job ran from the second root, and one worker tree remained.
+
+`fm-remote-job` has three cases here: a start this build can compare that does not match names no worker from either root, a previous-build start is replaced once through the worker's own root, and again through a relocated root.
+The earlier library fails the first case; with that case removed it passes the same-root upgrade and fails the relocated one with the wedge error.
+With the fix the suite passes on WSL with 31 ok.
+The two upgrade cases skip off Linux: macOS reads the same `ps -o lstart=` form, and on Git Bash the previous build never ran a worker.
+
+Upgrade cost on Linux: a record written by the previous build holds a `ps` string that never compares equal, so the live worker is stopped and replaced once, whichever root the first command arrives through (the code change forces that replacement anyway), each job claim is reclaimed once, and a recovery in flight is reconciled once.
+
+### The worker's code identity covers every library its serve loop keeps
+
+`fm_remote_job_code_identity` decides whether `ensure` replaces a live worker, and it hashed only `bin/fm-remote-job-lib.sh` and `bin/fm-remote-job-worker.sh`.
+The serve loop also keeps `bin/fm-private-lib.sh`, `bin/fm-wake-lib.sh` and `bin/fm-proc-lib.sh` as they were when it started, and the last two now read every start identity it records and compares.
+An update that changed only one of them left the old loop running beside lanes and entrypoints that write records in the new form, so a later crash reclaim could take a live job group for a reused pid.
+The identity now hashes all five files and folds their hashes into one, so it fits the identity file's 256-byte bound even where git hashes with SHA-256.
+The identity changes at this upgrade, which forces the same one-time replacement described above.
+After it, a change to any of the three libraries alone replaces a live worker at the next `ensure`, and stops a job that worker is running.
+A new `fm-remote-job` case changes each library alone and expects a replacement.
+With the previous identity it fails with `ensure retained a worker running a stale fm-private-lib.sh`; with the fix the suite passes on WSL Ubuntu with 32 ok, both previous-build upgrade cases among them.
+
+## Three operational defects filed as timing
+
+Plan p6 section 6 named three product defects hiding under issue #8's timing label.
+Two were real and are fixed; the third was reproduced red for a different reason.
+Its proof now reads processes through the proc library, described below, which leaves that case red and does not let the proof pass for a Firstmate task pane.
+
+### Node cannot start a shebang script, and seven sites asked it to
+
+Native node on this box fails `spawn("<script>.sh")` with `EFTYPE` and runs `spawn("bash", [script])`.
+Seven product sites used the first form: the four OpenCode primary plugins, the OpenCode operational-input encoder under `.opencode/plugins/lib/`, and the two per-task busy adapters `bin/fm-spawn.sh` writes for OpenCode and Pi.
+The plan counted six; the encoder is the seventh, and the OpenCode turn-end guard needs it to deliver its prompt.
+The two adapters swallowed the error, so an OpenCode or Pi crewmate stayed `busy fm-spawn` for the life of the task, and an OpenCode primary ran no guard, seatbelt or nudge.
+Every site now spawns `bash` with the script first, the shape `.pi/extensions/fm-primary-turnend-guard.ts` already used.
+
+| Case (one-case copy unless noted) | Before | After |
+| --- | --- | --- |
+| `fm-busy-adapter-wiring`, whole suite | `agent_settled with isIdle must classify 'idle pi-ext', got 'busy fm-spawn'` | 8 ok |
+| `fm-busy-adapter-wiring` OpenCode plugin lifecycle | `session busy must classify 'busy opencode-plugin', got 'busy fm-spawn'` | ok |
+| `fm-operational-input` OpenCode adapter | `EFTYPE`, `could not invoke the canonical owner` | ok |
+| `fm-turnend-guard` OpenCode plugin anchored to worktree | `expected exit 0, got 1` | ok |
+| `fm-sessionstart-nudge` OpenCode exact nudge | `expected exit 0, got 1` | ok |
+
+The turn-end guard case stays red with either of its two sites reverted, so both are proven.
+The cd-check and pretool-check plugins have the same change and no unit case.
+
+### The muse matcher lost its paths to MSYS conversion, then to path.join
+
+`fm_busy_muse_matching_logs` passes the sessions root and the worktree to node.
+MSYS rewrites both into `C:/...` first, so the worktree never equalled the POSIX spelling the harness fixture's session record holds, and nothing matched.
+With that fixed alone, node's `path.join` printed `C:\...\session.jsonl`, which fails the binding's `prior_log=` equality.
+The call now turns conversion off, gives node the root it opens already converted by `cygpath -w`, and joins each printed path onto the shell's root with `path.posix.join`.
+muse is a native binary and is not installed here, so which spelling a real session record holds is unobserved, and the fixture's POSIX one is only an assumption.
+So the worktree comparison no longer requires any one spelling: both sides are reduced to a lowercased `c:/...` form, with backslashes, a `\\?\` prefix, a `/c/` or `/cygdrive/c/` mount and a trailing separator normalised, and a new case matches eight spellings of one worktree while refusing a sibling, a child and the parent.
+A record naming the same directory through an 8.3 short name, a junction or another mount still misses.
+The branch is keyed on `OSTYPE`, so Linux and macOS run nothing new.
+
+| Case (one-case copy) | Before | After |
+| --- | --- | --- |
+| `fm-muse-harness` binding written and torn down | no `prior_log=` line | ok |
+| same, conversion fixed but native join | `prior_log=C:\Users\...\session.jsonl` | - |
+| `fm-control` muse interrupt acknowledgement | `cancel=unconfirmed` | ok |
+
+`fm-muse-harness` as a whole went to 25 of 25 green here.
+
+### The herdr idle-shell proof is not the gate that fails
+
+`fm-backend-herdr-focus-flash-e2e` ends `the idle-shell proof never ran` against herdr 0.8.2.
+A copy that prints the adapter's output and CLI calls shows the close plan fell back to `plain` when `bin/backends/herdr-workspace-move.py` failed, before any `pane process-info` call.
+So `fm_backend_herdr_pid_is_bare_shell` and its `ps -p <pid> -o comm=` never ran, and fixing that spelling cannot change the case.
+Part A of the same run showed herdr 0.8.2's explicit close keeps focus, so the plain fallback costs nothing visible on this release.
+
+The proof's process reads now go through `bin/fm-proc-lib.sh` on both platforms: the shell's name through `fm_proc_comm`, the process table through `fm_proc_table`, its state through `fm_proc_state`, and herdr's Win32 shell pid is turned into the MSYS pid that `/proc` and `kill` address by `fm_proc_from_os_pid`, which the HUP and the KILL now use.
+Read-only `pane process-info` against herdr 0.8.2 on this host, 2026-09-13, showed the Windows spelling the proof had to accept: an idle pwsh pane reported `"name":"pwsh.exe"`, `"argv0":"C:\\Users\\ebatt\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.EXE"`, and one pid as `shell_pid`, foreground group and foreground process, so names are compared with the directory and `.exe` removed.
+The same call on a pane running Claude reported `shell_pid` 63628 and a foreground group and process of 88680, `claude.exe`.
+The proof still cannot pass for Firstmate's own task panes.
+`fm_backend_herdr_task_tab_create` opens each pane in herdr's default pwsh and starts Git Bash inside it, so `pane process-info` names pwsh as the pane's shell and reports a foreground group that is not pwsh's.
+The proof refuses on those fields before it reads anything through the proc library, and every such close still takes the plain path.
+Seeing through pwsh to the Git Bash inside it would be a separate feature, which this change does not build.
+No close through the proof has been observed on Windows.
+What is proven is the unit shape: `tests/fm-backend-herdr.test.sh` drives the pane-death close against a fake MSYS process table that names the shell by Win32 pid, and it succeeds only when the table, the state and the HUP all reach the MSYS pid.
+
+### Linux
+
+Measured on WSL Ubuntu at `d874791` and at the two fixes, whole suites:
+
+| Suite | `d874791` | After both fixes |
+| --- | --- | --- |
+| `fm-busy-adapter-wiring` | 8 ok | 8 ok |
+| `fm-operational-input` | 7 ok | 7 ok |
+| `fm-turnend-guard` | 78 ok | 78 ok |
+| `fm-sessionstart-nudge` | 30 ok | 30 ok |
+| `fm-muse-harness` | 25 ok | 25 ok |
+| `fm-control` | 35 ok | 35 ok |
+
+
+## Two repository invariants, and two settling runs from issue #8
+
+Measured on this box 2026-09-12 and 2026-09-13, at host time scale 35 to 40.
+
+### The invariants, and proof that each pattern bites
+
+`bin/fm-repo-invariants.sh`, run by `bin/fm-lint.sh`'s default path, fails when a file under `bin/` spells the `ps -o` field form outside `bin/fm-proc-lib.sh`, or a test takes a digest outside `fm_test_sha256`.
+A line may be excused only by a `# fm-invariant: allow <name> - <reason>` directive directly above it, and a directive with no spelling below it fails as dead.
+`tests/fm-lint-workflows.test.sh` pins the lint gate's call with a failing stand-in beside a valid workflow: the run must end with the stand-in's status and still lint the workflow.
+Removing the call, dropping its status, or returning on it each turns that case red.
+`tests/fm-repo-invariants.test.sh` drives the script against fixture trees holding every shape the repository has written, and the script refuses to pass when its pattern finds nothing in the owner.
+The planned patterns failed against those shapes, which is why that check exists:
+
+| Pattern | What the self-check printed |
+| --- | --- |
+| planned `-o[[:space:]]*(comm\|args\|...)[=,]` | `cannot match a shape the repository writes: rows=$("$ps_bin" -axo pid=,ppid= ...)` |
+| planned `\b(shasum\|sha256sum)\b` | `matches a line that is not the spelling: fm_install_stub_hasher "$fakebin" shasum` |
+| either, rewritten so it cannot cross embedded quotes | `finds nothing in its owner ...; the invariant is broken, not the tree` |
+
+A planted `"$ps_bin" -p "$pid" -o etime=` line in a `bin/` file and a planted `$(shasum -a 256 "$file" ...)` line in a test file each turned the matching case red with the offender printed.
+With `bin/fm-remote-entrypoint.sh` at its previous content the invariant printed both `ps -o ppid= -p $$` lines, which now read the parent through `fm_proc_ppid`.
+The three `bin/backends/herdr.sh` idle-shell proof lines are no longer excused: they read through the proc library, as described under the herdr idle-shell proof above.
+On WSL Ubuntu the first, test-file form of the invariants was green under gawk and under mawk, and `fm-remote-transport-lanes` stays green with the entrypoint change and goes red with its probe function removed.
+
+### `fm-startup-network start` does not block behind its worker
+
+The one-case copy with the fake bootstrap sleeping 30 s cannot answer this from a shell hosted by a real harness.
+With `--locked 1`, the ownership check walked to the hosting `claude.exe` rather than the fixture's fake harness, which only a fake `ps` knows about, and `start` refused after 17 to 29 s without launching a worker.
+That is the shape of issue #37.
+
+With `--locked 0` and the call read to EOF through a command substitution:
+
+| Worker sleep | `start` returned after | At return | Worker finished |
+| --- | --- | --- | --- |
+| 10 s | 10 s | worker pid alive, report `IN PROGRESS` | 28 s after launch |
+| 30 s | 12 s | worker pid alive, report `IN PROGRESS` | 54 s after launch |
+| 30 s, traced | 9 s | worker pid alive | 46 s after launch |
+
+The trace of an unlocked `start` spans 8.7 s with no single gap over 1.02 s, so its cost is exec count, not a wait.
+The ledger's `start blocked for 10s behind a 10s worker` was that cost landing on the fake's 10 s sleep.
+`fm-startup-network.sh wait 300` took 513 s when no status file existed, because it counts `sleep 1` iterations rather than wall clock.
+
+### The inactive reconcile budget fires on this host, at the default and at the cap
+
+One-case copy of `test_main_direct_terminal_presentation_receipt`, one terminal child:
+
+| Host | Budget | Scan wall time | Result |
+| --- | --- | --- | --- |
+| Git Bash | 10 (default) | 16.49 s | no wake, `main did not queue terminal presentation` |
+| Git Bash | 30 (the cap) | 36.22 s | `Terminated`, no wake |
+| Git Bash | 30, traced | 33.46 s | wake queued, then killed inside the lock release |
+| WSL Ubuntu | 10 | 0.41 s and 0.47 s | ok |
+
+The outer backstop in `scan` is `fm_run_timed $((BUDGET + 1))`, started before the bounded child forks.
+The scan's own deadline is set only after the child has sourced its libraries, taken the scan lock and written its marker, which took 5 to 8 s here.
+So the backstop always fired first, the scan's clean deadline path never ran, and `scan` exited 0 because it treats 124 as success.
+The scan is the problem rather than the cap: one child's evaluation after the crew-state answer took about 10 s of exec cost, so no budget in the valid 1 to 30 range covers two children on this host.
 
 ## What the spike did not know
 

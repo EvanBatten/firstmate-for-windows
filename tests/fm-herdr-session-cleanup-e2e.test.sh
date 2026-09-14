@@ -10,10 +10,10 @@ HERDR_LAB_HELPER=${HERDR_LAB_HELPER:-$ROOT/bin/fm-herdr-lab.sh}
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-command -v herdr >/dev/null 2>&1 || { echo 'skip: herdr not found'; exit 0; }
-command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found'; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo 'skip: python3 not found'; exit 0; }
-[ -x "$HERDR_LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $HERDR_LAB_HELPER"; exit 0; }
+command -v herdr >/dev/null 2>&1 || { echo 'skip: herdr not found'; exit 77; }
+command -v jq >/dev/null 2>&1 || { echo 'skip: jq not found'; exit 77; }
+command -v python3 >/dev/null 2>&1 || { echo 'skip: python3 not found'; exit 77; }
+[ -x "$HERDR_LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $HERDR_LAB_HELPER"; exit 77; }
 
 REAL_HERDR=$(command -v herdr)
 HERDR_ORIGINAL_PATH=$PATH

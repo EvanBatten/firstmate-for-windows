@@ -59,8 +59,10 @@
 # its configured FM_ROOT/bin. Every child receives env -i with the composed
 # PATH, HOME, FM_HOME, FM_ROOT_OVERRIDE, and FM_REMOTE_JOB_ACTIVE=1. The PATH
 # is intentionally filesystem-discovered rather than login-shell-derived:
-# ~/.local/bin; nvm, asdf, and mise shims/install bins; Nix; Homebrew; and the
-# system tail. No shell startup files are evaluated. Each discovered set is
+# ~/.local/bin; nvm, asdf, and mise shims/install bins; Nix; Homebrew; the
+# system tail; and, on an MSYS userland only, the directories where git and jq
+# actually resolve, because Git for Windows keeps them outside that tail. No
+# shell startup files are evaluated. Each discovered set is
 # appended in the shell's own sorted pathname-expansion order, so which install
 # of a multi-version tool wins is fixed by this composition rather than by the
 # order the filesystem happens to return.
@@ -87,6 +89,30 @@
 # state is created at, and whether the filesystem underneath can carry it.
 # shellcheck source=bin/fm-private-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-private-lib.sh"
+
+# bin/fm-wake-lib.sh owns process identity - how a pid's start and command
+# line read on each platform, and how two readings compare - and it sources
+# bin/fm-proc-lib.sh, which owns a pid's arguments and process group. This
+# library used to spell all three as `ps -o` fields, which Git Bash's ps
+# rejects, so no worker there could publish readiness or stage a job. It is
+# loaded once, here, because every reader below runs inside a command
+# substitution that would otherwise re-source it on every poll. The wake
+# library assigns FM_ROOT, FM_HOME, STATE and its queue paths and creates STATE
+# when sourced, and this library must leak none of them into the worker or the
+# remote entrypoint, so they are local to the load; STATE names this library's
+# own directory, which exists, so that mkdir creates nothing.
+_fm_remote_job_load_process_identity() {  # <bin-dir>
+  local FM_ROOT FM_HOME STATE FM_STATE_OVERRIDE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  # declare -F asks about functions only. `command -v` would search PATH for
+  # the name whenever it is not yet defined, which is the common case here,
+  # and that search cost over a second per source on WSL, whose PATH carries
+  # the Windows directories, turning every lane launch into a timeout.
+  declare -F fm_pid_start_identity_equal >/dev/null && return 0
+  STATE=$1
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$1/fm-wake-lib.sh"
+}
+_fm_remote_job_load_process_identity "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 FM_REMOTE_JOB_LABEL=dev.firstmate.remote-job
 FM_REMOTE_JOB_MAX_BYTES=${FM_REMOTE_JOB_MAX_BYTES:-1048576}
@@ -260,6 +286,38 @@ fm_remote_job_nvm_selected_bin() { # <account-home>
   fi
 }
 
+# The system tail below is a POSIX filesystem layout, and on an MSYS userland
+# (Git Bash, MSYS2, Cygwin) it describes an account with no git: bash and the
+# coreutils live in /usr/bin, but Git for Windows installs git.exe in
+# /mingw64/bin and jq wherever its own installer put it. A Windows account then
+# cannot act as a remote operator at all - fm-remote-entrypoint.sh refuses every
+# command with "required tool git does not resolve on the remote operator PATH",
+# and fm_remote_job_code_identity cannot even establish the worker's identity.
+# Appending the directories those two tools actually resolve from restores the
+# tail's POSIX meaning; this is the product-side twin of the fixture PATH that
+# tests/lib.sh's fm_test_base_path repairs.
+#
+# git and jq, and nothing else, for the same reason that helper gives: those are
+# the two tools the tail is assumed to hold, while the discovery above
+# deliberately owns where every version-managed tool comes from, so appending a
+# tool of that second kind here would override the selection it just made.
+#
+# Appended after the tail rather than into it, so nothing that already resolved
+# resolves anywhere new, and the composition on macOS and Linux is byte-identical
+# because the branch is not taken there.
+fm_remote_job_append_userland_tool_dirs() {
+  local tool resolved
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *) return 0 ;;
+  esac
+  for tool in git jq; do
+    resolved=$(command -v "$tool" 2>/dev/null) || continue
+    case "$resolved" in /*) ;; *) continue ;; esac
+    fm_remote_job_path_append_if_dir "${resolved%/*}"
+  done
+}
+
 fm_remote_job_compose_operator_path() { # <account-home>
   local account_home=$1 account_user nvm_bin
   FM_REMOTE_JOB_OPERATOR_PATH=
@@ -284,6 +342,7 @@ fm_remote_job_compose_operator_path() { # <account-home>
   fm_remote_job_path_append /bin
   fm_remote_job_path_append /usr/sbin
   fm_remote_job_path_append /sbin
+  fm_remote_job_append_userland_tool_dirs
   printf '%s\n' "$FM_REMOTE_JOB_OPERATOR_PATH"
 }
 
@@ -773,7 +832,7 @@ fm_remote_job_stage_owner_alive() { # <stage-dir>
   [ "$pid" -gt 1 ] || return 1
   recorded_start=$(fm_remote_job_read_single_line "$stage/.owner-start" 256 2>/dev/null) || return 1
   actual_start=$(fm_remote_job_process_start "$pid" 2>/dev/null) || return 1
-  [ "$recorded_start" = "$actual_start" ]
+  fm_pid_start_identity_equal "$actual_start" "$recorded_start"
 }
 
 fm_remote_job_reap_stale() { # <account-home>
@@ -907,29 +966,32 @@ fm_remote_job_worker_ready_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.r
 fm_remote_job_worker_identity_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.identity"; }
 fm_remote_job_worker_lock_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.lock"; }
 
-fm_remote_job_process_start() {
-  local pid=$1 ps_bin value
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  value=$("$ps_bin" -p "$pid" -o lstart= 2>/dev/null) || return 1
-  [ -n "$value" ] || return 1
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  printf '%s\n' "$value"
+# The start identity every ownership record here holds (a lock's `start`, a
+# stage's `.owner-start`, a claim's `owner_start`, `supervisor_start` and
+# `group_start`), read from its owner, bin/fm-wake-lib.sh. It is the start half
+# of the process identity, not all of it, because a group leader is recorded
+# before it execs the job command and an exec rewrites the command line; the
+# lock pairs it with fm_remote_job_process_command itself. Compare two of these
+# only with fm_pid_start_identity_equal, never `=`. On a host that reads /proc,
+# a record written by a build that read `ps -o lstart=` never compares equal, so
+# an upgrade reclaims each job claim once, and fm_remote_job_worker_owned_alive
+# still names a live worker whose lock that build wrote, so the code change
+# stops and replaces it once.
+fm_remote_job_process_start() { # <pid>
+  fm_pid_start_identity "$1"
 }
 
-fm_remote_job_process_command() {
-  local pid=$1 ps_bin value
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  value=$("$ps_bin" -p "$pid" -o command= 2>/dev/null) || return 1
+fm_remote_job_process_command() { # <pid>
+  local value
+  value=$(fm_proc_args "$1" 2>/dev/null) || return 1
   [ -n "$value" ] || return 1
   case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
   printf '%s\n' "$value"
 }
 
 fm_remote_job_process_pgid() { # <pid>
-  local pid=$1 ps_bin value
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  value=$("$ps_bin" -p "$pid" -o pgid= 2>/dev/null) || return 1
-  value=$(printf '%s' "$value" | tr -d '[:space:]')
+  local value
+  value=$(fm_proc_pgid "$1" 2>/dev/null) || return 1
   case "$value" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "$value"
 }
@@ -1007,8 +1069,13 @@ fm_remote_job_read_single_line() {
   printf '%s\n' "$value"
 }
 
+# 0 when the lock's owner record matches the live process it names. 2 when the
+# pid and command match but the recorded start is in a dialect this build cannot
+# compare with the one it reads (fm_pid_start_identity_comparable) - a lock a
+# previous build wrote - which every caller testing for success reads as no
+# match. 1 otherwise, including a comparable start that does not match.
 fm_remote_job_lock_owner_matches_process() {
-  local account_home=$1 lock pid recorded_start actual_start recorded_command actual_command
+  local account_home=$1 lock pid recorded_start actual_start recorded_command actual_command status=0
   fm_remote_job_prepare_state "$account_home" || return 1
   lock=$(fm_remote_job_worker_lock_path)
   [ -d "$lock" ] && [ ! -L "$lock" ] || return 1
@@ -1017,15 +1084,24 @@ fm_remote_job_lock_owner_matches_process() {
   [ "$pid" -gt 1 ] || return 1
   recorded_start=$(fm_remote_job_read_single_line "$lock/start" 256) || return 1
   actual_start=$(fm_remote_job_process_start "$pid") || return 1
-  [ "$recorded_start" = "$actual_start" ] || return 1
+  if ! fm_pid_start_identity_equal "$actual_start" "$recorded_start"; then
+    ! fm_pid_start_identity_comparable "$actual_start" "$recorded_start" || return 1
+    status=2
+  fi
   recorded_command=$(fm_remote_job_read_single_line "$lock/command" 8192) || return 1
   actual_command=$(fm_remote_job_process_command "$pid") || return 1
   [ "$recorded_command" = "$actual_command" ] || return 1
   FM_REMOTE_JOB_OWNER_PID=$pid
+  return "$status"
 }
 
+# The live worker a replacement may trust or stop, whatever root it serves: the
+# one the lock's owner record names, including a record whose start a previous
+# build wrote in a form this build cannot compare, so an upgrade replaces that
+# worker once instead of waiting on the heartbeat it keeps fresh. A lock that
+# records no owner at all falls back to worker.pid running this root's worker.
 fm_remote_job_worker_owned_alive() {
-  local root=$1 account_home=$2 lock pid pid_file identity_file command ps_bin
+  local root=$1 account_home=$2 lock pid pid_file identity_file command owner_status=0
   [ "${FM_REMOTE_JOB_ACTIVE:-}" != 1 ] || return 0
   fm_remote_job_prepare_state "$account_home" || return 1
   lock=$(fm_remote_job_worker_lock_path)
@@ -1037,33 +1113,43 @@ fm_remote_job_worker_owned_alive() {
   identity_file=$(fm_remote_job_worker_identity_path)
   fm_remote_job_regular_bounded "$identity_file" 256 || return 1
   fm_remote_job_probe "$account_home" || return 1
-  if fm_remote_job_lock_owner_matches_process "$account_home"; then
-    [ "$pid" = "$FM_REMOTE_JOB_OWNER_PID" ] || return 1
-    return 0
-  fi
+  fm_remote_job_lock_owner_matches_process "$account_home" || owner_status=$?
+  case "$owner_status" in
+    0|2)
+      [ "$pid" = "$FM_REMOTE_JOB_OWNER_PID" ] || return 1
+      return 0
+      ;;
+  esac
   [ ! -e "$lock/pid" ] && [ ! -L "$lock/pid" ] &&
     [ ! -e "$lock/start" ] && [ ! -L "$lock/start" ] &&
     [ ! -e "$lock/command" ] && [ ! -L "$lock/command" ] || return 1
-  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
-  command=$("$ps_bin" -p "$pid" -o command= 2>/dev/null) || return 1
+  command=$(fm_remote_job_process_command "$pid") || return 1
   case "$command" in *"$root/bin/fm-remote-job-worker.sh"*) FM_REMOTE_JOB_OWNER_PID=$pid; return 0 ;; esac
   return 1
 }
 
+# A worker's code identity is its root and every file its serve loop sources:
+# the loop keeps what it loaded at start, so a change to any of them must
+# replace the worker. The per-file hashes fold into one, so the identity stays
+# two hashes long however many files it covers.
 fm_remote_job_code_identity() { # <remote-root> <account-home>
-  local root=$1 account_home=$2 git_bin root_hash library_hash worker_hash
+  local root=$1 account_home=$2 git_bin root_hash code_hashes code_hash file
+  local code_files=()
   root=$(fm_remote_job_canonical_existing_dir "$root") || return 1
-  [ -f "$root/bin/fm-remote-job-lib.sh" ] && [ ! -L "$root/bin/fm-remote-job-lib.sh" ] || return 1
-  [ -f "$root/bin/fm-remote-job-worker.sh" ] && [ ! -L "$root/bin/fm-remote-job-worker.sh" ] || return 1
+  for file in fm-remote-job-lib.sh fm-remote-job-worker.sh fm-private-lib.sh fm-wake-lib.sh fm-proc-lib.sh; do
+    [ -f "$root/bin/$file" ] && [ ! -L "$root/bin/$file" ] || return 1
+    code_files+=("$root/bin/$file")
+  done
   fm_remote_job_compose_operator_path "$account_home" >/dev/null
   git_bin=$(fm_remote_job_operator_tool git 2>/dev/null || true)
   [ -n "$git_bin" ] || return 1
   root_hash=$(printf '%s' "$root" | "$git_bin" hash-object --stdin 2>/dev/null) || return 1
-  library_hash=$("$git_bin" hash-object -- "$root/bin/fm-remote-job-lib.sh" 2>/dev/null) || return 1
-  worker_hash=$("$git_bin" hash-object -- "$root/bin/fm-remote-job-worker.sh" 2>/dev/null) || return 1
-  case "$root_hash:$library_hash:$worker_hash" in *[!0-9a-f:]*) return 1 ;; esac
-  [ -n "$root_hash" ] && [ -n "$library_hash" ] && [ -n "$worker_hash" ] || return 1
-  printf '%s:%s:%s\n' "$root_hash" "$library_hash" "$worker_hash"
+  code_hashes=$("$git_bin" hash-object -- "${code_files[@]}" 2>/dev/null) || return 1
+  case "$code_hashes" in ''|*[!0-9a-f$'\n']*) return 1 ;; esac
+  code_hash=$(printf '%s\n' "$code_hashes" | "$git_bin" hash-object --stdin 2>/dev/null) || return 1
+  case "$root_hash:$code_hash" in *[!0-9a-f:]*) return 1 ;; esac
+  [ -n "$root_hash" ] && [ -n "$code_hash" ] || return 1
+  printf '%s:%s\n' "$root_hash" "$code_hash"
 }
 
 fm_remote_job_worker_identity_matches() { # <remote-root> <account-home>

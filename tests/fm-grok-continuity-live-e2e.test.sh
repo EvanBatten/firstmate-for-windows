@@ -5,7 +5,7 @@ set -u
 
 if [ "${FM_GROK_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_GROK_LIVE_E2E=1 to run the interactive Grok continuity regression"
-  exit 0
+  exit 77
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

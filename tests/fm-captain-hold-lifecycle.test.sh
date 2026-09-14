@@ -14,8 +14,8 @@ BEARINGS="$ROOT/bin/fm-bearings-snapshot.sh"
 TMP_ROOT=$(fm_test_tmproot fm-captain-hold)
 TASKS_AXI_BIN=$(command -v tasks-axi || true)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
-command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
+command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 77; }
 
 make_home() {  # <name>
   local home="$TMP_ROOT/$1" fakebin
@@ -205,9 +205,9 @@ EOF
   grep -F 'captain-held [key=route]: tracked by sample-route-call' "$home/state/$id.status" >/dev/null \
     || fail "the transfer line does not name the tracking inventory"
 
-  before=$(shasum -a 256 "$home/data/backlog.md" | awk '{print $1}')
+  before=$(fm_test_sha256 "$home/data/backlog.md") || fail "could not hash the backlog"
   json=$(run_bearings "$home") || fail "Bearings failed with a captain-held task"
-  after=$(shasum -a 256 "$home/data/backlog.md" | awk '{print $1}')
+  after=$(fm_test_sha256 "$home/data/backlog.md") || fail "could not hash the backlog"
   [ "$before" = "$after" ] || fail "Bearings mutated the authoritative backlog"
   printf '%s' "$json" | jq -e '
     (.decisions_open | any(.id == "sample-route-call" and .verb == "captain-hold" and .owner == "(main)"))
@@ -864,11 +864,7 @@ test_legacy_identities_keep_working() {
     --kind ship --repo sample --blocked-by "$old_hold" >/dev/null
   printf 'Use the historical route.\n' > "$home/old-route.txt"
   legacy_text=$(cat "$home/old-route.txt")
-  if command -v shasum >/dev/null 2>&1; then
-    legacy_digest=$(printf '%s' "$legacy_text" | shasum -a 256 | awk '{print $1}')
-  else
-    legacy_digest=$(printf '%s' "$legacy_text" | sha256sum | awk '{print $1}')
-  fi
+  legacy_digest=$(printf '%s' "$legacy_text" | fm_test_sha256_stdin) || fail "could not hash the legacy decision text"
   printf 'Resolution recorded by fm-decision-hold.\nDecision digest: %s\nRouted identities: sample-old-routed-work\nResolution mode: routed\n\nCaptain decision:\n%s\n\nRouted work:\n- sample-old-routed-work\n' \
     "$legacy_digest" "$legacy_text" > "$home/old-route-body.txt"
   tasks_in "$home" update "$old_hold" --body-file "$home/old-route-body.txt" --archive-body >/dev/null
@@ -904,11 +900,7 @@ test_legacy_identities_keep_working() {
   run_shim "$home" hold "$id" fourth-choice \
     --title "Fourth choice" --reason "captain fourth choice pending" --repo sample >/dev/null
   legacy_text=$(printf 'Captain answered this decision through legacy replay.\nDecision key: fourth-choice\nAnswer: option c\n')
-  if command -v shasum >/dev/null 2>&1; then
-    legacy_digest=$(printf '%s' "$legacy_text" | shasum -a 256 | awk '{print $1}')
-  else
-    legacy_digest=$(printf '%s' "$legacy_text" | sha256sum | awk '{print $1}')
-  fi
+  legacy_digest=$(printf '%s' "$legacy_text" | fm_test_sha256_stdin) || fail "could not hash the legacy decision text"
   printf 'Resolution recorded by fm-decision-hold.\nDecision digest: %s\nRouted identities: none\nResolution mode: answered\n\nCaptain decision:\n%s\n' \
     "$legacy_digest" "$legacy_text" > "$home/legacy-body.txt"
   tasks_in "$home" update "$id-decision-fourth-choice" --body-file "$home/legacy-body.txt" --archive-body >/dev/null

@@ -9,7 +9,7 @@ set -u
 
 if [ "${FM_GROK_STOP_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_GROK_STOP_LIVE_E2E=1 with FM_GROK_NATIVE_BIN and FM_GROK_LEGACY_BIN"
-  exit 0
+  exit 77
 fi
 
 # shellcheck source=tests/lib.sh

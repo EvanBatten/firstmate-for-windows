@@ -16,6 +16,15 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The runner stages every captured result through the extension host
+# (bin/fm-extension.mjs), which is POSIX-only by upstream design: it reads the
+# caller's uid before any result is written. Where node has no process identity
+# the suite can prove nothing, so it declares a gate skip rather than running
+# cases whose failures would be the platform's, not the product's (issue #36).
+command -v node >/dev/null 2>&1 || fm_test_gate_skip "node not found"
+fm_test_node_has_posix_uid \
+  || fm_test_gate_skip "extension host requires a POSIX user identity (process.getuid absent on this node)"
+
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMP_ROOT=$(fm_test_tmproot fm-procevent-tests)
 export FM_PROCEVENT_CLAIM_ROOT="$TMP_ROOT/claims"

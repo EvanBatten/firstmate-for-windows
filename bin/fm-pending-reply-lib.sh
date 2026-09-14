@@ -95,6 +95,33 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 # shellcheck source=bin/fm-private-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-private-lib.sh"
 
+# bin/fm-wake-lib.sh owns process identity: how a pid reads on each platform
+# and how two readings compare. A recovery send records its sender through it,
+# and this library used to spell that as `ps -o lstart= -o command=`, which Git
+# Bash's ps rejects, so a pending reply there was never recovered. The lock
+# helpers below still source it per call with their own STATE; this load is
+# what makes the identity functions defined whenever the recovery path runs.
+# The wake library assigns FM_ROOT, FM_HOME, STATE and its queue paths and
+# creates STATE when sourced, which the lock helpers keep out of every script
+# that sources this library, so the same globals are local to this load too;
+# STATE names this library's own directory, which exists, so that mkdir
+# creates nothing.
+_fm_pending_reply_load_process_identity() {
+  local FM_ROOT FM_HOME STATE FM_STATE_OVERRIDE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  # declare -F asks about functions only; `command -v` would search PATH for
+  # the name when it is not yet defined (see bin/fm-remote-job-lib.sh).
+  declare -F fm_pid_identity_equal >/dev/null && return 0
+  STATE=$_FM_PENDING_REPLY_LIB_DIR
+  # The one directive-bearing load of the wake library in this file. The lock
+  # helpers below source it again at runtime and mark those repeats
+  # source=/dev/null, because ShellCheck inlines a sourced file at every
+  # directive site: each extra one re-analysed the whole wake subtree and took
+  # bin/fm-teardown.sh and bin/fm-watch.sh past 15 GiB of lint memory.
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+}
+_fm_pending_reply_load_process_identity
+
 FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
@@ -588,7 +615,8 @@ fm_pending_reply_try_resolve() {  # <state-dir> <corr_id> [status-file-override]
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   STATE=$state
   lock="$state/.pending-reply-$corr.lock"
-  # shellcheck source=bin/fm-wake-lib.sh
+  # Already followed at _fm_pending_reply_load_process_identity; see there.
+  # shellcheck source=/dev/null
   . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
   fm_lock_acquire_wait "$lock" || return 1
   _fm_pending_reply_try_resolve_locked "$@" || rc=$?
@@ -923,12 +951,13 @@ fm_pending_reply_send_recovery() {  # <state-dir> <corr_id>
   return 1
 }
 
+# The recovery sender's whole process identity, read from its owner,
+# bin/fm-wake-lib.sh. Compare two of these only with fm_pid_identity_equal,
+# never `=`. A record written by a build that read `ps -o lstart= -o command=`
+# never compares equal, so a recovery in flight across an upgrade is taken for
+# a crashed one and reconciled once.
 fm_pending_reply_pid_identity() {  # <pid>
-  local pid=$1 identity
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  identity=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
-  [ -n "$identity" ] || return 1
-  printf '%s' "$identity"
+  fm_pid_identity "$1"
 }
 
 fm_pending_reply_sender_alive() {  # <record-path>
@@ -937,7 +966,7 @@ fm_pending_reply_sender_alive() {  # <record-path>
   expected=$(fm_pending_reply_get "$rec" recovery_sender_identity)
   [ -n "$expected" ] || return 1
   actual=$(fm_pending_reply_pid_identity "$pid") || return 1
-  [ "$actual" = "$expected" ]
+  fm_pid_identity_equal "$actual" "$expected"
 }
 
 fm_pending_reply_finish_recovery() {  # <state-dir> <corr_id> <confirmed|failed>
@@ -1052,7 +1081,8 @@ fm_pending_reply_close_escalation() {  # <state-dir> <corr_id>
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   STATE=$state
   lock="$state/.pending-reply-$corr.lock"
-  # shellcheck source=bin/fm-wake-lib.sh
+  # Already followed at _fm_pending_reply_load_process_identity; see there.
+  # shellcheck source=/dev/null
   . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
   fm_lock_acquire_wait "$lock" || return 1
   _fm_pending_reply_close_escalation_locked "$@" || rc=$?
@@ -1118,7 +1148,8 @@ fm_pending_reply_maybe_escalate() {  # <state-dir> <corr_id>
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
   STATE=$state
   lock="$state/.pending-reply-$corr.lock"
-  # shellcheck source=bin/fm-wake-lib.sh
+  # Already followed at _fm_pending_reply_load_process_identity; see there.
+  # shellcheck source=/dev/null
   . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
   fm_lock_acquire_wait "$lock" || return 1
   _fm_pending_reply_maybe_escalate_locked "$@" || rc=$?

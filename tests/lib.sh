@@ -61,6 +61,17 @@ pass() {
   printf 'ok - %s\n' "$1"
 }
 
+# fm_test_gate_skip <reason>: this suite is running none of its cases because a
+# stated precondition is absent. Exit 77 is the declaration bin/fm-test-run.sh
+# counts as a gate skip; the printed line is the message a human reads and what
+# --fail-on-gate-skip greps. Only whole-suite gates use this. A single case that
+# cannot run prints "skip: ..." and returns 0: the suite still ran, so it is a
+# pass, and reporting it as a skip is what this rule replaced.
+fm_test_gate_skip() {
+  printf 'skip: %s\n' "$1"
+  exit 77
+}
+
 # --- self-cleaning temp root ------------------------------------------------
 #
 # fm_test_tmproot <prefix> echoes a fresh temp dir and registers it for removal
@@ -486,6 +497,48 @@ fm_test_stat() {
     return 0
   fi
   ps -o stat= -p "$1" 2>/dev/null
+}
+
+# --- digests ----------------------------------------------------------------
+
+# fm_test_sha256 <file> and fm_test_sha256_stdin: the hex SHA-256 of a file or
+# of stdin. The one spelling of a digest in test code: the windows-latest runner
+# has sha256sum and no shasum, and macOS has long shipped only shasum, so each
+# tool is the other's fallback, as in bin/fm-install-shellcheck.sh. The file is
+# read on stdin so no path shape can shift what awk selects
+# (docs/windows/measurement.md row 19). Anything but a 64-digit hex digest is a
+# failure with nothing on stdout: a missing tool used to leave two empty
+# "digests" that compared equal, so a before/after check passed without hashing
+# anything. tests/fm-test-lib.test.sh proves both branches with the other tool
+# masked.
+fm_test_sha256() {  # <file>
+  fm_test_sha256_stdin <"$1"
+}
+
+fm_test_sha256_stdin() {
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(sha256sum | awk '{print $1}')
+  else
+    digest=$(shasum -a 256 | awk '{print $1}')
+  fi
+  case "$digest" in
+    *[!0-9a-f]*|'') ;;
+    *) [ "${#digest}" -eq 64 ] && { printf '%s\n' "$digest"; return 0; } ;;
+  esac
+  printf 'fm_test_sha256: neither sha256sum nor shasum -a 256 produced a digest\n' >&2
+  return 1
+}
+
+# --- platform capabilities --------------------------------------------------
+
+# fm_test_node_has_posix_uid: the node on PATH has process.getuid. The extension
+# host (bin/fm-extension.mjs) is POSIX-only by upstream design: currentUid()
+# refuses platform-unsupported without it, before any file mode is read, and
+# launch cleanup refuses win32 for want of process groups. Windows node has no
+# getuid, so a suite that drives the host gate-skips there.
+fm_test_node_has_posix_uid() {
+  node -e 'process.exit(typeof process.getuid === "function" ? 0 : 1)' 2>/dev/null
 }
 
 # --- deterministic git identity and fixtures --------------------------------

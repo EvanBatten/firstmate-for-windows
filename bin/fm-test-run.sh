@@ -75,7 +75,12 @@
 #
 # Per-script machine-parseable markers (stdout):
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
-#   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false>
+#   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false> cases_ok=<n> cases_skipped=<n>
+#
+# cases_ok counts output lines starting "ok -" and cases_skipped counts lines
+# starting "skip:". Each --json scripts[] entry carries path, family,
+# expected_gate_skip, exit, duration_ms, gate_skip, cases_ok and cases_skipped;
+# its summary carries total, failed, skipped_gate and duration_ms.
 #
 # After all scripts (stdout):
 #   FM_TEST_SUMMARY total=<n> failed=<n> skipped_gate=<n> duration_ms=<n>
@@ -86,8 +91,16 @@
 # Exit status is non-zero if any selected script exits non-zero, a configured
 # --fail-on-gate-skip token appears, the measured duration exceeds
 # --max-wall-ms, timing-artifact finalization fails, or a concurrent worker
-# violates its isolation check. Other gate skips (first meaningful line
-# matching ^skip:) remain successful and are counted as skipped_gate.
+# violates its isolation check. A script that exits 77 declares a gate skip: it
+# ran none of its cases because a stated precondition was absent. That is the
+# only thing a gate skip is. It remains successful and is counted as
+# skipped_gate. Exit 0 is a pass whatever else the script printed, so a suite
+# whose first case prints "skip:" and then runs the rest still counts as a pass.
+# The category is a declaration by the script, never an inference from output.
+# Output can only refuse a declaration, never grant one, and each refusal is
+# counted as a failure: exit 0 with no "ok -" line ran no cases, exit 77 with
+# no "skip:" line is a tool's status leaking through, and exit 77 after an
+# "ok -" line is a skip declared once cases had already run.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -212,7 +225,7 @@ family_for_basename() {
     fm-kimi-harness.test.sh|fm-muse-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
     fm-operational-input.test.sh|fm-path-lib.test.sh|\
-    fm-pi-primary-types.test.sh|fm-proc-lib.test.sh|\
+    fm-pi-primary-types.test.sh|fm-proc-lib.test.sh|fm-repo-invariants.test.sh|\
     fm-harness-adapter-references.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
@@ -312,6 +325,12 @@ family_for_basename() {
       ;;
   esac
 }
+
+# A script declares "I ran none of my cases, a stated precondition was absent"
+# by exiting with this status. 77 is the autotools and Meson SKIP convention;
+# bash reserves 126 and 127, the timeout wrapper uses 124, and nothing else in
+# bin/ or tests/ uses 77. tests/lib.sh fm_test_gate_skip is the writing end.
+GATE_SKIP_RC=77
 
 expected_gate_skip_for_family() {
   case "$1" in
@@ -1215,7 +1234,7 @@ families_for_changed_path() {
       # lane's contract coverage re-runs.
       printf '%s\n' real-herdr-gated
       ;;
-    bin/fm-lint.sh|bin/fm-lint-workflows.sh|bin/fm-install-shellcheck.sh|\
+    bin/fm-lint.sh|bin/fm-lint-workflows.sh|bin/fm-repo-invariants.sh|bin/fm-install-shellcheck.sh|\
     bin/fm-install-actionlint.sh|\
     bin/fm-brief.sh|bin/fm-ensure-agents-md.sh|bin/fm-crew-state.sh|\
     bin/fm-captain-hold.sh|bin/fm-decision-hold.sh|bin/fm-supervision*|bin/fm-transition-lib.sh|\
@@ -1346,14 +1365,16 @@ select_changed() {
   fi
 }
 
-detect_gate_skip() {
-  # True when the first non-empty output line is a skip: gate message.
-  local file=$1 first
-  first=$(awk 'NF { print; exit }' "$file" 2>/dev/null || true)
-  case "$first" in
-    skip:*) return 0 ;;
-    *) return 1 ;;
+# Count output lines matching <pattern>. These numbers never grant a category:
+# the gate skip is the exit status alone, and record_script_result uses the
+# counts only to refuse a record they contradict, as a failure.
+count_output_lines() {  # <file> <ere>
+  local file=$1 pattern=$2 n
+  n=$(grep -c -E "$pattern" "$file" 2>/dev/null || true)
+  case "$n" in
+    '' | *[!0-9]*) n=0 ;;
   esac
+  printf '%s\n' "$n"
 }
 
 # True when any output line contains "skip: <token>" (token may contain spaces).
@@ -1409,7 +1430,7 @@ with open(records_file, encoding="utf-8") as fh:
         line = line.rstrip("\n")
         if not line:
             continue
-        path, family, expected, exit_s, dur_s, gate = line.split("\t")
+        path, family, expected, exit_s, dur_s, gate, ok_s, skipped_s = line.split("\t")
         scripts.append({
             "path": path,
             "family": family,
@@ -1417,6 +1438,8 @@ with open(records_file, encoding="utf-8") as fh:
             "duration_ms": int(dur_s),
             "exit": int(exit_s),
             "gate_skip": gate == "true",
+            "cases_ok": int(ok_s),
+            "cases_skipped": int(skipped_s),
         })
 
 families = []
@@ -1904,7 +1927,7 @@ family_bump() {
 
 record_script_result() {
   local script=$1 rc=$2 duration=$3 out=$4 end_iso=$5
-  local base family expected gate_skip fail_delta
+  local base family expected gate_skip fail_delta cases_ok cases_skipped refused
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
@@ -1914,24 +1937,40 @@ record_script_result() {
     rc=1
   fi
 
+  cases_ok=$(count_output_lines "$out" '^ok -')
+  cases_skipped=$(count_output_lines "$out" '^skip:')
+
+  # The gate skip is the exit status, and only the status can declare one. The
+  # counts can refuse an incoherent record but never promote one: each refusal
+  # below is a failure a reader sees, not a pass or a skip. The real exit is
+  # reported so a reader sees what the script declared.
   gate_skip=false
-  if [ "$rc" -eq 0 ] && detect_gate_skip "$out"; then
+  refused=
+  if [ "$rc" -eq 0 ] && [ "$cases_ok" -eq 0 ]; then
+    refused="ran no cases and exited 0; a suite that cannot run declares it with exit 77 (fm_test_gate_skip)"
+  elif [ "$rc" -eq "$GATE_SKIP_RC" ] && [ "$cases_skipped" -eq 0 ]; then
+    refused="exited 77 without a skip: line; a tool's status leaked as a gate skip"
+  elif [ "$rc" -eq "$GATE_SKIP_RC" ] && [ "$cases_ok" -gt 0 ]; then
+    refused="declared a gate skip after running $cases_ok cases"
+  elif [ "$rc" -eq "$GATE_SKIP_RC" ]; then
     gate_skip=true
     SKIPPED_GATE=$((SKIPPED_GATE + 1))
   fi
+  [ -z "$refused" ] || log "$script $refused"
 
-  printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s\n' \
-    "$end_iso" "$script" "$rc" "$duration" "$gate_skip"
+  printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s cases_ok=%s cases_skipped=%s\n' \
+    "$end_iso" "$script" "$rc" "$duration" "$gate_skip" "$cases_ok" "$cases_skipped"
 
   fail_delta=0
-  if [ "$rc" -ne 0 ]; then
+  if [ -n "$refused" ] || { [ "$rc" -ne 0 ] && [ "$gate_skip" != true ]; }; then
     FAILED=$((FAILED + 1))
     fail_delta=1
     AGG_RC=1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$script" "$family" "$expected" "$rc" "$duration" "$gate_skip" >>"$RECORDS"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$script" "$family" "$expected" "$rc" "$duration" "$gate_skip" \
+    "$cases_ok" "$cases_skipped" >>"$RECORDS"
   family_bump "$family" "$duration" "$fail_delta"
   TOTAL=$((TOTAL + 1))
 }
@@ -1986,7 +2025,7 @@ run_one_serial() {
     "$begin_iso" "$script" "$family" "$expected"
 
   set +e
-  # Stream live output while retaining a copy for gate-skip detection.
+  # Stream live output while retaining a copy for the token check and counts.
   run_script_bounded "$script" "$out" 1 "s$TOTAL"
   rc=$?
   set -e
@@ -2138,7 +2177,7 @@ fi
 # Slowest scripts (top 15) from records.
 if [ -s "$RECORDS" ]; then
   rank=1
-  sort -t$'\t' -k5,5nr "$RECORDS" | head -n 15 | while IFS=$'\t' read -r path _family _expected _rc duration _gate; do
+  sort -t$'\t' -k5,5nr "$RECORDS" | head -n 15 | while IFS=$'\t' read -r path _family _expected _rc duration _gate _ok _skipped; do
     printf 'FM_TEST_SLOWEST rank=%s script=%s duration_ms=%s\n' \
       "$rank" "$path" "$duration"
     rank=$((rank + 1))

@@ -22,7 +22,7 @@ SSH_COUNT="$TMP_ROOT/ssh.count"
 mkdir -p "$LOCAL_HOME/data" "$REMOTE_ROOT/bin" "$REMOTE_HOME"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
 cp "$ROOT/bin/fm-remote-entrypoint.sh" "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" \
-  "$ROOT/bin/fm-remote-job-worker.sh" "$REMOTE_ROOT/bin/"
+  "$ROOT/bin/fm-remote-job-worker.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$REMOTE_ROOT/bin/"
 
 cat > "$REMOTE_ROOT/bin/fm-probe-one.sh" <<'SH'
 #!/usr/bin/env bash
@@ -250,6 +250,19 @@ for candidate in "${OPTIONAL_DIRS[@]}"; do
   [ -d "$candidate" ] && [ ! -L "$candidate" ] && expect_dir "$candidate"
 done
 for fixed in /usr/bin /bin /usr/sbin /sbin; do expect_dir "$fixed"; done
+# On an MSYS userland the contract appends, after that tail, the directories
+# git and jq resolve from, because Git for Windows keeps git outside it
+# (fm_remote_job_append_userland_tool_dirs). macOS and Linux never take it.
+SYSTEM_TAIL_PATH=$EXPECTED_PATH
+case "${OSTYPE:-}" in
+  msys*|mingw*|cygwin*)
+    for tool in git jq; do
+      resolved=$(command -v "$tool" 2>/dev/null) || continue
+      case "$resolved" in /*) ;; *) continue ;; esac
+      [ -d "${resolved%/*}" ] && [ ! -L "${resolved%/*}" ] && expect_dir "${resolved%/*}"
+    done
+    ;;
+esac
 
 [ "$CHILD_PATH" = "$EXPECTED_PATH" ] \
   || fail "composed child PATH did not match the portable contract"$'\n'"expected: $EXPECTED_PATH"$'\n'"actual:   $CHILD_PATH"
@@ -261,7 +274,7 @@ else
   path_has "$CHILD_PATH" "$ACCOUNT_HOME/.local/bin" \
     && fail "the account's absent or symlinked ~/.local/bin was added to the child PATH"
 fi
-case "$CHILD_PATH" in *:/usr/bin:/bin:/usr/sbin:/sbin) ;; *) fail "the child PATH did not end with the portable system tail" ;; esac
+case "${CHILD_PATH:0:${#SYSTEM_TAIL_PATH}}" in *:/usr/bin:/bin:/usr/sbin:/sbin) ;; *) fail "the child PATH did not end with the portable system tail" ;; esac
 DUPES=$(printf '%s\n' "$CHILD_PATH" | tr ':' '\n' | sort | uniq -d)
 [ -z "$DUPES" ] || fail "the child PATH repeated entries: $DUPES"
 PRESENT_CHECKED=0

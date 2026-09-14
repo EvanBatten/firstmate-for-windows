@@ -37,7 +37,7 @@ cleanup_remote_job_fixture() {
 trap cleanup_remote_job_fixture EXIT
 
 cp "$ROOT/bin/fm-private-lib.sh" "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
-  "$ROOT/bin/fm-remote-delta-read.sh" "$REMOTE_ROOT/bin/"
+  "$ROOT/bin/fm-remote-delta-read.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$REMOTE_ROOT/bin/"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
 cat > "$REMOTE_ROOT/bin/fm-probe-job.sh" <<'SH'
 #!/bin/bash
@@ -121,6 +121,70 @@ export FM_REMOTE_JOB_TIMEOUT=5
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$ROOT/bin/fm-remote-job-lib.sh"
 
+# Every ownership record the worker writes is a start identity read through
+# bin/fm-wake-lib.sh. This library used to spell it as `ps -o lstart=`, which
+# Git Bash's ps rejects, so no worker there could publish readiness. On Linux
+# and macOS the old spelling also passes the first half, which makes this a
+# Windows pin there; the second half is what keeps it from being vacuous
+# anywhere, because a comparator that cannot say no certifies nothing.
+PROC_START_SELF=$(fm_remote_job_process_start "$$") \
+  || fail "the remote job library could not read this shell's start identity"
+PROC_START_FRESH=$(fm_pid_start_identity "$$") \
+  || fail "the process identity owner could not read this shell's start identity"
+fm_pid_start_identity_equal "$PROC_START_FRESH" "$PROC_START_SELF" \
+  || fail "two reads of one live shell's start identity did not compare equal"$'\n'"recorded: $PROC_START_SELF"$'\n'"current:  $PROC_START_FRESH"
+# The child must start more than one identity unit after this shell, or the two
+# genuinely read the same and the comparator would be right to say yes: macOS
+# has no /proc and reads `ps -o lstart=` to the second, and Git Bash compares
+# creation times within 100 ms. SECONDS counts whole seconds from this shell's
+# start with both ends truncated, so at 2 more than a full second has passed.
+# This is a lower bound on elapsed time, not a budget for an event.
+while [ "$SECONDS" -lt 2 ]; do
+  sleep 0.1
+done
+sleep 30 &
+PROC_START_OTHER_PID=$!
+PROC_START_OTHER=$(fm_remote_job_process_start "$PROC_START_OTHER_PID") \
+  || fail "the remote job library could not read a child's start identity"
+kill "$PROC_START_OTHER_PID" 2>/dev/null || true
+wait "$PROC_START_OTHER_PID" 2>/dev/null || true
+if fm_pid_start_identity_equal "$PROC_START_OTHER" "$PROC_START_SELF"; then
+  fail "a different process's start identity compared equal to this shell's"$'\n'"this shell: $PROC_START_SELF"$'\n'"child:      $PROC_START_OTHER"
+fi
+pass "remote job start identities read on this host and tell two processes apart"
+
+# A job's group leader is recorded while it waits to be armed and only then
+# execs the job command, so what the worker records must still name it after
+# the exec. An exec rewrites the command line on every platform, which is why
+# the record is the start half of the identity and not all of it; on Linux the
+# start survives the exec. Git Bash backs an exec with a new Windows process
+# whose creation time is new as well, so no start recorded before an exec can
+# match after it there, and the case says so instead of asserting it.
+if [ "$FM_PROC_OS" = msys ]; then
+  printf '# skipped group leader start survives exec: an exec creates a new Windows process on this platform\n'
+else
+  PROC_EXEC_ARM="$TMP_ROOT/exec-arm"
+  ( while [ ! -f "$PROC_EXEC_ARM" ]; do sleep 0.01; done; exec sleep 30 ) &
+  PROC_EXEC_PID=$!
+  PROC_EXEC_BEFORE=$(fm_remote_job_process_start "$PROC_EXEC_PID") \
+    || fail "the remote job library could not read an unarmed group leader's start identity"
+  : > "$PROC_EXEC_ARM"
+  PROC_EXEC_ARGS=
+  for _ in $(seq 1 100); do
+    PROC_EXEC_ARGS=$(fm_remote_job_process_command "$PROC_EXEC_PID" 2>/dev/null || true)
+    case "$PROC_EXEC_ARGS" in sleep*) break ;; esac
+    sleep 0.05
+  done
+  case "$PROC_EXEC_ARGS" in sleep*) ;; *) fail "the armed group leader never exec'd its command (args: $PROC_EXEC_ARGS)" ;; esac
+  PROC_EXEC_AFTER=$(fm_remote_job_process_start "$PROC_EXEC_PID") \
+    || fail "the remote job library could not read an exec'd group leader's start identity"
+  kill "$PROC_EXEC_PID" 2>/dev/null || true
+  wait "$PROC_EXEC_PID" 2>/dev/null || true
+  fm_pid_start_identity_equal "$PROC_EXEC_AFTER" "$PROC_EXEC_BEFORE" \
+    || fail "a group leader's recorded start stopped naming it once it exec'd"$'\n'"before: $PROC_EXEC_BEFORE"$'\n'"after:  $PROC_EXEC_AFTER"
+  pass "a group leader's recorded start still names it after it execs"
+fi
+
 LOCAL_BIN_PARENT="$ACCOUNT_HOME/.local"
 LOCAL_BIN_TARGET="$TMP_ROOT/local-bin-target"
 mkdir -p "$LOCAL_BIN_PARENT" "$LOCAL_BIN_TARGET"
@@ -185,6 +249,43 @@ MISE_EXPECTED=$(printf '%s\n' "$MISE_INSTALLS"/*/*/bin)
 # This assertion detects the defect on bash 3.2 and 5.2, where compgen -G returns unsorted glob matches, but reads green on bash 5.3+ because glob sorting moved into the glob library so both mechanisms agree there.
 rm -rf -- "$ACCOUNT_HOME/.local/share/mise"
 pass "operator PATH orders discovered tool installs deterministically"
+
+# The composition's system tail is a POSIX filesystem layout, and Git for
+# Windows puts git.exe in /mingw64/bin, so on an MSYS userland that tail
+# describes an account with no git and the entrypoint refuses every command
+# with "required tool git does not resolve on the remote operator PATH".
+# Both directions are pinned on every host: the branch is keyed on OSTYPE and
+# forced in a child shell, the way tests/fm-jq-lib.test.sh forces its own
+# userland branch, and the tools are a fixture in a directory the composition
+# discovers no other way, so the MSYS answer is the POSIX answer plus exactly
+# that directory rather than something host-shaped.
+compose_as() { # <ostype> <path-prefix> <snippet>
+  PATH="${2:+$2:}$PATH" bash -c \
+    "set -u; OSTYPE=$1; . \"\$0/bin/fm-remote-job-lib.sh\"
+     fm_remote_job_compose_operator_path \"\$1\" >/dev/null; $3" \
+    "$ROOT" "$ACCOUNT_HOME"
+}
+USERLAND_BIN="$TMP_ROOT/userland-bin"
+mkdir -p "$USERLAND_BIN"
+for TOOL in git jq; do
+  printf '#!/bin/bash\nexit 0\n' > "$USERLAND_BIN/$TOOL"
+  chmod +x "$USERLAND_BIN/$TOOL"
+done
+# shellcheck disable=SC2016 # Source for the child shell, which is the only one that composes a PATH.
+PRINT_COMPOSED='printf "%s\n" "$FM_REMOTE_JOB_OPERATOR_PATH"'
+POSIX_COMPOSED=$(compose_as linux-gnu "$USERLAND_BIN" "$PRINT_COMPOSED")
+[ "$POSIX_COMPOSED" = "$(compose_as linux-gnu '' "$PRINT_COMPOSED")" ] \
+  || fail "the POSIX composition followed the composing shell's own PATH"
+MSYS_COMPOSED=$(compose_as msys "$USERLAND_BIN" "$PRINT_COMPOSED")
+[ "$MSYS_COMPOSED" = "$POSIX_COMPOSED:$USERLAND_BIN" ] \
+  || fail "the MSYS composition did not append the directory git and jq resolve from"$'\n'"expected: $POSIX_COMPOSED:$USERLAND_BIN"$'\n'"actual:   $MSYS_COMPOSED"
+rm -rf -- "$USERLAND_BIN"
+# The host's own git, through the accessor the entrypoint gates on, because a
+# fixture tool proves the mechanism and only the real one proves the account
+# can act as a remote operator here.
+compose_as "$OSTYPE" '' 'fm_remote_job_operator_tool git' >/dev/null \
+  || fail "the composed operator PATH does not resolve this host's git"
+pass "operator PATH resolves git on an MSYS userland and is unchanged on POSIX"
 
 HOME="$ACCOUNT_HOME" PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_PERL_LOG="$FAKE_PERL_LOG" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
@@ -259,6 +360,22 @@ fm_remote_job_worker_identity_matches "$REMOTE_ROOT" "$ACCOUNT_HOME" \
   || fail "the replacement worker did not publish the current code identity"
 pass "ensure replaces a live worker after its code changes"
 
+# The serve loop keeps the libraries it sourced at start, including the process
+# identity readers it compares every ownership record with, so a change to any
+# one of them alone must replace the worker too.
+for WORKER_LIBRARY in fm-private-lib.sh fm-wake-lib.sh fm-proc-lib.sh; do
+  OLD_WORKER_PID=$NEW_WORKER_PID
+  printf '\n' >> "$REMOTE_ROOT/bin/$WORKER_LIBRARY"
+  fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
+    || fail "$FM_REMOTE_JOB_ERROR"
+  NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
+  [ "$NEW_WORKER_PID" != "$OLD_WORKER_PID" ] \
+    || fail "ensure retained a worker running a stale $WORKER_LIBRARY"
+  fm_remote_job_worker_identity_matches "$REMOTE_ROOT" "$ACCOUNT_HOME" \
+    || fail "the worker replaced for $WORKER_LIBRARY did not publish the current code identity"
+done
+pass "ensure replaces a live worker after a library it sources changes"
+
 RELOCATED_ROOT="$TMP_ROOT/relocated-root"
 cp -R "$REMOTE_ROOT" "$RELOCATED_ROOT"
 OLD_WORKER_PID=$NEW_WORKER_PID
@@ -299,6 +416,60 @@ kill "$OTHER_PID" 2>/dev/null || true
 wait "$OTHER_PID" 2>/dev/null || true
 OTHER_PID=
 pass "stale ownership is reclaimed without signaling a reused pid"
+
+# A lock whose recorded start this build can compare, and which does not match,
+# does not name the live worker from any root, while the same lock with the
+# worker's own start names it from every root. This shell started seconds before
+# the worker, so its start is a comparable reading of a different process.
+LIVE_WORKER_START=$(cat "$STATE_ROOT/worker.lock/start")
+fm_remote_job_process_start "$$" > "$STATE_ROOT/worker.lock/start" \
+  || fail "could not read this shell's start identity"
+for OWNER_ROOT in "$REMOTE_ROOT" "$RELOCATED_ROOT"; do
+  if fm_remote_job_worker_owned_alive "$OWNER_ROOT" "$ACCOUNT_HOME"; then
+    fail "a comparable start that does not match named the live worker from $OWNER_ROOT"
+  fi
+done
+printf '%s\n' "$LIVE_WORKER_START" > "$STATE_ROOT/worker.lock/start"
+for OWNER_ROOT in "$REMOTE_ROOT" "$RELOCATED_ROOT"; do
+  fm_remote_job_worker_owned_alive "$OWNER_ROOT" "$ACCOUNT_HOME" \
+    || fail "the worker's own lock record did not name it from $OWNER_ROOT"
+done
+pass "a lock start this build can compare names the live worker only when it matches"
+
+# The previous build recorded the lock owner's start as `ps -o lstart=`, and its
+# live worker keeps the heartbeat fresh, so the lock is never free to take. The
+# first command after the upgrade can arrive through any root on the account,
+# and from each it must replace that worker exactly once and then be served.
+assert_upgrade_replaces_once() { # <root>
+  local root=$1 predecessor predecessor_pgid upgraded
+  predecessor=$(cat "$STATE_ROOT/worker.pid")
+  predecessor_pgid=$(fm_remote_job_process_pgid "$predecessor") \
+    || fail "the upgrade fixture could not resolve the live worker's process group"
+  printf 'Sun Sep 13 02:17:13 2026\n' > "$STATE_ROOT/worker.lock/start"
+  fm_remote_job_ensure_worker "$root" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+  upgraded=$(cat "$STATE_ROOT/worker.pid")
+  [ "$upgraded" != "$predecessor" ] || fail "ensure through $root kept the previous build's worker"
+  ! kill -0 -- "-$predecessor_pgid" 2>/dev/null \
+    || fail "the previous build's worker tree survived its replacement through $root"
+  fm_remote_job_ensure_worker "$root" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+  [ "$FM_REMOTE_JOB_REPAIRED" -eq 0 ] && [ "$(cat "$STATE_ROOT/worker.pid")" = "$upgraded" ] \
+    || fail "the worker upgraded through $root was reclaimed a second time"
+  fm_remote_job_stage "$ACCOUNT_HOME" "$root" "$REMOTE_HOME" fm-probe-job.sh < /dev/null > /dev/null
+  JOB_ID=$FM_REMOTE_JOB_ID
+  fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+  [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || fail "the worker upgraded through $root did not serve the next command"
+  fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the post-upgrade probe could not be reaped"
+}
+if [ "$(uname -s)" != Linux ]; then
+  printf 'skip: previous-build worker lock upgrade: only Linux reads a start the ps -o lstart= form cannot be compared with\n'
+else
+  printf '\n' >> "$REMOTE_ROOT/bin/fm-remote-job-worker.sh"
+  assert_upgrade_replaces_once "$REMOTE_ROOT"
+  pass "a live worker whose lock the previous build wrote is replaced once, then serves"
+  assert_upgrade_replaces_once "$RELOCATED_ROOT"
+  fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+  pass "a previous-build worker serving another root is replaced once, then serves"
+fi
 
 FM_REMOTE_JOB_TIMEOUT=1
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-timeout-job.sh < /dev/null > /dev/null
@@ -354,11 +525,7 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "the first delayed jo
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the second delayed job could not be reaped"
 pass "queued jobs receive a fresh bounded execution window"
 
-if command -v shasum >/dev/null 2>&1; then
-  EMPTY_SHA=$(: | shasum -a 256 | awk '{print $1}')
-else
-  EMPTY_SHA=$(: | sha256sum | awk '{print $1}')
-fi
+EMPTY_SHA=$(: | fm_test_sha256_stdin) || fail "could not hash an empty payload"
 mkdir -p "$REMOTE_HOME/state"
 REPLY_LOG_REL=state/parent-replies.status
 PREEMPT_SIDE_EFFECT="$TMP_ROOT/preempt-side-effect"
@@ -719,7 +886,7 @@ RESTART_STATE="$TMP_ROOT/restart-state"
 RESTART_CHILD_LOG="$TMP_ROOT/restart-children"
 mkdir -p "$RESTART_ROOT/bin" "$RESTART_HOME"
 cp "$ROOT/bin/fm-private-lib.sh" "$RESTART_ROOT/bin/"
-cp "$ROOT/bin/fm-remote-job-lib.sh" "$RESTART_ROOT/bin/"
+cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-proc-lib.sh" "$RESTART_ROOT/bin/"
 cp "$ROOT/bin/fm-remote-job-worker.sh" "$RESTART_ROOT/bin/fm-remote-job-supervisor-under-test.sh"
 printf 'fixture\n' > "$RESTART_ROOT/AGENTS.md"
 cat > "$RESTART_ROOT/bin/fm-remote-job-worker.sh" <<'SH'

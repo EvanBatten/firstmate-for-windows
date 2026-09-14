@@ -27,33 +27,54 @@ unset FM_HERDR_SESSION_CLEANUP_SOURCE_ONLY
 
 # The idle-shell proof now lives in the backend as
 # fm_backend_herdr_pane_idle_shell_pid; prove it still reads Linux argv
-# arrays (no argv0 field) and rejects malformed executable identities.
-FAKE_PS="$TMP_ROOT/fake-ps"
-cat > "$FAKE_PS" <<'SH'
+# arrays (no argv0 field) and rejects malformed executable identities. Each
+# proof runs in a fresh shell with the fake ps on PATH, because the proof reads
+# the process table through bin/fm-proc-lib.sh, which settles its platform
+# branch when it is first sourced; the fake also answers that library's
+# `-o comm= -p <pid>` capability probe, so a Windows host reads this table too.
+PROOF_BIN="$TMP_ROOT/proof-bin"
+mkdir -p "$PROOF_BIN"
+cat > "$PROOF_BIN/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
   "-axo pid=,ppid=") printf '1 0\n67 1\n' ;;
-  "-p 67 -o stat=") printf 'Ss\n' ;;
+  "-o stat= -p 67") printf 'Ss\n' ;;
+  "-o comm= -p "*) exit 0 ;;
   *) exit 1 ;;
 esac
 SH
-chmod +x "$FAKE_PS"
+chmod +x "$PROOF_BIN/ps"
+
+# idle_shell_proof <process-info-json>: the proof's verdict and printed pid for
+# pane w2:p1 when herdr answers process-info with <process-info-json>.
+idle_shell_proof() {
+  PATH="$PROOF_BIN:$PATH" FM_TEST_PROCESS_INFO=$1 FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_cli() { printf "%s\n" "$FM_TEST_PROCESS_INFO"; }
+      fm_backend_herdr_pane_idle_shell_pid test w2:p1
+    ' "$ROOT"
+}
+
 LINUX_PROCESS_INFO='{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p1","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"argv":["/bin/sh"],"name":"sh","pid":67}]}}}'
-argv_pid=$(
-  # shellcheck disable=SC2329 # invoked indirectly by the idle-shell proof.
-  fm_backend_herdr_cli() { printf '%s\n' "$LINUX_PROCESS_INFO"; }
-  FM_HERDR_PS_BIN="$FAKE_PS" fm_backend_herdr_pane_idle_shell_pid test w2:p1
-) || fail "Linux Herdr process argv array was not accepted"
+argv_pid=$(idle_shell_proof "$LINUX_PROCESS_INFO") || fail "Linux Herdr process argv array was not accepted"
 [ "$argv_pid" = 67 ] || fail "idle-shell proof printed the wrong shell pid: $argv_pid"
-if (
-  # shellcheck disable=SC2329 # invoked indirectly by the idle-shell proof.
-  fm_backend_herdr_cli() { printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p1","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"argv":[67],"name":"sh","pid":67}]}}}'; }
-  FM_HERDR_PS_BIN="$FAKE_PS" FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 \
-    fm_backend_herdr_pane_idle_shell_pid test w2:p1
-) >/dev/null 2>&1; then
+if idle_shell_proof '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p1","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"argv":[67],"name":"sh","pid":67}]}}}' >/dev/null 2>&1; then
   fail "non-string Herdr process argv was accepted"
 fi
 pass "process proof reads Linux Herdr argv arrays and rejects malformed executable identities"
+
+# herdr 0.8.2 on Windows reports a process name with .exe and an argv0 that is
+# a Windows path, measured read-only on a live pane: name "pwsh.exe", argv0
+# "C:\...\WindowsApps\pwsh.EXE". A Git Bash shell spelled that way is the same
+# shell, and pwsh, herdr's default Windows shell, is not a recognized one.
+windows_pid=$(idle_shell_proof '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p1","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"argv0":"C:\\Program Files\\Git\\usr\\bin\\bash.EXE","name":"bash.exe","pid":67}]}}}') \
+  || fail "a Git Bash shell in herdr's Windows spelling was not accepted"
+[ "$windows_pid" = 67 ] || fail "idle-shell proof printed the wrong shell pid for the Windows spelling: $windows_pid"
+if idle_shell_proof '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p1","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"argv0":"C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.EXE","name":"pwsh.exe","pid":67}]}}}' >/dev/null 2>&1; then
+  fail "a pwsh pane was accepted as an idle recognized shell"
+fi
+pass "process proof reads herdr's Windows process spellings and still refuses a pwsh pane"
 
 TOKEN=AbCdEfGhIjKlMnOpQrStUv
 ID=task

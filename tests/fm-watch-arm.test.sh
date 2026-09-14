@@ -54,14 +54,6 @@ start_attached_arm() {  # <state> <fakebin> <arm-out> <confirm-timeout>
     || fail "arm did not attach to the live watcher: $(cat "$armout")"
 }
 
-sha256_file() {  # <path>
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  else
-    sha256sum "$1" | awk '{print $1}'
-  fi
-}
-
 write_remote_delta() {  # <result-path> <status-line>
   local result=$1 line=$2 payload empty payload_bytes payload_hash empty_hash
   payload="$result.payload"
@@ -69,8 +61,8 @@ write_remote_delta() {  # <result-path> <status-line>
   printf '%s\n' "$line" > "$payload"
   : > "$empty"
   payload_bytes=$(LC_ALL=C wc -c < "$payload" | tr -d '[:space:]')
-  payload_hash=$(sha256_file "$payload") || fail "could not hash remote delta payload"
-  empty_hash=$(sha256_file "$empty") || fail "could not hash empty remote delta prefix"
+  payload_hash=$(fm_test_sha256 "$payload") || fail "could not hash remote delta payload"
+  empty_hash=$(fm_test_sha256 "$empty") || fail "could not hash empty remote delta prefix"
   {
     printf 'schema=fm-remote-delta.v1\n'
     printf 'status=delta\n'

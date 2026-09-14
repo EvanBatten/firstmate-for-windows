@@ -2600,8 +2600,9 @@ EOF
 import { execFile } from "node:child_process";
 const busyEvent = (state, event) =>
   new Promise((resolve) => {
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
-      "apply", "$STATE_REAL", "$ID", state,
+    // Through bash: Windows node cannot execute a shebang script directly.
+    execFile("bash", [
+      "$FM_ROOT/bin/fm-busy-event.sh", "apply", "$STATE_REAL", "$ID", state,
       "--gen", "$BUSY_GEN", "--source", "opencode-plugin", "--event", event,
     ], () => resolve());
   });
@@ -2656,8 +2657,9 @@ EOF
 import { execFile } from "node:child_process";
 const busyEvent = (state: string, event: string) =>
   new Promise<void>((resolve) => {
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
-      "apply", "$STATE_REAL", "$ID", state,
+    // Through bash: Windows node cannot execute a shebang script directly.
+    execFile("bash", [
+      "$FM_ROOT/bin/fm-busy-event.sh", "apply", "$STATE_REAL", "$ID", state,
       "--gen", "$BUSY_GEN", "--source", "pi-ext", "--event", event,
     ], () => resolve());
   });

@@ -81,6 +81,7 @@ reap_is_self_or_ancestor() { # <pid>
   local pid=$1 walk=$$ i=0
   while [ "$walk" -gt 1 ] && [ "$i" -lt 64 ]; do
     [ "$walk" != "$pid" ] || return 0
+    # fm-invariant: allow ps-o - the remote-host orphan reaper is POSIX by decision (no Windows-hosted remote), and its scan dies loudly where -o is refused before this walk is reached
     walk=$(ps -p "$walk" -o ppid= 2>/dev/null | tr -d '[:space:]') || return 0
     case "$walk" in ''|*[!0-9]*) return 1 ;; esac
     i=$((i + 1))
@@ -92,6 +93,7 @@ reap_orphans() {
   local uid scan pid command live root own_pgid pgid
   uid=$(id -u 2>/dev/null || true)
   case "$uid" in ''|*[!0-9]*) reap_die "cannot resolve the current uid" ;; esac
+  # fm-invariant: allow ps-o - the remote-host orphan reaper is POSIX by decision (no Windows-hosted remote), and this scan dies loudly where -o is refused
   scan=$(ps -u "$uid" -o pid=,command= 2>/dev/null) ||
     reap_die "cannot scan this account's processes for remote job workers"
   own_pgid=$(fm_remote_job_process_pgid "$$" 2>/dev/null || true)

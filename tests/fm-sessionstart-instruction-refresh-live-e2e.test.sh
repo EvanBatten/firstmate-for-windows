@@ -26,10 +26,12 @@ set -u
 
 if [ "${FM_SESSIONSTART_INSTRUCTION_REFRESH_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_SESSIONSTART_INSTRUCTION_REFRESH_LIVE_E2E=1 to run the isolated real-Pi instruction-refresh regression"
-  exit 0
+  exit 77
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
 TMUX_SOCKET="fm-sessionstart-instruction-refresh-$$"
 TMUX_SESSION="instruction-refresh"
 LAB=${TMPDIR:-/tmp}
@@ -104,6 +106,7 @@ send_line() {  # <text>
 cleanup() {
   tmux -L "$TMUX_SOCKET" kill-server >/dev/null 2>&1 || true
   rm -rf "$LAB"
+  fm_test_cleanup
 }
 trap cleanup EXIT INT TERM
 
@@ -215,7 +218,8 @@ if [ "$EXPECTATION" = updated ]; then
   }
   [ -f "$HOME_DIR/state/.session-start-agents-baseline" ] \
     || fail "Pi startup did not record the true-start instruction baseline"
-  [ "$(sed -n '2p' "$HOME_DIR/state/.session-start-agents-baseline")" != "$(shasum -a 256 "$PROJECT/AGENTS.md" | awk '{print "sha256:" $1}')" ] \
+  AGENTS_DIGEST=$(fm_test_sha256 "$PROJECT/AGENTS.md") || fail "could not hash the updated AGENTS.md"
+  [ "$(sed -n '2p' "$HOME_DIR/state/.session-start-agents-baseline")" != "sha256:$AGENTS_DIGEST" ] \
     || fail "Pi compaction rewrote the true-start instruction baseline"
   pass "Pi $(pi --version 2>/dev/null | head -n 1) re-injects updated AGENTS.md after a real compact in an isolated session"
 else

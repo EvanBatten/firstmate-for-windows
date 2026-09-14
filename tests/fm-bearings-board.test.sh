@@ -11,7 +11,7 @@ set -u
 BOARD="$ROOT/bin/fm-bearings-board.sh"
 TMP_ROOT=$(fm_test_tmproot fm-bearings-board)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 
 make_home() {  # <name>
   local home="$TMP_ROOT/$1" fakebin

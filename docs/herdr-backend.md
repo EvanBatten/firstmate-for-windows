@@ -332,6 +332,13 @@ All thirteen reads that can emit more than one record go through `fm_backend_her
 It undoes exactly that terminator on a Windows userland and runs the identical pipeline everywhere else; a read whose filter iterates an array but collects to at most one record is already exact, and stays off it.
 This one is keyed on `$OSTYPE` rather than on the binary, because removing a CR that immediately precedes an LF `jq` itself wrote cannot change what a POSIX `jq`'s output means. It captures through a `&& printf X` sentinel so the last record's terminator is never guessed at: a CR that is the final byte of a VALUE survives, which a trailing-CR strip would have eaten.
 
+The pane-death idle-shell proof reads the shell's process-table row, state, and name through `bin/fm-proc-lib.sh`, which answers from MSYS `/proc` on this platform.
+Herdr names a pane's shell by its Win32 pid, so the proof first looks up the MSYS pid of that process, the one `/proc` and `kill` address, and refuses a native process that no MSYS process started.
+Process names are compared with the directory and a trailing `.exe` removed, because Herdr 0.8.2 reports them in that Windows spelling.
+A pane whose shell is Herdr's Windows default shell never passes the proof.
+Every Firstmate task pane is one, because the adapter starts Git Bash inside that shell, so those panes always take the unproved-shell fallbacks described above.
+The proof refuses those panes on Herdr's own process fields, before any of the reads above, so on Windows the reads matter only when Herdr itself reports a POSIX shell as a pane's shell.
+
 ## Active limits
 
 - Herdr remains experimental.

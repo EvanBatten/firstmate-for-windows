@@ -15,7 +15,7 @@ set -u
 RECONCILE="$ROOT/bin/fm-secondmate-reconcile.sh"
 TMP_ROOT=$(fm_test_tmproot fm-secondmate-reconcile)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 
 export FM_SEND_SETTLE=0 FM_SEND_SLEEP=0 FM_SEND_RETRIES=1
 

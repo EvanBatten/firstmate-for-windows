@@ -7,7 +7,7 @@ set -u
 # shellcheck source=tests/remote-herdr-fixture.sh
 . "$(dirname "${BASH_SOURCE[0]}")/remote-herdr-fixture.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-secondmate-e2e)
 mkdir -p "$TMP_ROOT"
@@ -279,10 +279,6 @@ remote_env() {
   "$@"
 }
 
-sha256_file() {
-  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
-}
-
 # The correlation token of the newest record in the remote secondmate's
 # steering inbox: a remote steer is delivered as a durable record there, so
 # the corr a reply must echo is read from the record body, never from typed
@@ -450,12 +446,13 @@ pass "remote seeding proceeds once the repair closes every gap"
 # origin it already resolved, the seed validates and transports it, and the
 # primary project tree is left exactly as it was found.
 projects_snapshot() { # <dir>
-  local dir=$1 path
+  local dir=$1 path digest
   (
     cd "$dir" 2>/dev/null || exit 0
     find . -print | LC_ALL=C sort | while IFS= read -r path; do
       if [ -f "$path" ] && [ ! -L "$path" ]; then
-        printf '%s %s\n' "$path" "$(sha256_file "$path")"
+        digest=$(fm_test_sha256 "$path") || exit 1
+        printf '%s %s\n' "$path" "$digest"
       else
         printf '%s\n' "$path"
       fi
@@ -474,7 +471,8 @@ cat > "$TMP_ROOT/seed-parent/data/projects.md" <<'EOF'
 - delta [local-only] - delta project (added 2026-08-06)
 EOF
 BETA_ORIGIN="file://$TMP_ROOT/beta.git"
-PROJECTS_BEFORE=$(projects_snapshot "$TMP_ROOT/seed-parent/projects")
+PROJECTS_BEFORE=$(projects_snapshot "$TMP_ROOT/seed-parent/projects") \
+  || fail "could not snapshot the primary project tree"
 
 if FM_SECONDMATE_CHARTER='Unsupplied origin charter.' FM_SECONDMATE_SCOPE='unsupplied origin' \
   seed_env "$ROOT/bin/fm-remote-home-seed.sh" seed-noorigin remote-mac "$REMOTE_ROOT" \
@@ -530,7 +528,9 @@ assert_grep '- beta [direct-PR]' "$TMP_ROOT/seed-noclone-home/data/projects.md" 
   "the remote home did not publish the project's registered posture"
 assert_absent "$TMP_ROOT/seed-parent/projects/beta" \
   "seeding cloned the project into the primary project tree"
-[ "$(projects_snapshot "$TMP_ROOT/seed-parent/projects")" = "$PROJECTS_BEFORE" ] \
+PROJECTS_AFTER=$(projects_snapshot "$TMP_ROOT/seed-parent/projects") \
+  || fail "could not snapshot the primary project tree"
+[ "$PROJECTS_AFTER" = "$PROJECTS_BEFORE" ] \
   || fail "seeding changed the primary project tree"
 pass "remote seeding provisions a supplied origin without touching the primary project tree"
 
@@ -634,7 +634,9 @@ done
 [ "$(cat "$FORGE_HOME/projects/scp-app/ORIGIN.txt")" = \
   'served from git@host.internal:group/scp-app.git' ] \
   || fail "the scp-like route did not clone its own origin"
-[ "$(projects_snapshot "$TMP_ROOT/seed-parent/projects")" = "$PROJECTS_BEFORE" ] \
+PROJECTS_AFTER=$(projects_snapshot "$TMP_ROOT/seed-parent/projects") \
+  || fail "could not snapshot the primary project tree"
+[ "$PROJECTS_AFTER" = "$PROJECTS_BEFORE" ] \
   || fail "seeding non-GitHub projects changed the primary project tree"
 assert_grep '- seed-forge ' "$TMP_ROOT/seed-parent/data/secondmates.md" \
   "the multi-forge route was not registered"
@@ -667,7 +669,7 @@ PROTOCOL_HOME="$TMP_ROOT/protocol-home"
 mkdir -p "$PROTOCOL_HOME/config" "$PROTOCOL_HOME/data" "$PROTOCOL_HOME/state"
 printf 'complete inherited payload\n' > "$TMP_ROOT/inherit-complete"
 inherit_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/inherit-complete" | tr -d ' ')
-inherit_hash=$(sha256_file "$TMP_ROOT/inherit-complete")
+inherit_hash=$(fm_test_sha256 "$TMP_ROOT/inherit-complete") || fail "could not hash the complete inherited payload"
 if printf 'complete' | FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   put config/crew-harness "$inherit_bytes" "$inherit_hash" 1 >/dev/null 2>&1; then
   fail "remote inheritance published a truncated payload"
@@ -678,7 +680,7 @@ FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   < "$TMP_ROOT/inherit-complete" >/dev/null
 printf 'stale inherited payload\n' > "$TMP_ROOT/inherit-stale"
 inherit_stale_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/inherit-stale" | tr -d ' ')
-inherit_stale_hash=$(sha256_file "$TMP_ROOT/inherit-stale")
+inherit_stale_hash=$(fm_test_sha256 "$TMP_ROOT/inherit-stale") || fail "could not hash the stale inherited payload"
 if FM_HOME="$PROTOCOL_HOME" "$REMOTE_ROOT/bin/fm-remote-inherit.sh" \
   put config/crew-harness "$inherit_stale_bytes" "$inherit_stale_hash" 1 \
   < "$TMP_ROOT/inherit-stale" >/dev/null 2>&1; then

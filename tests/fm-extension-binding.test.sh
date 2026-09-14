@@ -22,6 +22,12 @@ case "$extension_segment" in
   *) printf 'unknown extension-binding segment: %s\n' "$extension_segment" >&2; exit 64 ;;
 esac
 
+command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 77; }
+fm_test_node_has_posix_uid || {
+  echo "skip: extension host requires a POSIX user identity (process.getuid absent on this node)"
+  exit 77
+}
+
 HOST="$ROOT/bin/fm-extension.mjs"
 PROCEVENT="$ROOT/bin/fm-procevent.sh"
 TMP_ROOT_RAW=$(fm_test_tmproot fm-extension-binding)

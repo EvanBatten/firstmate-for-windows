@@ -223,6 +223,7 @@ fm_backend_tmux_foreground_comms() {  # <target>
   local target=$1 tty pid pgid tpgid comm
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
+  # fm-invariant: allow ps-o - tmux foreground process groups by pane tty; tmux panes only, and a tty or process group has no MSYS meaning
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
         [ -n "$comm" ] || continue
@@ -235,10 +236,12 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
   local target=$1 tty pid pgid tpgid comm args argv0
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
   [ -n "$tty" ] || return 0
+  # fm-invariant: allow ps-o - tmux foreground process groups by pane tty; tmux panes only, and a tty or process group has no MSYS meaning
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
         [ -n "$comm" ] || continue
         [ "$pgid" = "$tpgid" ] || continue
+        # fm-invariant: allow ps-o - a tmux foreground process's argv[0]; tmux panes only, which have no MSYS meaning
         args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
         args=${args#"${args%%[![:space:]]*}"}
         argv0=${args%%[[:space:]]*}

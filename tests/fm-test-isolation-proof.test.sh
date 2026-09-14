@@ -52,6 +52,10 @@ if { [ "$1" = --list ] || [ "$1" = --list-scheduled ]; } && [ "$2" = --family ];
       printf '%s\n' tests/fm-proof-skipped.test.sh
       exit 0
       ;;
+    empty-family)
+      printf '%s\n' tests/fm-proof-empty.test.sh
+      exit 0
+      ;;
   esac
 fi
 if [ "$1" = --list-concurrent-safe-families ]; then
@@ -102,6 +106,12 @@ SH
 #!/usr/bin/env bash
 echo
 echo "skip: herdr not found"
+exit 77
+SH
+  cat >"$repo/tests/fm-proof-empty.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "skip: x"
+exit 0
 SH
   chmod +x "$proof" "$repo/bin/fm-test-run.sh" "$repo/tests/fm-proof-"*.test.sh
   set +e
@@ -165,6 +175,13 @@ assert artifact["summary"]["total"] == 1
 assert artifact["summary"]["failed"] == 1
 assert artifact["scripts"][0]["exit"] == 1
 ' "$skipped_json" || fail "gate-skipped family artifact was admitted"
+  set +e
+  "$proof" --pool empty-family --jobs 1 >"$tmp/empty.out" 2>"$tmp/empty.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a candidate that ran no cases must fail the proof, got $rc"
+  grep -Fq 'pool empty-family candidate ran no cases and exited 0 without proving concurrency: tests/fm-proof-empty.test.sh' "$tmp/empty.err" \
+    || fail "the zero-case proof did not name its pool and candidate: $(cat "$tmp/empty.err")"
   rm -rf "$tmp"
   pass "family pool JSON scopes jobs admission to proven concurrency"
 }

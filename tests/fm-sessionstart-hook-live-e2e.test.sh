@@ -43,7 +43,7 @@ set -u
 if [ "${FM_SESSIONSTART_HOOK_LIVE_E2E:-0}" != 1 ] && \
    [ "${FM_PI_SESSIONSTART_RACE_LIVE_E2E:-0}" != 1 ]; then
   echo "skip: set FM_SESSIONSTART_HOOK_LIVE_E2E=1 for the cross-harness guard or FM_PI_SESSIONSTART_RACE_LIVE_E2E=1 for the offline Pi /new race regression"
-  exit 0
+  exit 77
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

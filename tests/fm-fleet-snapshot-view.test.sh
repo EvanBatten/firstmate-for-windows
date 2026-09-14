@@ -10,7 +10,7 @@ SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
 VIEW="$ROOT/bin/fm-fleet-view.sh"
 TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 
 make_fakebin() {  # <dir>
   local fb

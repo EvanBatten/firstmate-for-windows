@@ -18,7 +18,7 @@ FM_ROOT_OVERRIDE="$TMP_ROOT/fixture-root"
 mkdir -p "$FM_ROOT_OVERRIDE"
 export FM_ROOT_OVERRIDE
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 
 # A fakebin that stubs the local tools the canonical snapshot may reach for, plus a
 # gh/gh-axi that RECORDS every call to $NET_LOG so a test can prove the default path

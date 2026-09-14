@@ -533,20 +533,22 @@ test_installer_rejects_unsupported_platform() {
   pass "actionlint installer rejects an unsupported OS or architecture"
 }
 
-# Prove the no-mistakes/local owner (bin/fm-lint.sh with no paths) catches a
-# self-broken ci.yml. Copy the lint scripts into a fake repo so the default
-# workflow root is the fixture, not this worktree.
-test_fm_lint_default_path_catches_broken_ci_yml() {
-  local tmp fakebin log diff_file out rc
-  tmp=$(fm_test_tmproot fm-lint-wf-default)
+# Copy the lint scripts into a fake repo so the default workflow root of
+# bin/fm-lint.sh with no paths is the fixture, not this worktree. The git and
+# ShellCheck stand-ins report a feature branch with no changed shell files, so
+# the run reaches the workflow lint and the repository invariants without
+# linting anything else. The invariants are a stand-in that prints a marker and
+# exits with <invariants-exit>. Prints the fixture's fake bin directory.
+stage_fm_lint_default_fixture() { # <tmp> <invariants-exit>
+  local tmp=$1 invariants_exit=$2 fakebin
   mkdir -p "$tmp/bin" "$tmp/.github/workflows"
   cp "$LINT" "$tmp/bin/fm-lint.sh"
   cp "$LINT_WF" "$tmp/bin/fm-lint-workflows.sh"
-  chmod +x "$tmp/bin/fm-lint.sh" "$tmp/bin/fm-lint-workflows.sh"
-  write_col0_heredoc_workflow "$tmp/.github/workflows/ci.yml"
+  printf '#!/usr/bin/env bash\necho "fixture repository invariants ran"\nexit %s\n' "$invariants_exit" \
+    > "$tmp/bin/fm-repo-invariants.sh"
+  chmod +x "$tmp/bin/fm-lint.sh" "$tmp/bin/fm-lint-workflows.sh" "$tmp/bin/fm-repo-invariants.sh"
 
   fakebin=$(fm_fakebin "$tmp")
-  log="$tmp/shellcheck.log"
   cat > "$fakebin/git" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -554,38 +556,58 @@ case "$*" in
   "rev-parse --abbrev-ref HEAD") printf 'feature\n'; exit 0 ;;
   "rev-parse --verify -q origin/main") exit 0 ;;
   "merge-base "*) printf 'fakebase123\n'; exit 0 ;;
-  "diff --name-only --diff-filter=ACMR -z fakebase123 --")
-    [ -n "${FM_TEST_GIT_DIFF_FILE:-}" ] && cat "${FM_TEST_GIT_DIFF_FILE}"
-    exit 0
-    ;;
   *) exit 0 ;;
 esac
 SH
-  chmod +x "$fakebin/git"
-  : > "$log"
-  cat > "$fakebin/shellcheck" <<SH
+  cat > "$fakebin/shellcheck" <<'SH'
 #!/usr/bin/env bash
-if [ "\${1:-}" = --version ]; then
+if [ "${1:-}" = --version ]; then
   printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
   exit 0
 fi
-shift 3
-printf '%s\n' "\$@" >> "$log"
 exit 0
 SH
-  chmod +x "$fakebin/shellcheck"
-  diff_file="$tmp/diff.nul"
-  : > "$diff_file"
+  chmod +x "$fakebin/git" "$fakebin/shellcheck"
+  printf '%s\n' "$fakebin"
+}
+
+# Prove the no-mistakes/local owner catches a self-broken ci.yml. The
+# repository invariants stand-in passes, so the exit status is the workflow
+# lint's alone.
+test_fm_lint_default_path_catches_broken_ci_yml() {
+  local tmp fakebin out rc
+  tmp=$(fm_test_tmproot fm-lint-wf-default)
+  fakebin=$(stage_fm_lint_default_fixture "$tmp" 0)
+  write_col0_heredoc_workflow "$tmp/.github/workflows/ci.yml"
 
   rc=0
-  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
-    FM_TEST_GIT_DIFF_FILE="$diff_file" "$tmp/bin/fm-lint.sh" 2>&1) || rc=$?
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 "$tmp/bin/fm-lint.sh" 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "fm-lint.sh default path missed a broken ci.yml"$'\n'"$out"
   assert_contains "$out" "could not parse as YAML" \
     "fm-lint.sh default path did not surface the workflow YAML error"
   assert_contains "$out" "ci.yml" \
     "fm-lint.sh default path did not name the broken workflow"
   pass "fm-lint.sh default path catches a self-broken ci.yml"
+}
+
+# The lint gate is what runs the repository invariants. Beside a valid workflow
+# the only failure left is the invariants stand-in's own status, so the run
+# must end with exactly that status, and the workflow lint must still run.
+test_fm_lint_default_path_fails_on_repo_invariants() {
+  local tmp fakebin out rc
+  tmp=$(fm_test_tmproot fm-lint-invariants-default)
+  fakebin=$(stage_fm_lint_default_fixture "$tmp" 3)
+  write_valid_workflow "$tmp/.github/workflows/ci.yml"
+
+  rc=0
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 "$tmp/bin/fm-lint.sh" 2>&1) || rc=$?
+  assert_contains "$out" "fixture repository invariants ran" \
+    "fm-lint.sh default path did not run the repository invariants"
+  [ "$rc" -eq 3 ] \
+    || fail "fm-lint.sh default path did not end with the failing repository invariants' status 3, got $rc"$'\n'"$out"
+  assert_contains "$out" "1 workflow files valid" \
+    "a repository invariants failure kept fm-lint.sh from running the workflow lint"
+  pass "fm-lint.sh default path fails when the repository invariants fail"
 }
 
 test_windows_branch_in_ci_and_required_workflows() {
@@ -686,4 +708,5 @@ test_installer_prefers_sha256sum_over_shasum
 test_installer_verifies_a_checksum_under_a_backslash_temp_root
 test_installer_rejects_unsupported_platform
 test_fm_lint_default_path_catches_broken_ci_yml
+test_fm_lint_default_path_fails_on_repo_invariants
 test_windows_branch_in_ci_and_required_workflows

@@ -1331,15 +1331,18 @@ FMEOF
 # exited or reused pid is never signaled.
 # Returns 0 only when the pane is confirmed gone.
 fm_backend_herdr_death_close_pane() {  # <session> <pane-id> <shell-pid>
-  local session=$1 pane_id=$2 shell_pid=$3 ps_bin attempt max_attempts presence resampled_pid
-  ps_bin=${FM_HERDR_PS_BIN:-ps}
+  local session=$1 pane_id=$2 shell_pid=$3 local_pid attempt max_attempts presence resampled_pid
   case "$shell_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  command -v "$ps_bin" >/dev/null 2>&1 || return 1
+  fm_backend_herdr_load_proc_lib || return 1
   max_attempts=${FM_BACKEND_HERDR_DEATH_CLOSE_POLLS:-40}
-  fm_backend_herdr_pid_is_bare_shell "$ps_bin" "$shell_pid" || return 1
-  kill -HUP "$shell_pid" 2>/dev/null || true
+  # herdr names the shell by the operating system's pid, which on Windows is a
+  # Win32 pid that MSYS `kill` does not address; the signal goes to the pid this
+  # shell knows the same process by.
+  local_pid=$(fm_proc_from_os_pid "$shell_pid") || return 1
+  fm_backend_herdr_pid_is_bare_shell "$local_pid" || return 1
+  kill -HUP "$local_pid" 2>/dev/null || true
   attempt=0
   while [ "$attempt" -lt "$max_attempts" ]; do
     presence=$(fm_backend_herdr_pane_presence_state "$session" "$pane_id")
@@ -1352,8 +1355,9 @@ fm_backend_herdr_death_close_pane() {  # <session> <pane-id> <shell-pid>
   # that exited and was reused by an unrelated process is never signaled.
   resampled_pid=$(fm_backend_herdr_pane_idle_shell_sample "$session" "$pane_id") || return 1
   [ "$resampled_pid" = "$shell_pid" ] || return 1
-  fm_backend_herdr_pid_is_bare_shell "$ps_bin" "$shell_pid" || return 1
-  kill -KILL "$shell_pid" 2>/dev/null || true
+  local_pid=$(fm_proc_from_os_pid "$shell_pid") || return 1
+  fm_backend_herdr_pid_is_bare_shell "$local_pid" || return 1
+  kill -KILL "$local_pid" 2>/dev/null || true
   attempt=0
   while [ "$attempt" -lt "$max_attempts" ]; do
     presence=$(fm_backend_herdr_pane_presence_state "$session" "$pane_id")
@@ -1364,16 +1368,40 @@ fm_backend_herdr_death_close_pane() {  # <session> <pane-id> <shell-pid>
   return 1
 }
 
-# fm_backend_herdr_pid_is_bare_shell: <pid> currently resolves to a bare
-# recognized shell process per <ps-bin>.
+# fm_backend_herdr_load_proc_lib: bin/fm-proc-lib.sh owns every process read
+# the idle-shell proof makes, on both platforms. It is loaded on first use
+# rather than when this adapter is sourced, because only the close paths ever
+# reach the proof and every other herdr call would pay its source-time probe.
+fm_backend_herdr_load_proc_lib() {
+  declare -F fm_proc_from_os_pid >/dev/null 2>&1 && return 0
+  # shellcheck source=bin/fm-proc-lib.sh
+  . "$FM_BACKEND_HERDR_ROOT/bin/fm-proc-lib.sh"
+}
+
+# fm_backend_herdr_process_name: the bare program name in a process name or a
+# command path: the directory (either separator) goes, and so does a trailing
+# .exe in any case, so the Windows spellings herdr 0.8.2 reports on this host
+# (a name of `pwsh.exe` and an argv0 of `C:\...\WindowsApps\pwsh.EXE`) compare
+# as the same program.
+fm_backend_herdr_process_name() {  # <name>
+  local name=${1//\\//}
+  name=${name##*/}
+  case "$name" in
+    *.[Ee][Xx][Ee]) name=${name%????} ;;
+  esac
+  printf '%s' "$name"
+}
+
+# fm_backend_herdr_pid_is_bare_shell: <local-pid> currently resolves to a bare
+# recognized shell process. <local-pid> is this shell's pid for the process
+# (fm_proc_from_os_pid), not herdr's.
 # BSD ps reports comm as argv0, so a login shell arrives as "-zsh"; strip the
 # login dash exactly like the idle-shell proof's argv0 normalization.
-fm_backend_herdr_pid_is_bare_shell() {  # <ps-bin> <pid>
+fm_backend_herdr_pid_is_bare_shell() {  # <local-pid>
   local comm
-  comm=$("$1" -p "$2" -o comm= 2>/dev/null) || return 1
+  comm=$(fm_proc_comm "$1") || return 1
   comm=$(printf '%s' "$comm" | tr -d '[:space:]')
-  comm=${comm#-}
-  comm=${comm##*/}
+  comm=$(fm_backend_herdr_process_name "${comm#-}")
   case "$comm" in sh|bash|zsh|dash|ksh|fish) return 0 ;; esac
   return 1
 }
@@ -1410,7 +1438,7 @@ fm_backend_herdr_pane_idle_shell_pid() {  # <session> <pane-id>
 # contract and the settle retry.
 fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
   local session=$1 pane=$2 info shell_pid foreground_pgid count
-  local process_pid name argv0 shell_name rows stat ps_bin
+  local process_pid name argv0 shell_name rows stat local_pid
   info=$(fm_backend_herdr_cli "$session" pane process-info --pane "$pane" 2>/dev/null) || return 1
   printf '%s' "$info" | jq -e --arg pane "$pane" '
     .result.type == "pane_process_info"
@@ -1434,21 +1462,24 @@ fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
     | ($process.argv0 // $process.argv[0])
     | select(type == "string" and length > 0)
   ' 2>/dev/null) || return 1
-  shell_name=${name##*/}
-  argv0=${argv0#-}
-  argv0=${argv0##*/}
+  shell_name=$(fm_backend_herdr_process_name "$name")
+  argv0=$(fm_backend_herdr_process_name "${argv0#-}")
   [ "$argv0" = "$shell_name" ] || return 1
   case "$shell_name" in sh|bash|zsh|dash|ksh|fish) ;; *) return 1 ;; esac
 
-  ps_bin=${FM_HERDR_PS_BIN:-ps}
-  command -v "$ps_bin" >/dev/null 2>&1 || return 1
-  rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1
-  printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
+  # The process table and state come from bin/fm-proc-lib.sh, which answers on
+  # MSYS as well, and are read by the pid this shell knows the shell by: herdr
+  # reports Win32 pids on Windows. A native process no MSYS shell started has no
+  # such pid, and the proof refuses it.
+  fm_backend_herdr_load_proc_lib || return 1
+  local_pid=$(fm_proc_from_os_pid "$shell_pid") || return 1
+  rows=$(fm_proc_table) || return 1
+  printf '%s\n' "$rows" | awk -v shell="$local_pid" '
     $1 == shell { found++ }
     $2 == shell { child++ }
     END { exit(found == 1 && child == 0 ? 0 : 1) }
   ' || return 1
-  stat=$("$ps_bin" -p "$shell_pid" -o stat= 2>/dev/null | tr -d '[:space:]') || return 1
+  stat=$(fm_proc_state "$local_pid") || return 1
   case "$stat" in S*|I*) ;; *) return 1 ;; esac
   printf '%s\n' "$shell_pid"
 }

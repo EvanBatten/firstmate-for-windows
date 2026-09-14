@@ -118,10 +118,15 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 - Plain dash `-`, never an em dash.
 - Never add an agent name as a commit co-author.
 - `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
+- Test whether a shell function is defined with `declare -F`, never `command -v`.
+  A `command -v` miss falls through to a full PATH search, which cost over a second per source on a WSL host whose PATH carries the Windows interop directories, and the regression reads as test flakiness rather than as a slow guard.
+- When a root already follows a library, mark any further load of it that you add or touch `# shellcheck source=/dev/null`.
+  ShellCheck's recursion guard only skips a file already on the current source stack, so every directive-bearing load inlines the library again and multiplies lint memory without adding coverage; `docs/windows/measurement.md` records one such change taking two scripts past 15 GiB, and issue #45 tracks the repeats the tree still carries.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, pinned shellcheck version, and pinned actionlint workflow lint) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other version of either linter.
 - When a task names a specific tool, implement the work with that tool, or explicitly flag the substitution and its new dependency footprint for review before shipping.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
 - Tests must exercise behavior through an executable or public interface and must never assert implementation-source bytes, including through parsers, regexes, snapshots, or indirect wrappers.
+- A check on the repository's own source - a spelling that must stay with one owner, a shape no file may take - is a `bin/` script that `bin/fm-lint.sh`'s default path runs, and its test in `tests/` drives that script against fixture trees, never against the tracked tree.
 - A maintainer-verification record under `docs/verification/` records active empirical facts, not assumptions or task chronology.
 - Include the date, version, exact commands run, and exact output needed to support the current guarantee.
 - Keep incident chronology and delivery evidence in private task reports or PR evidence unless a concise rationale is required to maintain a current safety boundary.

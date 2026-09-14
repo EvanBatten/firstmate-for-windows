@@ -54,7 +54,8 @@ export const FmPrimaryPretoolCheck = async ({ directory, worktree }) => {
       const command = output?.args?.command;
       if (!command || typeof command !== "string") return;
 
-      const result = await runProcess(`${root}/bin/fm-arm-pretool-check.sh`, ["--command", command]);
+      // Through bash: Windows node cannot execute a shebang script directly.
+      const result = await runProcess("bash", [`${root}/bin/fm-arm-pretool-check.sh`, "--command", command]);
       if (result.code !== 2) return;
 
       const reason = result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt";

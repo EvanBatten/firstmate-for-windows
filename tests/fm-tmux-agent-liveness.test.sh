@@ -22,8 +22,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
-SLEEP_BIN=$(command -v sleep) || { echo "skip: sleep not found"; exit 0; }
+command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 77; }
+SLEEP_BIN=$(command -v sleep) || { echo "skip: sleep not found"; exit 77; }
 
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-liveness-$$"

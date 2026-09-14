@@ -45,8 +45,7 @@ document:
 # alias through its own bundled `sh` from the repository toplevel, so the
 # relative script path resolves whatever the caller's directory. The same line
 # is correct on Linux and macOS, where git runs the alias through `/bin/sh` and
-# the script is tracked mode 100755. Double quotes, not single, because cmd.exe
-# treats `'` as an ordinary character rather than a quote.
+# the script is tracked mode 100755.
 #
 # One worker, for the reason `.github/workflows/ci.yml` sets `FM_LINT_JOBS: 1`
 # on its own lint step: the two default workers hold their peaks together, a
@@ -59,8 +58,15 @@ document:
 # baseline". Spelled as the script's own `--jobs` option rather than an
 # `FM_LINT_JOBS=1` prefix, because cmd.exe cannot read a POSIX VAR=value
 # prefix any more than it can run the bare script.
+#
+# Nothing in this line may depend on quoting surviving. The option sits AFTER
+# the alias name, where git appends it to the shell command, rather than inside
+# the alias value where it would need quotes to hold a space. An earlier form
+# put it inside, and the gate answered `unknown option: --jobs` with git's own
+# usage: the quotes were gone by the time git saw the line, so git read the
+# option as its own. Reproduced directly by stripping the quotes from that form.
 commands:
-  lint: 'git -c alias.fmlint="!bin/fm-lint.sh --jobs 1" fmlint'
+  lint: 'git -c alias.fmlint=!bin/fm-lint.sh fmlint --jobs 1'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.

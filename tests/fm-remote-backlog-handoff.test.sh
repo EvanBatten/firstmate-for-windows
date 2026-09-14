@@ -5,7 +5,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
+command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 77; }
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TMP_ROOT=$(fm_test_tmproot fm-remote-handoff)
 mkdir -p "$TMP_ROOT"
@@ -142,13 +142,9 @@ handoff_env() {
   "$@"
 }
 
-sha256_file() {
-  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
-}
-
 printf 'complete handoff payload\n' > "$TMP_ROOT/complete-payload"
 complete_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/complete-payload" | tr -d ' ')
-complete_hash=$(sha256_file "$TMP_ROOT/complete-payload")
+complete_hash=$(fm_test_sha256 "$TMP_ROOT/complete-payload") || fail "could not hash the complete payload"
 if printf 'complete' | FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
   put state/handoff/integrity.outbox.md 1024 "$complete_bytes" "$complete_hash" 1 >/dev/null 2>&1; then
   fail "confined put published a truncated payload"
@@ -159,7 +155,7 @@ FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
   < "$TMP_ROOT/complete-payload" >/dev/null
 printf 'stale handoff payload\n' > "$TMP_ROOT/stale-payload"
 stale_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/stale-payload" | tr -d ' ')
-stale_hash=$(sha256_file "$TMP_ROOT/stale-payload")
+stale_hash=$(fm_test_sha256 "$TMP_ROOT/stale-payload") || fail "could not hash the stale payload"
 if FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
   put state/handoff/integrity.outbox.md 1024 "$stale_bytes" "$stale_hash" 1 \
   < "$TMP_ROOT/stale-payload" >/dev/null 2>&1; then
@@ -173,7 +169,7 @@ rm -f "$REMOTE/state/handoff/integrity.outbox.md" "$REMOTE/state/handoff/.integr
 mkdir -p "$REMOTE/state/handoff" "$TMP_ROOT/external-handoff"
 printf 'race-safe handoff\n' > "$TMP_ROOT/race-payload"
 race_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/race-payload" | tr -d ' ')
-race_hash=$(sha256_file "$TMP_ROOT/race-payload")
+race_hash=$(fm_test_sha256 "$TMP_ROOT/race-payload") || fail "could not hash the race payload"
 (
   set -o pipefail
   (

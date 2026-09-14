@@ -28,6 +28,19 @@ fi
 
 unset NO_MISTAKES_GATE
 
+# Three Pi cases assert what only the supervised session-start path produces
+# (supervisor pids, launch: lines, grandchildren that outlive a TERM to their
+# leader). That path is process-group based, and the extension chooses it only
+# where node is not on win32 (`supervised = process.platform !== "win32"` in
+# .pi/extensions/fm-primary-turnend-guard.ts), so on win32 those cases skip.
+# Node's platform is the condition, not uname: it is node that picks the path.
+PI_SESSIONSTART_UNSUPERVISED=0
+if command -v node >/dev/null 2>&1 \
+  && node -e 'process.exit(process.platform === "win32" ? 0 : 1)'; then
+  PI_SESSIONSTART_UNSUPERVISED=1
+fi
+PI_SESSIONSTART_UNSUPERVISED_SKIP="skip: pi supervised session-start is POSIX-only (win32 runs unsupervised, .pi/extensions/fm-primary-turnend-guard.ts)"
+
 TMP_ROOT=$(fm_test_tmproot fm-sessionstart-nudge)
 NUDGE="$ROOT/bin/fm-sessionstart-nudge.sh"
 RUN="$ROOT/bin/fm-sessionstart-run.sh"
@@ -655,6 +668,10 @@ test_pi_sessionstart_generation_prerequisite() {
     echo "skip: node not found for Pi session-start generation prerequisite test"
     return 0
   }
+  if [ "$PI_SESSIONSTART_UNSUPERVISED" = 1 ]; then
+    echo "$PI_SESSIONSTART_UNSUPERVISED_SKIP"
+    return 0
+  fi
   fixture="$TMP_ROOT/pi-sessionstart-generation"
   mkdir -p "$fixture/.pi/extensions/lib" "$fixture/bin" "$fixture/state"
   cp "$ROOT/.pi/package.json" "$fixture/.pi/"
@@ -982,6 +999,10 @@ test_pi_reload_releases_sessionstart_exit_listener() {
     echo "skip: node not found for Pi reload exit-listener test"
     return 0
   }
+  if [ "$PI_SESSIONSTART_UNSUPERVISED" = 1 ]; then
+    echo "$PI_SESSIONSTART_UNSUPERVISED_SKIP"
+    return 0
+  fi
   fixture="$TMP_ROOT/pi-reload-exit-listener"
   mkdir -p "$fixture/.pi/extensions/lib" "$fixture/bin" "$fixture/state"
   cp "$ROOT/.pi/package.json" "$fixture/.pi/"
@@ -1118,6 +1139,10 @@ test_pi_large_sessionstart_digest_is_delivered_loudly() {
     echo "skip: node not found for Pi large session-start delivery test"
     return 0
   }
+  if [ "$PI_SESSIONSTART_UNSUPERVISED" = 1 ]; then
+    echo "$PI_SESSIONSTART_UNSUPERVISED_SKIP"
+    return 0
+  fi
   fixture="$TMP_ROOT/pi-large-digest"
   mkdir -p "$fixture/.pi/extensions/lib" "$fixture/bin" "$fixture/state" "$fixture/data" "$fixture/config"
   git init -q -b main "$fixture"
