@@ -3,102 +3,82 @@
 ### Talk to one agent. Ship with a crew. On Windows.
 
 This is a Windows port of [firstmate](https://github.com/kunchenguid/firstmate), an agent distro for running a crew of coding agents.
-Upstream firstmate targets macOS and Linux.
-This fork carries the smallest set of measured patches that make the same distro run on native Windows 11 under Git Bash, with [Herdr](https://herdr.dev) as the session backend.
-
-It is a separate project from upstream, not a staging area for it.
-See [Credit and upstream](#credit-and-upstream).
+Upstream targets macOS and Linux.
+This fork carries the smallest set of measured patches that run the same distro on native Windows 11 under Git Bash, with [Herdr](https://herdr.dev) as the session backend.
+It is a separate project from upstream; see [Credit and upstream](#credit-and-upstream).
 
 ## What it is
 
-You can run one coding agent easily.
-But the moment you want three project tasks done in parallel - fixes, investigations, plans, audits - you become a tab-juggler: babysitting sessions, copy-pasting context between repos, forgetting which terminal had the failing test.
+One coding agent is easy to run.
+Three tasks in parallel turn you into a tab juggler, copying context between sessions and losing track of which terminal had the failing test.
 
-firstmate flips the model.
-You talk to a single agent - the first mate - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
+With firstmate you talk to one agent, the first mate.
+It spawns autonomous crewmates in a visible session backend, gives each its own git worktree, supervises them, and hands you finished PRs, approved local merges, or investigation reports.
 
-firstmate is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
-firstmate is an agent distro for running a crew of agents.
-An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
-There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
-Launching a supported harness inside it instantiates your first mate - and makes you the captain.
+An agent distro is a directory of instructions, skills, tooling, policies and state conventions that turns a general-purpose agent into a specialized one.
+The cloned repo is the whole install: launch a supported harness inside it, and that agent becomes your first mate and you its captain.
 
 ## What the port changes
 
-Windows is not a hostile platform for this codebase so much as an unmeasured one.
-The whole port is nine areas, each fixed behind a capability check rather than a `uname` test, so macOS and Linux behavior is unchanged:
+Each fix sits behind a capability check instead of a `uname` test, so macOS and Linux behave exactly as upstream.
 
-- **Line endings at checkout.** Without a `.gitattributes`, the Git for Windows default rewrites all 151 `bin/*.sh` to CRLF, and a shebang ending `#!/usr/bin/env bash\r` names no interpreter. Nothing else in the port is measurable until this is fixed.
-- **Process identity and liveness.** MSYS `ps` has no `-o`, a bash spawned by a native process reports PPID 1, and `kill -0` cannot see a Win32 pid. `bin/fm-proc-lib.sh` puts "what process is this, and is it alive" behind one library so harness ancestry and every liveness probe stop answering "dead".
-- **The Herdr CLI on Windows.** Socket paths arrive as `C:\...`, MSYS rewrites `/`-leading arguments before `herdr.exe` sees them, and a native `jq.exe` ends every record CR LF so multi-row reads carry an interior CR.
-- **The crewmate pane.** Herdr's `default_shell` on Windows is a Windows shell and `tab create` has no shell flag, so the adapter bootstraps Git Bash itself and carries a cwd emitter in through the environment.
-- **Path form comparisons.** `git rev-parse --show-toplevel` answers `C:/...` while `pwd -P` answers `/c/...`, and the two disagree about case as well. `bin/fm-path-lib.sh` owns that comparison for every caller.
-- **Test fixtures.** Four fixture assumptions made the suite unrunnable here, two of which were wrong on Linux too.
-- **Session-lock identity.** MSYS cannot implement POSIX `exec`, so a hook's ancestry walk names no harness and tokenless watcher continuity never fires. The lock now records the harness session id beside the pid.
-- **Private state.** Every Git Bash mount is `noacl`, so no POSIX mode is ever stored: `mkdir -m 700` creates a 755 directory and exits 1, and `chmod 600` reads back 644.
-  `bin/fm-private-lib.sh` owns "this path must be private" for the shell scripts and the Perl capture helper.
-  It measures whether the filesystem under a path can carry a mode, keeps the exact check where it can, and records a waiver where it cannot, so the guarded PR merge path can now arm its merge poll.
-- **Scripts started from node.** Windows node cannot execute a shebang script: `spawn()` fails with `EFTYPE`.
-  Seven sites started a firstmate script that way, so an OpenCode primary ran no turn-end guard, seatbelt, or session-start nudge, and an OpenCode or Pi crewmate read as busy for its whole task.
-  Each site now runs `bash` with the script as its first argument.
+- Line endings: Git for Windows would check out every `bin/*.sh` with CRLF, and a shebang ending in CR names no interpreter. The tracked `.gitattributes` prevents it.
+- Process identity: MSYS `ps` has no `-o`, a bash started by a native process reports PPID 1, and `kill -0` cannot see a Win32 pid. `bin/fm-proc-lib.sh` answers "what process is this, and is it alive" for every caller.
+- The Herdr CLI: socket paths arrive as `C:\...`, MSYS rewrites arguments that start with `/`, and a native `jq.exe` ends each record with CR LF.
+- The crewmate pane: Herdr opens a Windows shell and `tab create` has no shell flag, so the adapter starts Git Bash itself.
+- Path comparison: `git rev-parse --show-toplevel` answers `C:/...` where `pwd -P` answers `/c/...`, with different case. `bin/fm-path-lib.sh` owns that comparison.
+- Test fixtures: four fixture assumptions made the suite unrunnable here, and two of them were wrong on Linux too.
+- The session lock: MSYS cannot implement POSIX `exec`, so the lock records the harness session id beside the pid.
+- Private state: Git Bash mounts are `noacl` and store no POSIX mode. `bin/fm-private-lib.sh` checks whether a path's filesystem can carry a mode, keeps the exact check where it can, and records a waiver where it cannot.
+- Scripts started from node: Windows node cannot run a shebang script (`spawn()` fails with `EFTYPE`), so every such site runs `bash` with the script as its argument.
 
-The findings ledger behind every one of those rows, with the exact command and output, is in [docs/windows/measurement.md](docs/windows/measurement.md).
-[docs/windows/README.md](docs/windows/README.md) is the entry point to the port's own documentation.
+[docs/windows/measurement.md](docs/windows/measurement.md) has the command and output behind each of these, and [docs/windows/README.md](docs/windows/README.md) is the entry point to the port's documentation.
 
-## What works, and what does not
+## What works
 
-Measured on Windows 11 26200, Git Bash 5.2.37 (MINGW64), against Herdr 0.8.2, treehouse 2.3.0, and a native `claude.exe`.
+Measured on Windows 11 26200 and Git Bash 5.2.37 (MINGW64), with Herdr 0.8.2, treehouse 2.3.0 and a native `claude.exe`.
 
-**Working end to end.**
-The full captain loop has been driven three times on a real machine: register a project, clone it, brief and spawn a crewmate into a treehouse worktree on the Herdr backend, answer its trust dialog, take its PR, merge on the captain's word, and tear down.
+The full captain loop has run end to end three times on a real machine: register and clone a project, spawn a crewmate into a treehouse worktree on Herdr, answer its trust dialog, take its PR, merge on the captain's word, and tear down.
 
-**Degraded, with the existing fallback doing the right thing.**
-Windows Python has no `socket.AF_UNIX`, so the watcher polls instead of subscribing to native events.
+A few things use upstream's fallbacks.
+Windows Python has no `socket.AF_UNIX`, so the watcher polls instead of subscribing to events.
 There is no `lsof`, so the stale git-lock proof refuses rather than guesses.
-Presentation workspace ordering and the wedge-alarm notifier are best-effort.
+Presentation workspace ordering and the [wedge alarm](docs/wedge-alarm.md) notifier are best effort.
 
-**Still open.**
-The extension host, `bin/fm-extension.mjs`, still asserts exact modes and is outside that owner, so extension capture refuses at the node host on a `noacl` mount ([#36](https://github.com/EvanBatten/firstmate-for-windows/issues/36)).
-The open rows are tracked in the findings ledger rather than hidden.
-
-Verified suite counts on the merged tree, and the classification of everything still red, are in [docs/windows/measurement.md](docs/windows/measurement.md) under "Integration".
+The extension host, `bin/fm-extension.mjs`, still asserts exact file modes, so extension capture refuses on a `noacl` mount and its suites skip on Windows ([#36](https://github.com/EvanBatten/firstmate-for-windows/issues/36)).
+Suite counts and the classification of every remaining red are in the ledger under "Integration".
 
 ## Features
 
-- **One liaison** - you talk only to the first mate; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
-- **A visible crew** - every crewmate works in its own Herdr tab you can watch or type into; the first mate reconciles.
-- **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, so parallel work on one repo never collides.
-- **Two task shapes** - ship tasks deliver authorized changes; scout tasks leave standalone investigation reports when the intake contract warrants separate research.
-- **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` merge-autonomy flag.
-- **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock.
-- **Event-driven, low-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; on Windows it polls rather than subscribing, which is the same fallback upstream uses when native event push is unavailable.
-- **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives); crewmates make every other project change behind the configured merge authority.
-- **Restart-proof** - all state lives on disk and in the active session backend; kill the session anytime and the next one reconciles and carries on.
+- One liaison: you talk only to the first mate, which dispatches, supervises, and brings you only the decisions that are yours.
+- A visible crew: each crewmate works in its own Herdr tab that you can watch or type into.
+- Disposable worktrees: each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) worktree, so parallel work on one repo never collides.
+- Ship and scout tasks: ship tasks deliver authorized changes, and scout tasks leave standalone investigation reports.
+- Project modes: each project ships through `no-mistakes`, `direct-PR` or `local-only`, with an optional `+yolo` merge flag.
+- Second mates: optional persistent helpers that run from isolated homes with their own `FM_HOME`, state, projects and session lock, locally or [remotely](docs/remote-secondmates.md).
+- Low-token supervision: a bash watcher wakes the first mate only when something needs it. On Windows it polls.
+- A project boundary: the first mate stays read-only over your projects outside the narrow operations in [hard rule 1](AGENTS.md#1-identity-and-prime-directives), and crewmates make every other change.
+- Restart-proof: all state lives on disk and in the session backend, so a new session reconciles and carries on.
 
-Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](docs/architecture.md) covers each one in detail.
 
-## Quick Start
+## Quick start
 
 ### Requirements
 
-- Windows 11, with [Git for Windows](https://gitforwindows.org) providing Git Bash.
-- A verified primary agent harness. Claude Code with a native `claude.exe` is what this port is measured against.
-- The GitHub CLI, authenticated through `gh auth login`.
-- [Herdr](https://herdr.dev) protocol 14 or newer, plus `jq`, `node`, and treehouse.
+- Windows 11 with [Git for Windows](https://gitforwindows.org).
+- A verified primary agent harness. The port is measured against Claude Code with a native `claude.exe`.
+- The GitHub CLI, authenticated with `gh auth login`.
+- [Herdr](https://herdr.dev) protocol 14 or newer, plus `jq`, `node` and treehouse. Herdr is the backend here because tmux, upstream's reference backend, is not available; see [docs/herdr-backend.md](docs/herdr-backend.md).
 
-tmux is the reference backend upstream and is not available here, so Herdr is the backend on Windows.
-The first mate detects and offers to install supported missing tools after you approve.
-
-### Two settings no repository file can express
-
-Both are checkout-time Git behavior, so they have to be set before or during the clone:
-
-- `core.symlinks` ships as `false` on Git for Windows, which checks the repo's one tracked symlink (`.claude/skills -> ../.agents/skills`) out as a 17-byte text file, and your harness is then shown zero skills.
-- `MSYS=winsymlinks:nativestrict` must be in your environment, or the test harness cannot build its fixtures.
-
-The tracked `.gitattributes` handles line endings on its own once you have cloned.
+The first mate detects missing tools and installs the supported ones after you approve.
 
 ### Install and launch
+
+Two settings have to be in place before you clone, because no repository file can set them:
+
+- `core.symlinks` must be true. Git for Windows defaults it to false, which checks out `.claude/skills` as a 17-byte text file and leaves your harness with no skills.
+- `MSYS=winsymlinks:nativestrict` must be in your environment, or the test harness cannot build its fixtures.
 
 ```sh
 gh auth login
@@ -106,13 +86,13 @@ git clone -c core.symlinks=true https://github.com/EvanBatten/firstmate-for-wind
 cd firstmate-for-windows
 ```
 
-Then launch your harness from Git Bash; `AGENTS.md` takes over from there:
+Launch your harness from Git Bash, and `AGENTS.md` takes over:
 
 ```sh
 claude
 ```
 
-### Talk to it
+Then ask for work:
 
 ```sh
 > ahoy! look at my github project xyz, then fix the flaky login test and add dark mode
@@ -127,7 +107,7 @@ claude
 > alright merge it
 ```
 
-## How It Works
+## How it works
 
 ```
             you (the captain)
@@ -152,82 +132,55 @@ claude
      └─ scout: report at data/<id>/report.md ► decision inventory ► relay findings ► teardown
 ```
 
-You chat with the first mate.
-It routes each request to a crewmate in its own session endpoint and git worktree, supervises the fleet with an event-driven watcher, and brings you finished PRs, approved local merges, or investigation reports.
-
-Full architecture - the supervision engine, worktree isolation, secondmates, dispatch profiles, project modes, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
+The supervision engine, worktree isolation, second mates, dispatch profiles, project modes, fleet sync and self-update are all in [docs/architecture.md](docs/architecture.md).
 
 ## Built-in skills
 
-Firstmate ships these user-invocable built-in skills.
-Claude and grok use the slash form shown here; codex uses the same names with `$`, such as `$afk`.
+Claude and grok use the slash form below; codex uses the same names with `$`, as in `$afk`.
 
-| Skill              | What it does                                                                                                                                  |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/afk`             | Enter away-mode supervision: the sub-supervisor self-handles routine notifications in bash, escalates captain-relevant events and bounded declared-external-wait rechecks as batched digests, and actively alerts if delivery gets stuck while you step away |
-| `/ahoy`            | Recap visible session events since the prior real captain message plus visibly unanswered captain decisions, then guide the captain through any open decisions one at a time in agent-judged impact order; fall back to Bearings when invoked as the session's first real captain message |
-| `/bearings`        | Generate a concise four-section chat digest from bounded local fleet and registered-secondmate state; use `/bearings file` to also replace today's dated report in `data/`, and add `include PRs` when live PR enrichment is wanted |
-| `/updatefirstmate` | Self-update the running firstmate and its secondmates to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge secondmates |
-| `/stow`            | Sweep the session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, curate tiered startup memory with decay and cold archival, enforce each home's budget or surface the required decision, cascade to registered second mates, and report what is safe to reset |
+| Skill              | What it does |
+| ------------------ | ------------ |
+| `/afk`             | Away-mode supervision: routine notifications are handled in bash, captain-relevant events arrive as batched digests, and a stuck delivery raises an alert. |
+| `/ahoy`            | Recaps what happened since your last message, then walks you through open decisions one at a time, most important first. |
+| `/bearings`        | A four-section digest of fleet and second-mate state. `/bearings file` also writes today's report to `data/`, and `include PRs` adds live PR detail. |
+| `/updatefirstmate` | Fast-forwards firstmate and its second mates to origin, then reloads instructions. |
+| `/stow`            | Saves the session's durable knowledge and open work records, curates startup memory within its budget, and reports what is safe to reset. |
 
-Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
-
-### Two-tier skill layout
-
-Firstmate's skills live in two separate places with different audiences:
-
-- `.agents/skills/` - agent-loaded skills (this section's table, plus firstmate's agent-only reference skills). Every one of these assumes a live firstmate home and is meaningless, or actively misleading, installed anywhere else, so each carries `metadata.internal: true` in its frontmatter. That flag hides them from installer discovery (tools like the [skills.sh](https://skills.sh) `npx skills add` installer) without affecting how firstmate itself loads them - frontmatter metadata is inert to the agent's own skill loader.
-- `skills/` - public, installer-facing skills meant to be installed standalone into any project, independent of firstmate.
-  Each one is a self-contained skill with no dependency on firstmate's paths, tools, or vocabulary.
-  Today that is `skills/stow`, a generic session-knowledge-sweep skill.
-  It intentionally shares no code with the firstmate-internal `.agents/skills/stow` it is named after, so the two can evolve independently.
+These, and the agent-only reference skills that load at the triggers named in [`AGENTS.md`](AGENTS.md), live in `.agents/skills/`.
+Each carries `metadata.internal: true` so installers such as [skills.sh](https://skills.sh) hide it, because it only makes sense inside a firstmate home.
+The public `skills/` directory holds standalone skills for any project; today that is `skills/stow`, which shares no code with the internal `/stow`.
 
 ## Documentation
 
-### The Windows port
+For the Windows port:
 
-- [docs/windows/README.md](docs/windows/README.md) - entry point to the port's own documentation and branch layout.
-- [docs/windows/measurement.md](docs/windows/measurement.md) - the findings ledger: every subsystem measured, the exact command and output behind each row, and the classification of everything still red.
-- [docs/windows/prs.md](docs/windows/prs.md) - how the port's history splits into self-contained, independently reviewable branches.
-- [docs/herdr-backend.md](docs/herdr-backend.md) - setup, safety boundaries, and limits for the Herdr backend, including its "Windows (Git Bash / MSYS)" section.
+- [docs/windows/README.md](docs/windows/README.md): entry point and branch layout.
+- [docs/windows/measurement.md](docs/windows/measurement.md): the findings ledger, with every measurement and the classification of everything still red.
+- [docs/windows/prs.md](docs/windows/prs.md): how the port's history splits into independently reviewable branches.
+- [docs/herdr-backend.md](docs/herdr-backend.md): Herdr setup, safety boundaries and limits, including its Windows section.
 
-### firstmate itself
+For firstmate itself:
 
-- [docs/architecture.md](docs/architecture.md) - maintainer architecture for the crew, supervision, worktrees, secondmates, and project modes.
-- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, the files you set, and harness support.
-- [docs/remote-secondmates.md](docs/remote-secondmates.md) - setup, routing, transfer, recovery, and safety behavior for whole-home remote second mates.
-- [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
-- [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's "no turn ends blind" backstop, scope, loop safety, and compatibility limits.
-- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols.
-- [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
-- [docs/documentation-audiences.md](docs/documentation-audiences.md) - documentation audiences and the machine-checked placement boundary.
-- [docs/verification/runtime-backends.md](docs/verification/runtime-backends.md) - active maintainer verification for runtime backend guarantees.
-- [`AGENTS.md`](AGENTS.md) - the distro's always-loaded operating contract and routing index for conditional procedures.
-- [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.
+- [docs/architecture.md](docs/architecture.md) and [docs/configuration.md](docs/configuration.md): how it works, and every setting, environment variable and supported harness.
+- [docs/scripts.md](docs/scripts.md): the `bin/` toolbelt.
+- [docs/remote-secondmates.md](docs/remote-secondmates.md), [docs/wedge-alarm.md](docs/wedge-alarm.md) and [docs/turnend-guard.md](docs/turnend-guard.md): remote second mates, the away-mode alert, and the backstop that keeps a session from ending unsupervised.
+- [docs/documentation-audiences.md](docs/documentation-audiences.md): who each document is for, and the check that enforces it.
+- [`AGENTS.md`](AGENTS.md): the always-loaded operating contract. [CONTRIBUTING.md](CONTRIBUTING.md): workflow, conventions and tests.
 
-### Backends this port does not use
-
-These are upstream's other session backends.
-They are documented here because the code that serves them is still present, but only Herdr is exercised on Windows.
-
-- [docs/tmux-backend.md](docs/tmux-backend.md) - the reference backend on macOS and Linux.
-- [docs/zellij-backend.md](docs/zellij-backend.md), [docs/orca-backend.md](docs/orca-backend.md), [docs/cmux-backend.md](docs/cmux-backend.md) - other experimental backends.
+Upstream's other session backends are still in the code, but only Herdr runs on Windows: [tmux](docs/tmux-backend.md), the reference backend on macOS and Linux, and the experimental [zellij](docs/zellij-backend.md), [orca](docs/orca-backend.md) and [cmux](docs/cmux-backend.md) backends.
 
 ## Credit and upstream
 
 firstmate was created by [Kun Chen](https://github.com/kunchenguid) and lives at [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate).
-Everything this fork is useful for is his design; the port is a platform layer under it.
-If you are on macOS or Linux, use upstream directly - this fork has nothing to offer you.
+The design is his; this port is a platform layer under it.
+On macOS or Linux, use upstream directly.
 
-This repository is maintained separately.
-It is not a staging branch for upstream and does not speak for that project.
-Port work that would make sense upstream is written up in [docs/windows/prs.md](docs/windows/prs.md) as self-contained branches, so it can be offered there if it is ever wanted, but nothing here has been sent and none of it is a pending contribution.
+This repository is maintained separately and does not speak for upstream.
+Port work that might suit upstream is written up as self-contained branches in [docs/windows/prs.md](docs/windows/prs.md), but none of it has been sent.
 
-## Contributing
+## Contributing and license
 
-Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, repo conventions, and how to run the tests.
+Contributions are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) has the workflow and how to run the tests.
 
-## License
-
-MIT - see [LICENSE](LICENSE).
-Copyright for the original work remains with Kun Chen; the port is distributed under the same license.
+MIT, see [LICENSE](LICENSE).
+Copyright for the original work remains with Kun Chen, and the port is distributed under the same license.
