@@ -1,0 +1,72 @@
+== tree: target 206a3b7 (fix + narrowed comments)
+== host: Linux 5.15.167.4-microsoft-standard-WSL2, 16 vCPU, MemTotal 16212304 KiB
+== bin/fm-lint.sh --jobs 1 --telemetry <tsv> bin/fm-teardown.sh
+fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
+fm-lint.sh: full ShellCheck extended analysis enabled
+exit=0 wall=38s
+-- telemetry:
+format	fm-lint-telemetry-v1
+git_head	unavailable
+content_cksum	2809750728-37
+shellcheck_version	0.11.0
+analysis_mode	full
+jobs	1
+root_count	1
+direct_lines	2931
+direct_bytes	129211
+source_directives	18
+source_boundary_directives	1
+source_followed_directives	17
+source_target_count	18
+shard_1_weight_bytes	129211
+shard_2_weight_bytes	0
+wall_seconds	38
+worker_wall_sum_seconds	37.62
+max_worker_wall_seconds	37.62
+user_seconds	33.63
+system_seconds	3.91
+max_worker_rss_kib	5291548
+worker_rss_sum_kib	5294996
+shellcheck_processes_start	0
+shellcheck_processes_end	0
+load_average_start	0.12/0.03/0.01
+load_average_end	0.55/0.15/0.05
+aggregate_cpu_percent_start	12.70
+aggregate_cpu_percent_end	0.80
+result_exit	0
+
+== bin/fm-lint.sh --jobs 1 --telemetry <tsv> bin/fm-watch.sh
+fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
+fm-lint.sh: full ShellCheck extended analysis enabled
+exit=0 wall=20s
+-- telemetry:
+format	fm-lint-telemetry-v1
+git_head	unavailable
+content_cksum	2231392980-33
+shellcheck_version	0.11.0
+analysis_mode	full
+jobs	1
+root_count	1
+direct_lines	1756
+direct_bytes	86497
+source_directives	10
+source_boundary_directives	2
+source_followed_directives	8
+source_target_count	9
+shard_1_weight_bytes	86497
+shard_2_weight_bytes	0
+wall_seconds	20
+worker_wall_sum_seconds	19.96
+max_worker_wall_seconds	19.96
+user_seconds	18.56
+system_seconds	1.46
+max_worker_rss_kib	3126836
+worker_rss_sum_kib	3130344
+shellcheck_processes_start	0
+shellcheck_processes_end	0
+load_average_start	0.55/0.15/0.05
+load_average_end	0.75/0.22/0.08
+aggregate_cpu_percent_start	0.80
+aggregate_cpu_percent_end	0.60
+result_exit	0
+

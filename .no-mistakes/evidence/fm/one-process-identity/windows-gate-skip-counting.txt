@@ -1,0 +1,69 @@
+# Git Bash on Windows (MINGW64_NT-10.0-26200): two real gated e2e suites (no FM_*_E2E=1, so each declines to run) and one suite that runs its cases, through the real runner
+
+## target commit 206a3b7
+$ bin/fm-test-run.sh --json lane.json tests/fm-afk-pi-herdr-return-e2e.test.sh tests/fm-send-secondmate-marker-herdr-e2e.test.sh tests/fm-test-lib.test.sh
+FM_TEST_BEGIN 2026-09-14T00:08:48Z tests/fm-afk-pi-herdr-return-e2e.test.sh family=live-harness-optin expected_gate_skip=optin-env
+# host time scale 40 (about 530 ms per exec)
+skip: set FM_AFK_PI_HERDR_E2E=1 to run the real Pi/Herdr away-return regression
+FM_TEST_END 2026-09-14T00:09:22Z tests/fm-afk-pi-herdr-return-e2e.test.sh exit=77 duration_ms=33200 gate_skip=true cases_ok=0 cases_skipped=1
+FM_TEST_BEGIN 2026-09-14T00:09:25Z tests/fm-send-secondmate-marker-herdr-e2e.test.sh family=live-harness-optin expected_gate_skip=optin-env
+# host time scale 40 (about 172 ms per exec)
+skip: set FM_SEND_MARKER_HERDR_E2E=1 to run the real Pi/Herdr secondmate-marker regression
+FM_TEST_END 2026-09-14T00:10:00Z tests/fm-send-secondmate-marker-herdr-e2e.test.sh exit=77 duration_ms=32719 gate_skip=true cases_ok=0 cases_skipped=1
+FM_TEST_BEGIN 2026-09-14T00:10:02Z tests/fm-test-lib.test.sh family=unclassified expected_gate_skip=none
+# host time scale 40 (about 186 ms per exec)
+ok - fm_test_sha256 digests a file and stdin with sha256sum alone (shasum proven unreachable)
+ok - fm_test_sha256 digests a file and stdin with shasum -a 256 alone (sha256sum proven unreachable)
+ok - fm_test_sha256 fails with nothing on stdout when no digest can be taken
+FM_TEST_END 2026-09-14T00:10:26Z tests/fm-test-lib.test.sh exit=0 duration_ms=22792 gate_skip=false cases_ok=3 cases_skipped=0
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=2 duration_ms=103549
+FM_TEST_SUMMARY_FAMILY family=live-harness-optin count=2 duration_ms=65919 failed=0
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=22792 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-afk-pi-herdr-return-e2e.test.sh duration_ms=33200
+FM_TEST_SLOWEST rank=2 script=tests/fm-send-secondmate-marker-herdr-e2e.test.sh duration_ms=32719
+FM_TEST_SLOWEST rank=3 script=tests/fm-test-lib.test.sh duration_ms=22792
+fm-test-run: wrote timing artifact: /tmp/nm-lane.kxlR40/lane.json
+[runner exit=0 after 110s]
+$ jq -c '.scripts[] | {path, exit, gate_skip, cases_ok, cases_skipped}' lane.json; jq -c .summary lane.json
+{"path":"tests/fm-afk-pi-herdr-return-e2e.test.sh","exit":77,"gate_skip":true,"cases_ok":0,"cases_skipped":1}
+{"path":"tests/fm-send-secondmate-marker-herdr-e2e.test.sh","exit":77,"gate_skip":true,"cases_ok":0,"cases_skipped":1}
+{"path":"tests/fm-test-lib.test.sh","exit":0,"gate_skip":false,"cases_ok":3,"cases_skipped":0}
+{"duration_ms":103549,"failed":0,"skipped_gate":2,"total":3}
+
+## base commit eb78f73 (before this branch), same two gated suites, base runner, from an exported copy of the base tree
+$ bin/fm-test-run.sh tests/fm-afk-pi-herdr-return-e2e.test.sh tests/fm-send-secondmate-marker-herdr-e2e.test.sh
+FM_TEST_BEGIN 2026-09-14T00:10:52Z tests/fm-afk-pi-herdr-return-e2e.test.sh family=live-harness-optin expected_gate_skip=optin-env
+# host time scale 20 (about 79 ms per exec)
+skip: set FM_AFK_PI_HERDR_E2E=1 to run the real Pi/Herdr away-return regression
+FM_TEST_END 2026-09-14T00:10:57Z tests/fm-afk-pi-herdr-return-e2e.test.sh exit=0 duration_ms=4775 gate_skip=false
+FM_TEST_BEGIN 2026-09-14T00:10:58Z tests/fm-send-secondmate-marker-herdr-e2e.test.sh family=live-harness-optin expected_gate_skip=optin-env
+# host time scale 36 (about 142 ms per exec)
+skip: set FM_SEND_MARKER_HERDR_E2E=1 to run the real Pi/Herdr secondmate-marker regression
+FM_TEST_END 2026-09-14T00:11:09Z tests/fm-send-secondmate-marker-herdr-e2e.test.sh exit=0 duration_ms=10620 gate_skip=false
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=22979
+FM_TEST_SUMMARY_FAMILY family=live-harness-optin count=2 duration_ms=15395 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-send-secondmate-marker-herdr-e2e.test.sh duration_ms=10620
+FM_TEST_SLOWEST rank=2 script=tests/fm-afk-pi-herdr-return-e2e.test.sh duration_ms=4775
+[runner exit=0 after 25s]
+
+## adversarial, target commit 206a3b7: three throwaway suites that try to pass or skip without earning it
+#   demo-ran-nothing-exit0.test.sh: echo "# host time scale 40 (about 312 ms per exec)";echo "skip: set FM_DEMO_E2E=1 to run the real regression";exit 0;
+#   demo-skip-after-cases.test.sh: echo "ok - case 1";echo "skip: the rest need a tool";exit 77;
+#   demo-status-leak-77.test.sh: echo "a tool this suite ran returned 77";exit 77;
+$ bin/fm-test-run.sh <the three>
+FM_TEST_BEGIN 2026-09-14T00:11:37Z tests/demo-ran-nothing-exit0.test.sh family=unclassified expected_gate_skip=none
+# host time scale 40 (about 312 ms per exec)
+skip: set FM_DEMO_E2E=1 to run the real regression
+fm-test-run: tests/demo-ran-nothing-exit0.test.sh ran no cases and exited 0; a suite that cannot run declares it with exit 77 (fm_test_gate_skip)
+FM_TEST_END 2026-09-14T00:11:39Z tests/demo-ran-nothing-exit0.test.sh exit=0 duration_ms=453 gate_skip=false cases_ok=0 cases_skipped=1
+FM_TEST_BEGIN 2026-09-14T00:11:42Z tests/demo-status-leak-77.test.sh family=unclassified expected_gate_skip=none
+a tool this suite ran returned 77
+fm-test-run: tests/demo-status-leak-77.test.sh exited 77 without a skip: line; a tool's status leaked as a gate skip
+FM_TEST_END 2026-09-14T00:11:46Z tests/demo-status-leak-77.test.sh exit=77 duration_ms=2868 gate_skip=false cases_ok=0 cases_skipped=0
+FM_TEST_BEGIN 2026-09-14T00:11:51Z tests/demo-skip-after-cases.test.sh family=unclassified expected_gate_skip=none
+ok - case 1
+skip: the rest need a tool
+fm-test-run: tests/demo-skip-after-cases.test.sh declared a gate skip after running 1 cases
+FM_TEST_END 2026-09-14T00:11:54Z tests/demo-skip-after-cases.test.sh exit=77 duration_ms=1426 gate_skip=false cases_ok=1 cases_skipped=1
+FM_TEST_SUMMARY total=3 failed=3 skipped_gate=0 duration_ms=23994
+[runner exit=1 after 26s]

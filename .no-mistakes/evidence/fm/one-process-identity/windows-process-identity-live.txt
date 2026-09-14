@@ -1,0 +1,22 @@
+# Git Bash on Windows, target commit 206a3b7: bin/fm-wake-lib.sh process identity against live processes
+$ uname -s   ->  MINGW64_NT-10.0-26200
+$ sleep 60 &   # process A, MSYS pid 65174
+$ ps -p 65174 -o lstart= -o command=   # the spelling bin/fm-pending-reply-lib.sh and bin/fm-remote-job-lib.sh used before this branch
+ps: unknown option -- o
+Try `ps --help' for more information.
+[exit=1]
+$ fm_pid_identity 65174
+proc-createtime-ms=1789344374262 cmdline-hex=736c65657000363000
+[exit=0]
+$ fm_pid_identity_equal <A re-read a second later> <A recorded>
+[exit=0]  (0 = same process)
+$ sleep 60 &   # process B, MSYS pid 65205; fm_pid_identity 65205
+proc-createtime-ms=1789344377230 cmdline-hex=736c65657000363000
+$ fm_pid_identity_equal <B> <A recorded>   # a different live process must not match
+[exit=1]  (1 = different process)
+$ fm_pid_start_identity 65174 ; fm_pid_start_identity_equal <A start re-read> <A start>
+proc-createtime-ms=1789344374262
+[exit=0]
+$ kill A B; fm_pid_identity 65174   # a dead pid has no identity
+[exit=1]  (non-zero = gone)
+[drive exit=0]

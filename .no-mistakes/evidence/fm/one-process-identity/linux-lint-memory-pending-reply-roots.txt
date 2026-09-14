@@ -1,0 +1,13 @@
+== tree: target 206a3b7; CI lint budget 12582912 KiB (docs/windows/measurement.md), one worker
+bin/fm-send.sh	exit=0	max_rss_kib=2500144	wall_s=18	followed_directives=10
+bin/fm-backlog-handoff.sh	exit=0	max_rss_kib=2960964	wall_s=27	followed_directives=6
+bin/fm-procevent-remote-reply.sh	exit=0	max_rss_kib=2462264	wall_s=20	followed_directives=4
+bin/fm-remote-secondmate-control.sh	exit=0	max_rss_kib=1713696	wall_s=15	followed_directives=3
+bin/fm-secondmate-report.sh	exit=0	max_rss_kib=1423892	wall_s=12	followed_directives=1
+== tree: target 206a3b7; CI lint budget 12582912 KiB (docs/windows/measurement.md), one worker
+bin/backends/herdr.sh	exit=0	max_rss_kib=932368	wall_s=9	followed_directives=6
+bin/fm-remote-job-worker.sh	exit=0	max_rss_kib=1086076	wall_s=10	followed_directives=2
+bin/fm-remote-job-lib.sh	exit=0	max_rss_kib=748040	wall_s=6	followed_directives=2
+bin/fm-wake-lib.sh	exit=0	max_rss_kib=399888	wall_s=4	followed_directives=3
+bin/fm-busy-lib.sh	exit=0	max_rss_kib=65028	wall_s=1	followed_directives=0
+bin/fm-spawn.sh	exit=0	max_rss_kib=3472960	wall_s=19	followed_directives=16

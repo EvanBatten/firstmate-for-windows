@@ -1,0 +1,15 @@
+$ # Git Bash on Windows, node v24.19.0, target commit 206a3b7
+$ MSYS=winsymlinks:nativestrict bash nmcase-tg-target.test.sh   # one-case copy of tests/fm-turnend-guard.test.sh: node imports .opencode/plugins/fm-primary-turnend-guard.js, fires session.idle, and the guard script's refusal must come back as the typed follow-up prompt
+# host time scale 25 (about 97 ms per exec)
+ok - .opencode primary plugin: guard path is anchored to worktree, not directory
+ok - one-case copy finished
+[exit=0 after 10s]
+
+$ # same copy, plugin file taken from base commit eb78f73 (before this branch)
+# host time scale 34 (about 135 ms per exec)
+not ok - OpenCode plugin must run the guard from worktree even when directory is elsewhere: expected exit 0, got 1
+[exit=1 after 12s]
+
+$ # why the base plugin fails: its spawn shape vs this branch's, same stub guard (reads stdin, prints guard-fired, exits 2), Windows node v24.19.0
+base   spawn("<root>/bin/fm-turnend-guard.sh"): spawn threw EFTYPE
+target spawn("bash", ["<root>/bin/fm-turnend-guard.sh"]): exit 2, stderr "guard-fired"

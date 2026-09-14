@@ -1,0 +1,14 @@
+$ # Git Bash on Windows (MINGW64_NT-10.0-26200), target commit 206a3b7
+$ MSYS=winsymlinks:nativestrict bash nmcase-pr-a.test.sh   # one-case copy of tests/fm-pending-reply.test.sh: try_resolve lock helper + recovery sender identity
+# host time scale 40 (about 228 ms per exec)
+ok - normal correlated reply resolves once (idempotent)
+ok - recovery sender identity reads on this host and tells two processes apart
+ok - one-case copy finished
+[exit=0 after 53s]
+
+$ MSYS=winsymlinks:nativestrict bash nmcase-pr-b.test.sh   # one-case copy: maybe_escalate and close_escalation lock helpers
+# host time scale 39 (about 155 ms per exec)
+ok - second missed turn escalates once and remains durable
+ok - escalations and replies wake; the home's own escalation close stays quiet
+ok - one-case copy finished
+[exit=0 after 151s]

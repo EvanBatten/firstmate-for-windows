@@ -1,0 +1,26 @@
+== tree: 0f5d34d (parent of the fix bd62bac: pending-reply lock helpers and teardown's guarded reload still carry source=bin/fm-wake-lib.sh)
+bin/fm-pending-reply-lib.sh:115:  # shellcheck source=bin/fm-wake-lib.sh
+bin/fm-pending-reply-lib.sh:613:  # shellcheck source=bin/fm-wake-lib.sh
+bin/fm-pending-reply-lib.sh:1078:  # shellcheck source=bin/fm-wake-lib.sh
+bin/fm-pending-reply-lib.sh:1144:  # shellcheck source=bin/fm-wake-lib.sh
+bin/fm-teardown.sh:204:# shellcheck source=bin/fm-wake-lib.sh
+bin/fm-teardown.sh:2367:    # shellcheck source=bin/fm-wake-lib.sh
+== bin/fm-lint.sh --jobs 1 bin/fm-watch.sh   (watchdog: kill at 9437184 KiB RSS or 200s)
+t=0s shellcheck_rss_peak=0 KiB
+t=10s shellcheck_rss_peak=988468 KiB
+t=20s shellcheck_rss_peak=1122644 KiB
+t=30s shellcheck_rss_peak=1628500 KiB
+t=40s shellcheck_rss_peak=2230612 KiB
+t=50s shellcheck_rss_peak=3038516 KiB
+t=60s shellcheck_rss_peak=4348244 KiB
+t=70s shellcheck_rss_peak=4855092 KiB
+t=80s shellcheck_rss_peak=4855092 KiB
+t=90s shellcheck_rss_peak=4855092 KiB
+t=100s shellcheck_rss_peak=5549100 KiB
+t=110s shellcheck_rss_peak=6242644 KiB
+t=120s shellcheck_rss_peak=6429216 KiB
+verdict=killed: RSS passed 9437184 KiB at 140s lint_exit=143 sampled_peak_rss=9689428 KiB elapsed=142s
+-- lint output:
+fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
+fm-lint.sh: full ShellCheck extended analysis enabled
+no shellcheck left running

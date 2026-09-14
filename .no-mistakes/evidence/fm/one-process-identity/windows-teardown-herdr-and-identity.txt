@@ -1,0 +1,15 @@
+$ # Git Bash on Windows (MINGW64_NT-10.0-26200), target commit 206a3b7; another session's suite was running on this host at the same time
+$ MSYS=winsymlinks:nativestrict bash nmcase-td-herdr.test.sh   # one-case copy of tests/fm-teardown.test.sh: real bin/fm-teardown.sh against a fake herdr, through teardown_herdr_require_prerequisites and the presentation lock
+# host time scale 30 (about 117 ms per exec)
+ok - herdr flat teardown refuses before returning the isolated copy under lock contention and the retry completes cleanly
+ok - one-case copy finished
+[exit=0 after 294s]
+
+$ MSYS=winsymlinks:nativestrict bash nmcase-td-ident.test.sh   # one-case copy of tests/fm-teardown.test.sh: leaked-process reap through the shared process identity, and a reused pid is not force-killed
+# host time scale 40 (about 208 ms per exec)
+ok - teardown reaps a leaked process whose shared identity matches
+ok - teardown still reaps a leaked process across the creation time's read jitter
+ok - teardown never signals a pid whose recorded command line no longer matches
+ok - a reused pid with a different start time is never force-killed
+ok - one-case copy finished
+[exit=0 after 447s]

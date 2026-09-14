@@ -1,30 +1,10 @@
-# WSL Ubuntu (Linux 5.15.167.4-microsoft-standard-WSL2), a copy of target commit cfd76fd, each suite run alone through bin/fm-test-run.sh
-# fm-lint-workflows: rerun with pinned actionlint 1.7.12 on PATH (first run stopped at "actionlint not found", a setup gap)
-# fm-backend-herdr: run with this phase's fixture fix to tests/fm-backend-herdr.test.sh (the unfixed run stopped on the pre-existing flake)
-
-FM_TEST_END 2026-09-13T12:50:54Z tests/fm-remote-job.test.sh exit=0 duration_ms=67470 gate_skip=false cases_ok=32 cases_skipped=0
-FM_TEST_END 2026-09-13T12:51:58Z tests/fm-pending-reply.test.sh exit=0 duration_ms=64224 gate_skip=false cases_ok=34 cases_skipped=0
-FM_TEST_END 2026-09-13T12:51:59Z tests/fm-repo-invariants.test.sh exit=0 duration_ms=335 gate_skip=false cases_ok=8 cases_skipped=0
-FM_TEST_END 2026-09-13T13:00:41Z tests/fm-lint-workflows.test.sh exit=0 duration_ms=1089 gate_skip=false cases_ok=19 cases_skipped=0
-FM_TEST_END 2026-09-13T12:52:01Z tests/fm-test-lib.test.sh exit=0 duration_ms=168 gate_skip=false cases_ok=3 cases_skipped=0
-FM_TEST_END 2026-09-13T12:52:02Z tests/fm-proc-lib.test.sh exit=0 duration_ms=718 gate_skip=false cases_ok=18 cases_skipped=0
-FM_TEST_END 2026-09-13T12:54:19Z tests/fm-muse-harness.test.sh exit=0 duration_ms=136736 gate_skip=false cases_ok=26 cases_skipped=0
-FM_TEST_END 2026-09-13T12:55:25Z tests/fm-sessionstart-nudge.test.sh exit=0 duration_ms=66372 gate_skip=false cases_ok=31 cases_skipped=0
-FM_TEST_END 2026-09-13T13:54:48Z tests/fm-backend-herdr.test.sh exit=0 duration_ms=1616624 gate_skip=false cases_ok=182 cases_skipped=0
-FM_TEST_END 2026-09-13T12:57:03Z tests/fm-test-isolation-proof.test.sh exit=0 duration_ms=2697 gate_skip=false cases_ok=8 cases_skipped=0
-FM_TEST_END 2026-09-13T12:58:49Z tests/fm-test-run.test.sh exit=0 duration_ms=105657 gate_skip=false cases_ok=29 cases_skipped=0
-
-## the upgrade and library-identity cases of fm-remote-job
-ok - ensure replaces a live worker after a library it sources changes
-ok - a lock start this build can compare names the live worker only when it matches
-ok - a live worker whose lock the previous build wrote is replaced once, then serves
-ok - a previous-build worker serving another root is replaced once, then serves
-
-## the lint wiring cases of fm-lint-workflows
-ok - fm-lint.sh default path catches a self-broken ci.yml
-ok - fm-lint.sh default path fails when the repository invariants fail
-
-## the new fm-test-run cases
-ok - a gate skip is exit 77, whatever the script printed before it
-ok - a script that exits 0 having run no cases is counted as a failure
-ok - an exit 77 with no skip: line, or after a case ran, is counted as a failure
+# WSL Ubuntu (Linux 5.15.167.4-microsoft-standard-WSL2), exported copy of target commit 206a3b7, each suite run alone through bin/fm-test-run.sh
+FM_TEST_END 2026-09-14T00:12:38Z tests/fm-proc-lib.test.sh exit=0 duration_ms=740 gate_skip=false cases_ok=18 cases_skipped=0
+[tests/fm-proc-lib.test.sh runner exit=0 after 1s]
+FM_TEST_END 2026-09-14T00:13:14Z tests/fm-pending-reply.test.sh exit=0 duration_ms=35317 gate_skip=false cases_ok=34 cases_skipped=0
+[tests/fm-pending-reply.test.sh runner exit=0 after 36s]
+FM_TEST_END 2026-09-14T00:16:21Z tests/fm-teardown.test.sh exit=0 duration_ms=177614 gate_skip=false cases_ok=61 cases_skipped=0
+[tests/fm-teardown.test.sh runner exit=0 after 177s]
+FM_TEST_END 2026-09-14T00:18:13Z tests/fm-test-run.test.sh exit=0 duration_ms=111647 gate_skip=false cases_ok=29 cases_skipped=0
+[tests/fm-test-run.test.sh runner exit=0 after 112s]
+[wsl batch exit=0]
