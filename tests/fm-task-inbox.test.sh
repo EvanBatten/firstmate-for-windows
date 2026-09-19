@@ -247,10 +247,15 @@ test_handled_mv_dedups_by_sequence() {
 }
 
 test_concurrent_writers_never_clobber() {
-  local state i pids=() count
+  local state i pids=() count wait_secs
   state="$TMP_ROOT/race/state"; mkdir -p "$state"
+  # Six writers contend for one lock and each pays a bash start and a library
+  # source before it can take it. The product's own five-second default is a
+  # budget a loaded runner loses, so hand it one sized for this host instead.
+  wait_secs=$(fm_test_seconds 5)
   for i in 1 2 3 4 5 6; do
-    inbox_lib "$state" fm_task_inbox_write "$state" t1 "steer number $i" >/dev/null &
+    FM_TASK_INBOX_LOCK_WAIT_SECS=$wait_secs \
+      inbox_lib "$state" fm_task_inbox_write "$state" t1 "steer number $i" >/dev/null &
     pids+=($!)
   done
   for i in "${pids[@]}"; do
