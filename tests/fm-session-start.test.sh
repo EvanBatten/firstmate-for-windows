@@ -246,7 +246,9 @@ case "$*" in
     ;;
   *"ppid="*)
     [ -n "${FM_FAKE_HARNESS_PID:-}" ] || exit 1
-    /bin/ps -o ppid= -p "$pid"
+    # MSYS ps has no -o. Cygwin publishes the parent in /proc; Linux and macOS
+    # have no such file and keep running the literal ps -o they always ran.
+    if [ -r "/proc/$pid/ppid" ]; then cat "/proc/$pid/ppid"; else /bin/ps -o ppid= -p "$pid"; fi
     ;;
 esac
 exit 1
@@ -2032,6 +2034,7 @@ EOF
 
   startup=$(FM_FAKE_HARNESS=pi run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH" --source startup)
   assert_contains "$startup" "SESSION START - $home" "true startup did not run the full digest"
+  assert_not_contains "$startup" "READ-ONLY SESSION" "true startup went read-only"
   assert_present "$home/state/.session-start-agents-baseline" "true startup did not record an AGENTS baseline"
   baseline=$(cat "$home/state/.session-start-agents-baseline")
   expected_hash=$(hash_file_for_test "$root/AGENTS.md") || fail "could not hash AGENTS.md"
