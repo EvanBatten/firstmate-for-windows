@@ -426,6 +426,47 @@ test_server_ensure_skips_attach_when_already_exists() {
   pass "fm_backend_zellij_server_ensure: reuses an existing session without calling attach"
 }
 
+# --- pane_exists --------------------------------------------------------------
+
+# A pane the adapter could not ask about is not a live pane. jq 1.6's -e exits
+# 0 on no input at all, so piping the CLI straight into jq read a failed or
+# silent list-panes back as a live pane: the same defect fixed in the cmux
+# adapter's surface_exists (issue #14).
+
+test_pane_exists_true_when_the_pane_is_listed() {
+  local dir fb
+  dir="$TMP_ROOT/pane-exists-true"; mkdir -p "$dir/responses"
+  fb=$(make_zellij_fakebin "$dir")
+  zellij_pane_response "$dir" 1 7 3
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_pane_exists firstmate 7' "$ROOT"
+  expect_code 0 $? "pane_exists should report true for a pane the CLI lists"
+  pass "fm_backend_zellij_pane_exists: true when the CLI lists the pane"
+}
+
+test_pane_exists_false_when_the_cli_fails() {
+  local dir fb status
+  dir="$TMP_ROOT/pane-exists-cli-fails"; mkdir -p "$dir/responses"
+  fb=$(make_zellij_fakebin "$dir")
+  printf '1\n' > "$dir/responses/1.exit"
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_pane_exists firstmate 7' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "pane_exists should report false when the CLI call fails"
+  pass "fm_backend_zellij_pane_exists: false when the CLI call fails"
+}
+
+test_pane_exists_false_when_the_cli_answers_nothing() {
+  local dir fb status
+  dir="$TMP_ROOT/pane-exists-empty"; mkdir -p "$dir/responses"
+  fb=$(make_zellij_fakebin "$dir")
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_pane_exists firstmate 7' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "pane_exists should report false when the CLI answers nothing"
+  pass "fm_backend_zellij_pane_exists: false when the CLI answers nothing"
+}
+
 # --- dispatch wiring (fm-backend.sh) ------------------------------------------
 
 test_dispatch_routes_zellij_backend() {
@@ -1312,6 +1353,9 @@ test_resolve_bare_selector_refuses_cross_session_ambiguous_untagged
 test_session_exists_true_when_listed
 test_session_exists_false_when_absent
 test_server_ensure_skips_attach_when_already_exists
+test_pane_exists_true_when_the_pane_is_listed
+test_pane_exists_false_when_the_cli_fails
+test_pane_exists_false_when_the_cli_answers_nothing
 test_dispatch_routes_zellij_backend
 test_dispatch_busy_state_unknown_for_zellij
 test_create_task_refuses_duplicate_label
