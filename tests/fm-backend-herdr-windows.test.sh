@@ -7,9 +7,9 @@
 # 8, 9 and 12).
 #
 # Every case is keyed on a faked capability - a `cygpath` on PATH, a `herdr`
-# whose first two bytes say PE image, a `stat` that answers like a mode-less
-# filesystem - so the Windows branches run on Linux and macOS CI too, and the
-# POSIX branches run on Windows. Nothing here needs a herdr binary.
+# whose first two bytes say PE image, a `stat` that answers like a filesystem
+# with or without modes - so the Windows branches run on Linux and macOS CI
+# too, and the POSIX branches run on Windows. Nothing here needs a herdr binary.
 #
 # shellcheck disable=SC2016 # Every `adapter` snippet is source for a CHILD
 # shell: the $1.. inside it are that shell's positional arguments, which is the
@@ -280,30 +280,34 @@ test_cli_win32_branch_converts_the_joined_cwd_form() {
   pass "fm_backend_herdr_cli: both --cwd spellings reach herdr as Windows paths"
 }
 
-# --- presentation lock namespace validity on a mode-less filesystem ---------
+# --- presentation lock namespace validity on either kind of mount -----------
 
-# A `stat` that answers like a filesystem of the caller's choosing: one mode for
-# the namespace directory, another for the probe directory the adapter creates
-# inside it, and one owner uid for both.
-make_stat_fake() {  # <dir> -> echoes fakebin dir
-  local fb="$1/fakebin"
-  mkdir -p "$fb"
-  cat > "$fb/stat" <<'SH'
-#!/usr/bin/env bash
-set -u
-fmt=$2; path=$3
-case "$fmt" in
-  *u*) printf '%s\n' "${FM_FAKE_STAT_UID:?}" ;;
-  *)
-    case "$path" in
-      */.fm-mode-probe.*) printf '%s\n' "${FM_FAKE_STAT_PROBE_MODE:?}" ;;
-      *) printf '%s\n' "${FM_FAKE_STAT_MODE:?}" ;;
-    esac
-    ;;
-esac
+# Every case below stages its mount with tests/lib.sh's fixtures, the same pair
+# bin/fm-private-lib.sh's probe is proved against: fm_fake_noacl_stat for a
+# mount that cannot carry a mode, fm_fake_enforcing_modes for one that can.
+
+# Stack another owner onto the mount fixture already in <fakebin>: <path> reads
+# back as the next uid up, and every other question - the probe's included -
+# goes to the mount's own stat.
+foreign_owner() {  # <fakebin> <path>
+  local fb=$1 path=$2
+  mv "$fb/stat" "$fb/stat-mount"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'MOUNT_STAT=%s\n' "$(printf '%q' "$fb/stat-mount")"
+    printf 'OWNED_PATH=%s\n' "$(printf '%q' "$path")"
+    printf 'OTHER_UID=%s\n' "$(( $(id -u) + 1 ))"
+    cat <<'SH'
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+if [ "$ARG_FMT" = %u ] && [ "${*: -1}" = "$OWNED_PATH" ]; then
+  printf '%s\n' "$OTHER_UID"
+  exit 0
+fi
+exec "$MOUNT_STAT" "$@"
 SH
+  } > "$fb/stat"
   chmod +x "$fb/stat"
-  printf '%s\n' "$fb"
 }
 
 test_namespace_valid_accepts_a_real_private_directory() {
@@ -315,10 +319,9 @@ test_namespace_valid_accepts_a_real_private_directory() {
   pass "fm_backend_herdr_presentation_lock_namespace_valid: the operator's own private namespace is accepted"
 }
 
-# The mount is tests/lib.sh's noacl stat, the same one bin/fm-private-lib.sh's
-# probe is proved against: a mode synthesized from the reader's umask, and a
-# chmod that moves nothing. umask 022 makes the namespace read 755, and the
-# recorded waiver shows the 755 was measured and waived rather than never read.
+# A mode synthesized from the reader's umask, and a chmod that moves nothing.
+# umask 022 makes the namespace read 755, and the recorded waiver shows the 755
+# was measured and waived rather than never read.
 test_namespace_valid_accepts_755_when_the_filesystem_drops_modes() {
   local fb="$TMP_ROOT/ns-modeless/fakebin" dir="$TMP_ROOT/ns-modeless/ns"
   mkdir -p "$fb" "$dir"
@@ -333,23 +336,48 @@ test_namespace_valid_accepts_755_when_the_filesystem_drops_modes() {
   pass "fm_backend_herdr_presentation_lock_namespace_valid: a mode-less filesystem falls back to owner identity alone"
 }
 
+# The same directory is accepted at 700 first, so the refusal at 755 belongs to
+# the mode and not to a stat or an owner that could not answer. The refusal
+# alone cannot tell a probe that watched its chmod move 644 to 600 from one
+# that never ran, because an unmeasured probe keeps the strict branch too; the
+# enforcing chmod records every mode it sets, so a second record - the probe
+# file's - is the measurement itself.
 test_namespace_valid_still_refuses_a_loose_directory() {
-  local fb dir="$TMP_ROOT/ns-loose/ns"
-  fb=$(make_stat_fake "$TMP_ROOT/ns-loose")
-  mkdir -p "$dir"
-  FM_FAKE_STAT_UID=$(id -u) FM_FAKE_STAT_MODE=755 FM_FAKE_STAT_PROBE_MODE=700 \
-    adapter "$fb" 'fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" &&
+  local fb="$TMP_ROOT/ns-loose/fakebin" modes="$TMP_ROOT/ns-loose/modes" dir="$TMP_ROOT/ns-loose/ns"
+  mkdir -p "$fb" "$dir"
+  fm_fake_enforcing_modes "$fb" "$modes"
+  "$fb/chmod" 700 "$dir"
+  adapter "$fb" 'fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" ||
+    fail "a 700 namespace on a mode-capable filesystem must be accepted, or the refusal below proves nothing"
+  "$fb/chmod" 755 "$dir"
+  adapter "$fb" 'fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" &&
     fail "a group-readable namespace on a mode-capable filesystem must still be refused"
+  [ "$(find "$modes" -type f | wc -l)" -eq 2 ] ||
+    fail "the mode probe must have set a mode on its own file, or the refusal was never measured"
+  [ -z "$(find "$dir" -mindepth 1 -print -quit)" ] ||
+    fail "the mode probe must leave nothing behind in the namespace it is judging"
   pass "fm_backend_herdr_presentation_lock_namespace_valid: a loose namespace on a mode-capable filesystem is still refused"
 }
 
+# On both mounts the owner is the only thing left to refuse on: the enforcing
+# namespace reads the 700 it asks for, and the mode-less one reads 755 that the
+# probe waives. Each is accepted before its owner changes, so the refusal is the
+# owner's.
 test_namespace_valid_still_refuses_another_owner() {
-  local fb dir="$TMP_ROOT/ns-owner/ns"
-  fb=$(make_stat_fake "$TMP_ROOT/ns-owner")
-  mkdir -p "$dir"
-  FM_FAKE_STAT_UID=$(( $(id -u) + 1 )) FM_FAKE_STAT_MODE=700 FM_FAKE_STAT_PROBE_MODE=755 \
-    adapter "$fb" 'fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" &&
-    fail "a namespace owned by another user must be refused whatever the filesystem can carry"
+  local mount fb dir
+  for mount in enforcing noacl; do
+    fb="$TMP_ROOT/ns-owner/$mount/fakebin"; dir="$TMP_ROOT/ns-owner/$mount/ns"
+    mkdir -p "$fb" "$dir"
+    case "$mount" in
+      enforcing) fm_fake_enforcing_modes "$fb" "$TMP_ROOT/ns-owner/$mount/modes"; "$fb/chmod" 700 "$dir" ;;
+      noacl) fm_fake_noacl_stat "$fb" ;;
+    esac
+    adapter "$fb" 'umask 022; fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" ||
+      fail "on the $mount mount this user's own namespace must be accepted, or the refusal below proves nothing"
+    foreign_owner "$fb" "$dir"
+    adapter "$fb" 'umask 022; fm_backend_herdr_presentation_lock_namespace_valid "$1"' "$dir" &&
+      fail "on the $mount mount a namespace owned by another user must be refused"
+  done
   pass "fm_backend_herdr_presentation_lock_namespace_valid: another user's namespace is refused on every filesystem"
 }
 

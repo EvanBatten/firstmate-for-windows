@@ -28,7 +28,9 @@
 #                pass-through; on one that does not, it supplies the mode the
 #                filesystem dropped. Recording against the INODE rather than
 #                the path is what keeps a mode attached to a file across the
-#                `mv` that publishes it.
+#                `mv` that publishes it. tests/lib.sh owns that pair too -
+#                tests/fm-backend-herdr-windows.test.sh puts the herdr
+#                adapter's lock namespace on the same mount.
 #
 # Everything else - the temp file the probe makes, the directories, the links,
 # the devices - is the real filesystem, so the structural half of the assertion
@@ -49,19 +51,6 @@ case_dir() {  # <name>
   printf '%s\n' "$dir"
 }
 
-# The header the enforcing `stat` stub needs: where the real stat is, which
-# spelling it answers to, and which format and path this call is asking about.
-fixture_stat_header() {  # <real-stat>
-  printf 'REAL_STAT=%s\n' "$(printf '%q' "$1")"
-  cat <<'SH'
-if [ "$(uname 2>/dev/null)" = Darwin ]; then KEY_FMT=%d:%i; FMT_FLAG=-f
-else KEY_FMT=%d:%i; FMT_FLAG=-c; fi
-ARG_FMT=
-for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
-ARG_PATH=${*: -1}
-SH
-}
-
 # A mount that cannot carry a restrictive mode. `chmod` is left alone, because
 # on such a mount it exits 0 and simply does nothing; only the readback moves.
 # tests/lib.sh owns that stub, because tests/fm-pr-merge.test.sh puts the same
@@ -75,51 +64,13 @@ noacl_fs() {  # <dir> -> a directory to prepend to PATH
 }
 
 # A mount that carries modes, on any host: the mode `chmod` sets is the mode
-# `stat` reads back, keyed by inode so it survives a rename.
+# `stat` reads back, keyed by inode so it survives a rename. tests/lib.sh owns
+# that pair.
 enforcing_fs() {  # <dir> -> a directory to prepend to PATH
-  local dir=$1 fakebin db
+  local dir=$1 fakebin
   fakebin="$dir/fs-enforcing"
-  db="$dir/fs-enforcing-modes"
-  mkdir -p "$fakebin" "$db"
-  {
-    printf '#!/usr/bin/env bash\n'
-    fixture_stat_header "$(command -v stat)"
-    printf 'DB=%s\n' "$(printf '%q' "$db")"
-    cat <<'SH'
-case "$ARG_FMT" in
-  %a|%Lp)
-    key=$("$REAL_STAT" "$FMT_FLAG" "$KEY_FMT" "$ARG_PATH" 2>/dev/null) || exit 1
-    [ -f "$DB/$key" ] && exec cat "$DB/$key"
-    ;;
-esac
-exec "$REAL_STAT" "$@"
-SH
-  } > "$fakebin/stat"
-  {
-    printf '#!/usr/bin/env bash\n'
-    printf 'REAL_STAT=%s\n' "$(printf '%q' "$(command -v stat)")"
-    printf 'REAL_CHMOD=%s\n' "$(printf '%q' "$(command -v chmod)")"
-    printf 'DB=%s\n' "$(printf '%q' "$db")"
-    cat <<'SH'
-if [ "$(uname 2>/dev/null)" = Darwin ]; then KEY_FMT=%d:%i; FMT_FLAG=-f
-else KEY_FMT=%d:%i; FMT_FLAG=-c; fi
-mode=$1
-shift
-"$REAL_CHMOD" "$mode" "$@" 2>/dev/null || true
-# A real filesystem keeps the mode in the inode, where a leading zero has
-# nowhere to live, so the record drops it the way stat would.
-while :; do case "$mode" in 0?*) mode=${mode#0} ;; *) break ;; esac; done
-rc=0
-# -L because the real chmod above followed any symlink it was given, so the
-# mode it set belongs to the TARGET's inode. A plain path is unaffected.
-for p in "$@"; do
-  key=$("$REAL_STAT" -L "$FMT_FLAG" "$KEY_FMT" "$p" 2>/dev/null) || { rc=1; continue; }
-  printf '%s\n' "$mode" > "$DB/$key" || rc=1
-done
-exit "$rc"
-SH
-  } > "$fakebin/chmod"
-  chmod +x "$fakebin/stat" "$fakebin/chmod"
+  mkdir -p "$fakebin"
+  fm_fake_enforcing_modes "$fakebin" "$dir/fs-enforcing-modes"
   printf '%s\n' "$fakebin"
 }
 

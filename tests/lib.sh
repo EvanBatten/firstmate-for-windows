@@ -430,7 +430,69 @@ SH
   chmod +x "$fakebin/stat"
 }
 
-# fm_fake_version_tool <fakebin> <tool> <override-env-var> <default-version>
+# fm_fake_enforcing_modes <fakebin> <db>
+# The other direction: puts a `chmod` and a `stat` in <fakebin> that behave like
+# a mount which carries POSIX modes, on any host. `chmod` runs the real chmod
+# AND records the mode it set in <db>, against the file's device and inode;
+# `stat` answers the mode question from that record, and every other question
+# from the real stat. On a host that really carries modes the record and the
+# inode agree at every step, so the fixture is a pass-through; on one that does
+# not, it supplies the mode the filesystem dropped. Recording against the INODE
+# rather than the path is what keeps a mode attached to a file across the `mv`
+# that publishes it.
+#
+# A path no `chmod` in <fakebin> has touched has no record and reads its real
+# mode, so a case that needs a known mode sets it through this `chmod` first.
+fm_fake_enforcing_modes() {
+  local fakebin=$1 db=$2 real_stat real_chmod
+  real_stat=$(command -v stat) || return 1
+  real_chmod=$(command -v chmod) || return 1
+  mkdir -p "$db" || return 1
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'REAL_STAT=%s\n' "$(printf '%q' "$real_stat")"
+    printf 'DB=%s\n' "$(printf '%q' "$db")"
+    cat <<'SH'
+if [ "$(uname 2>/dev/null)" = Darwin ]; then FMT_FLAG=-f; else FMT_FLAG=-c; fi
+ARG_FMT=
+for a in "$@"; do case "$a" in %*) ARG_FMT=$a ;; esac; done
+ARG_PATH=${*: -1}
+case "$ARG_FMT" in
+  %a|%Lp)
+    key=$("$REAL_STAT" "$FMT_FLAG" %d:%i "$ARG_PATH" 2>/dev/null) || exit 1
+    [ -f "$DB/$key" ] && exec cat "$DB/$key"
+    ;;
+esac
+exec "$REAL_STAT" "$@"
+SH
+  } > "$fakebin/stat"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'REAL_STAT=%s\n' "$(printf '%q' "$real_stat")"
+    printf 'REAL_CHMOD=%s\n' "$(printf '%q' "$real_chmod")"
+    printf 'DB=%s\n' "$(printf '%q' "$db")"
+    cat <<'SH'
+if [ "$(uname 2>/dev/null)" = Darwin ]; then FMT_FLAG=-f; else FMT_FLAG=-c; fi
+mode=$1
+shift
+"$REAL_CHMOD" "$mode" "$@" 2>/dev/null || true
+# A real filesystem keeps the mode in the inode, where a leading zero has
+# nowhere to live, so the record drops it the way stat would.
+while :; do case "$mode" in 0?*) mode=${mode#0} ;; *) break ;; esac; done
+rc=0
+# -L because the real chmod above followed any symlink it was given, so the
+# mode it set belongs to the TARGET's inode. A plain path is unaffected.
+for p in "$@"; do
+  key=$("$REAL_STAT" -L "$FMT_FLAG" %d:%i "$p" 2>/dev/null) || { rc=1; continue; }
+  printf '%s\n' "$mode" > "$DB/$key" || rc=1
+done
+exit "$rc"
+SH
+  } > "$fakebin/chmod"
+  "$real_chmod" +x "$fakebin/stat" "$fakebin/chmod"
+}
+
+# fm_fake_version_tool<fakebin> <tool> <override-env-var> <default-version>
 # The stub answers `--version` with <override-env-var> when that variable is set
 # and non-empty, and with <default-version> otherwise; every other invocation
 # exits 0. A case that needs to drive a version floor exports the variable.
