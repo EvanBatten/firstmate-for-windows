@@ -444,13 +444,13 @@ release_wake_queue_lock() {
   wait "$WAKE_LOCK_HOLDER" 2>/dev/null || true
 }
 
-# A scan whose bound runs out while it holds its lock must not leave that lock
+# A scan whose deadline passes while it holds its lock must not leave that lock
 # behind: the next scan would then have to steal it, a killed steal leaves the
 # steal lock, and the chain only ever grows (issue #44). The budget is sized
-# for the host so the scan provably holds its lock while its bound runs out,
+# for the host so the scan provably holds its lock while its deadline passes,
 # with at least a whole second of hold on a fast host; a scan that never got
 # that far proves nothing and fails loudly.
-test_backstop_kill_leaves_no_scan_lock_behind() {
+test_deadline_stop_leaves_no_scan_lock_behind() {
   local scan budget leftovers lock
   make_world backstop-lock; write_child "$MAIN" child 'done: green'
   lock="$MAIN/state/.inactive-outcome-reconcile.lock"
@@ -461,11 +461,11 @@ test_backstop_kill_leaves_no_scan_lock_behind() {
   FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup &
   scan=$!
   while [ ! -L "$lock" ] && kill -0 "$scan" 2>/dev/null; do sleep 0.1; done
-  [ -L "$lock" ] || fail "the scan never held its lock before its bound ended it (budget ${budget}s is too small for this host)"
+  [ -L "$lock" ] || fail "the scan never held its lock before its deadline ended it (budget ${budget}s is too small for this host)"
   wait "$scan" || true
   release_wake_queue_lock
   leftovers=$(scan_lock_entries "$MAIN/state")
-  [ -z "$leftovers" ] || fail "bounded scan left its lock behind: $leftovers"
+  [ -z "$leftovers" ] || fail "a scan stopped by its deadline left its lock behind: $leftovers"
 
   FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
   leftovers=$(scan_lock_entries "$MAIN/state")
@@ -474,10 +474,11 @@ test_backstop_kill_leaves_no_scan_lock_behind() {
 }
 
 # A lock left by a dead scan is recovered by the next scan's steal, and that
-# recovery must end inside the scan's own bound: a steal cut short leaves its
-# .steal lock held by a dead pid, so the next scan has to steal the steal and
-# the chain grows one level per poll (issue #44). The wake-queue lock is held
-# so the scan provably runs into its bound after recovering the lock.
+# recovery must end inside the scan's own bound: a steal cut short by a kill
+# from outside the scan leaves its .steal lock held by a dead pid, so the next
+# scan has to steal the steal and the chain grows one level per poll (issue
+# #44). The wake-queue lock is held so the scan provably runs into its bound
+# after recovering the lock.
 test_stale_scan_lock_recovery_leaves_no_steal_behind() {
   local scan budget seeded current recovered=0 leftovers lock
   make_world stale-scan-lock; write_child "$MAIN" child 'done: green'
@@ -507,6 +508,35 @@ test_stale_scan_lock_recovery_leaves_no_steal_behind() {
   leftovers=$(scan_lock_entries "$MAIN/state")
   [ -z "$leftovers" ] || fail "stale lock recovery left lock entries behind: $leftovers"
   pass "stale scan lock recovery leaves no steal lock behind"
+}
+
+# The child the scan is already visiting when its budget runs out finishes
+# its durable work (record, wake) however long that takes on the host;
+# nothing kills the scan for being slow, because a kill there leaves its
+# locks held by a dead pid (issue #44). The fake shasum sits inside that
+# durable section and sleeps past the old kill point, so the case is red
+# under any wall-clock kill and cannot pass without reaching that section.
+test_first_visit_durable_work_outlives_the_budget() {
+  local budget started elapsed leftovers
+  make_world durable-first-visit; write_child "$MAIN" child 'done: green'
+  budget=$(fm_test_seconds 2)
+  [ "$budget" -le 30 ] || budget=30
+  cat > "$WORLD/fakebin/shasum" <<SH
+#!/usr/bin/env bash
+: > "$WORLD/shasum-called"
+sleep $((2 * budget + 1))
+printf '%064d  -\n' 0
+SH
+  chmod +x "$WORLD/fakebin/shasum"
+  started=$(date +%s)
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  elapsed=$(( $(date +%s) - started ))
+  [ -e "$WORLD/shasum-called" ] || fail "the scan never reached its durable section (budget ${budget}s is too small for this host)"
+  [ "$elapsed" -gt $((2 * budget)) ] || fail "the durable section ended before the old kill point (${elapsed}s); the case proves nothing"
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] || fail "the first visit's wake was not queued"
+  leftovers=$(scan_lock_entries "$MAIN/state")
+  [ -z "$leftovers" ] || fail "a slow first visit left lock entries behind: $leftovers"
+  pass "the first visit finishes its durable work past the budget"
 }
 
 # A secondmate home seeded without its parent binding cannot report ANY terminal
@@ -575,8 +605,9 @@ test_nonterminal_and_captain_held_states_do_not_report
 test_watcher_hook_and_idle_secondmate_exemption
 test_stalled_state_read_is_bounded_and_scan_progresses
 test_full_scan_budget_includes_wake_lock_wait
-test_backstop_kill_leaves_no_scan_lock_behind
+test_deadline_stop_leaves_no_scan_lock_behind
 test_stale_scan_lock_recovery_leaves_no_steal_behind
+test_first_visit_durable_work_outlives_the_budget
 test_notice_recovery_does_not_duplicate_wake
 test_missing_parent_binding_names_itself
 test_reconciliation_never_calls_forge

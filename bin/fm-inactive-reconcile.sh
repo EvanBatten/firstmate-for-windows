@@ -21,9 +21,11 @@
 # metadata lock, the wake-queue lock) gives up at the same deadline, so a
 # live-held lock ends the scan the way a slow child does: it releases what it
 # holds and leaves the cursor on that child for the next scan to resume from.
-# A process-group kill at twice the budget remains only as a backstop for a
-# scan wedged outside every bounded section, so the clean deadline path is not
-# racing its own backstop.
+# The one child already being visited when the deadline passes finishes its
+# durable work, a fixed count of local commands, and the scan then exits.
+# Nothing kills it from outside: a kill that lands on that work leaves the
+# scan's locks held by a dead pid (issue #44), and any kill bound would be a
+# host constant racing the work it is meant to bound.
 #
 # It considers only a direct ordinary crewmate whose newest meta, status, or
 # turn-ended mtime is older than that interval and whose last status is not
@@ -208,7 +210,7 @@ mark_reported() { # <record>
   mv -f "$record" "$reported"
 }
 
-# The scan's lock waits give up at SCAN_DEADLINE (see _scan-locked), so a queue
+# The scan's lock waits give up at SCAN_DEADLINE (see the scan case), so a queue
 # operation that failed once it has passed is a deadline stop (3), not an error.
 scan_deadline_passed() {
   [ "$(date +%s)" -ge "$SCAN_DEADLINE" ]
@@ -517,28 +519,19 @@ case "$mode" in
     esac
     # The scan ends itself at its own deadline: the pass stops visiting children
     # and every lock wait gives up, and a deadline stop exits 0 with the cursor
-    # kept. This process-group kill only catches a scan wedged outside every
-    # bounded section. Its margin is a whole budget, not a fixed second, because
-    # the scan's start-up and release cost is host-dependent and a backstop
-    # that fires on a healthy scan kills it holding its lock.
-    if fm_run_timed $((2 * FM_INACTIVE_RECONCILE_BUDGET_SECS)) "$0" _scan-locked "$startup"; then
-      :
-    elif [ "$?" -ne 124 ]; then
-      exit 1
-    fi
-    ;;
-  _scan-locked)
-    [ "$#" -eq 2 ] || exit 2
-    # Bounds every fm_lock_acquire_wait in this shell and its subshells; not
-    # exported, so no child process inherits it.
+    # kept. The child being visited when that deadline passes finishes its
+    # durable work first, so nothing kills this process from outside.
+    # Bounds every fm_lock_acquire_wait in this shell and its subshells.
     FM_LOCK_WAIT_DEADLINE=$SCAN_DEADLINE
+    # Deterministically unexported, so no child process inherits it.
+    export -n FM_LOCK_WAIT_DEADLINE
     # Armed before the acquire so no window holds the lock without a release
     # path; releasing a lock this process does not hold is a no-op.
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
     # Giving up the scan lock is a deadline stop like any other: the next scan
     # resumes from the cursor this one never touched.
     fm_lock_acquire_wait "$SCAN_LOCK" || exit 0
-    scan "$2"
+    scan "$startup"
     ;;
   acknowledge)
     [ "$#" -eq 2 ] || { printf 'usage: fm-inactive-reconcile.sh acknowledge <fingerprint>\n' >&2; exit 2; }
