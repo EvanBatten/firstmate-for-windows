@@ -93,10 +93,15 @@ reclaim_stale_branch_grant_locked() {
   fi
 }
 
+# Owns <source> on BOTH paths: _fm_atomic_replace consumes it when it has
+# content, and an empty one is removed here. Callers clear their DRAIN_TMP
+# handle right after this returns, so a source left on disk here is a temp file
+# nothing will ever clean up - and an empty result is the ordinary case, not an
+# edge (acknowledging every queued row empties the set).
 write_rows_file_locked() { # <target> <source>
   local target=$1 source=$2
   if [ ! -s "$source" ]; then
-    rm -f -- "$target"
+    rm -f -- "$target" "$source"
     return
   fi
   fm_private_chmod 0600 "$source" || return 1
