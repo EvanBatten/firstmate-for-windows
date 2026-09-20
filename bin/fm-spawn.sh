@@ -18,20 +18,25 @@
 #   refused as a flag value.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
-#   task's own recorded endpoint and worktree instead of creating either. It is
-#   the launch half of the control plane (bin/fm-control.sh relaunch), which
-#   owns the checkpoint, the progress note, stopping the previous agent, and the
-#   transaction; call fm-control rather than this flag directly unless you are
-#   deliberately re-launching an already-stopped task. Every identity axis -
-#   backend, kind, project or home, worktree, endpoint - comes from the task's
-#   validated state/<id>.meta, so --backend, --scout, --secondmate, a project
-#   positional, and batch pairs are all refused alongside it; only harness,
-#   model, and effort may change, which is what makes a harness switch one
-#   ordinary relaunch. It refuses unless the recorded endpoint is positively
-#   agent-free on a backend with a recovery-grade agent-state classifier (tmux
-#   or herdr), refuses unless the endpoint's shell is sitting in the recorded
-#   worktree, and clears the previous harness's per-task wiring before arming
-#   the new incarnation.
+#   task's own recorded worktree, never a new one. It adopts the recorded
+#   endpoint when that endpoint still exists, and creates a fresh one for the
+#   same task when the recorded one has VANISHED - the only state that licenses
+#   creating an endpoint here (issue #58). It is the launch half of the control
+#   plane (bin/fm-control.sh relaunch), which owns the checkpoint, the progress
+#   note, stopping the previous agent, and the transaction; call fm-control
+#   rather than this flag directly unless you are deliberately re-launching an
+#   already-stopped task. Every identity axis - backend, kind, project or home,
+#   worktree - comes from the task's validated state/<id>.meta, so --backend,
+#   --scout, --secondmate, a project positional, and batch pairs are all
+#   refused alongside it; only harness, model, and effort may change, which is
+#   what makes a harness switch one ordinary relaunch. The endpoint is the one
+#   axis a relaunch may replace, and only in the vanished case, where the
+#   freshly created target is published back to that same record. It refuses
+#   unless the recorded endpoint is positively agent-free or positively gone,
+#   on a backend with a recovery-grade agent-state classifier (tmux or herdr),
+#   refuses unless the endpoint it is about to launch into is sitting in the
+#   recorded worktree, and clears the previous harness's per-task wiring before
+#   arming the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -2508,10 +2513,10 @@ elif [ "$RELAUNCH_FRESH_ENDPOINT" -eq 1 ] && [ "$KIND" != secondmate ]; then
   # this recovery path exists to prevent (issue #58).
   spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
   if ! relaunch_await_worktree_landing 60; then
-    echo "error: task $ID's replacement endpoint is in '${RELAUNCH_LANDING_SEEN:-unknown}', not its recorded worktree '$WT'; inspect window $T" >&2
+    echo "error: task $ID's replacement endpoint is in '${RELAUNCH_LANDING_SEEN:-unknown}', not its recorded worktree '$WT'; the endpoint this relaunch created is being removed again, so retry once that worktree is reachable" >&2
     exit 1
   fi
-  validate_spawn_worktree "relaunch" "$T"
+  validate_spawn_worktree "relaunch" "$T, which this aborted relaunch removes"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 

@@ -56,6 +56,32 @@ make_tmux_stub() {  # <dir>
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+# The fake window inventory is keyed by session, exactly as tmux's own
+# list-windows -t is. The case's recorded session keeps $D/windows; every other
+# session - the one a fresh endpoint is created in - gets its own file, created
+# by new-session/new-window. A session with no file does not exist and answers
+# with tmux's own wording, which fm_backend_tmux_agent_state reads as `missing`.
+# Without this, one shared inventory answered for every session, so a poll of a
+# vanished endpoint found the replacement's window and read `alive`.
+FAKE_SES=${FM_FAKE_SESSION:-fmses}
+fake_ses_file() {  # <session-or-target>
+  local ses=${1%:}
+  ses=${ses#=}
+  if [ -z "$ses" ] || [ "$ses" = "$FAKE_SES" ]; then
+    printf '%s\n' "$D/windows"
+  else
+    printf '%s\n' "$D/windows.$ses"
+  fi
+}
+fake_arg_after() {  # <flag> <args...>
+  local flag=$1 prev= a
+  shift
+  for a in "$@"; do
+    [ "$prev" != "$flag" ] || { printf '%s\n' "$a"; return 0; }
+    prev=$a
+  done
+  return 1
+}
 case "${1:-}" in
   send-keys)
     shift
@@ -110,16 +136,24 @@ case "${1:-}" in
     done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
-  list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
+  has-session)
+    [ -f "$(fake_ses_file "$(fake_arg_after -t "$@" || true)")" ] || exit 1
+    exit 0 ;;
+  new-session)
+    : >> "$(fake_ses_file "$(fake_arg_after -s "$@" || true)")"
+    exit 0 ;;
+  list-windows)
+    ses=$(fake_arg_after -t "$@" || true)
+    f=$(fake_ses_file "$ses")
+    if [ ! -f "$f" ]; then
+      printf "can't find session: %s\n" "${ses%:}" >&2
+      exit 1
+    fi
+    cat "$f"
+    exit 0 ;;
   new-window)
-    shift
-    wname=
-    prev=
-    for a in "$@"; do
-      [ "$prev" != "-n" ] || wname=$a
-      prev=$a
-    done
-    [ -z "$wname" ] || printf '%s\n' "$wname" >> "$D/windows"
+    wname=$(fake_arg_after -n "$@" || true)
+    [ -z "$wname" ] || printf '%s\n' "$wname" >> "$(fake_ses_file "$(fake_arg_after -t "$@" || true)")"
     printf '@1\n'
     exit 0
     ;;
