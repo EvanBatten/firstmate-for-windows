@@ -805,11 +805,10 @@ fm_lock_claim() {
 fm_lock_try_create() {
   local lockdir=$1 allowed_steal_owner=${2:-} ownerdir
   FM_LOCK_OWNER_DIR=
-  ownerdir=$(fm_lock_owner_dir "$lockdir") || return 1
   if [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
-    fm_lock_discard_owner "$ownerdir"
     return 1
   fi
+  ownerdir=$(fm_lock_owner_dir "$lockdir") || return 1
   if ! fm_lock_prepare_owner "$ownerdir"; then
     fm_lock_discard_owner "$ownerdir"
     return 1
@@ -1282,9 +1281,23 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# fm_lock_acquire_wait <lock>
+# Retry fm_lock_try_acquire every 0.1 s until the lock is held. The wait is
+# unbounded unless the shell variable FM_LOCK_WAIT_DEADLINE holds an epoch
+# second: then every attempt still runs, but once `date +%s` reaches that epoch
+# a failed attempt returns 1 instead of retrying. Unset, empty, or anything but
+# a plain whole number keeps the unbounded wait. Every caller reached while a
+# deadline is set must treat 1 as "gave up" and never touch the guarded file.
+# Set the variable WITHOUT export: it bounds the waits of the shell that set it
+# (and its subshells), and a child process must never inherit a deadline its
+# own waits were not written for.
 fm_lock_acquire_wait() {
-  local lockdir=$1
+  local lockdir=$1 deadline=${FM_LOCK_WAIT_DEADLINE:-}
+  case "$deadline" in *[!0-9]*) deadline= ;; esac
   while ! fm_lock_try_acquire "$lockdir"; do
+    if [ -n "$deadline" ] && [ "$(date +%s)" -ge "$((10#$deadline))" ]; then
+      return 1
+    fi
     sleep 0.1
   done
 }
@@ -1770,7 +1783,7 @@ fm_wake_append() {
   recovery_marker="$STATE/.watcher-down"
   status=0
 
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   _fm_recovery_marker_publish "$recovery_marker" downtime || status=$?
   if [ "$status" -eq 0 ]; then
     seq=$(cat "$seq_file" 2>/dev/null || echo 0)
@@ -1799,7 +1812,7 @@ fm_wake_queued_keys() {
     signal|stale|check|heartbeat) ;;
     *) printf 'fm_wake_queued_keys: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
   esac
-  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK"
+  fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return 1
   fm_wake_queued_keys_locked "$kind"
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
 }
