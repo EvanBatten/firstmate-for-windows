@@ -415,7 +415,14 @@ ensure_home() {
     [ -d "$home" ] || { echo "error: $home exists and is not a directory" >&2; return 1; }
   else
     mkdir -p "$(dirname "$home")"
-    git clone --quiet "$FM_ROOT" "$home"
+    # -c core.symlinks=true: .claude/skills is a tracked symlink into
+    # .agents/skills, and Git for Windows defaults core.symlinks to false, which
+    # would check it out as a text file holding the link target - a clean
+    # worktree and a home whose harness has no skills. On a platform that always
+    # makes symlinks the flag changes nothing; on one that cannot, the clone
+    # fails here and the transactional seed rolls it back, which beats handing
+    # the operator a silently skill-less home.
+    git clone --quiet -c core.symlinks=true "$FM_ROOT" "$home"
   fi
   verify_firstmate_home "$home"
 }

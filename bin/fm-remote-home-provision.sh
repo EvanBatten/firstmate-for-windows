@@ -179,7 +179,10 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
   fi
 else
   CREATED_HOME=1
-  git clone --quiet -- "$FM_ROOT" "$FM_HOME" || die "could not clone the remote Firstmate home"
+  # -c core.symlinks=true for the same reason as the local seed: a remote host
+  # that defaults symlinks off would receive a home whose harness skill link is
+  # a text file, and nothing about the clone would look wrong.
+  git clone --quiet -c core.symlinks=true -- "$FM_ROOT" "$FM_HOME" || die "could not clone the remote Firstmate home"
 fi
 for operational_dir in data state config projects; do
   operational_path="$FM_HOME/$operational_dir"
