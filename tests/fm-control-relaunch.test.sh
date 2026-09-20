@@ -109,6 +109,15 @@ case "${1:-}" in
     else
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
+        'cd '*)
+          # A real shell moves the pane; the fake pane path is where that is
+          # observable, so an explicit cd is the only thing that moves it.
+          # `treehouse get` deliberately does not, so a pane reaches the
+          # recorded worktree only down the path that cd's into it.
+          fake_cd=
+          eval "fake_cd=${payload#cd }" 2>/dev/null || fake_cd=
+          [ -z "$fake_cd" ] || [ ! -d "$fake_cd" ] || printf '%s' "$fake_cd" > "$D/cwd"
+          ;;
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
@@ -1491,6 +1500,11 @@ test_spawn_relaunch_replaces_a_vanished_endpoint() {
   dir=$(new_case vanished rl42)
   add_ship_task "$dir" rl42 claude
   : > "$dir/fake/windows"  # the window is gone, not merely emptied
+  # A freshly created window opens in the project, not the worktree: only an
+  # explicit cd into the recorded worktree can move it there. `treehouse get`
+  # would leave it in the project AND allocate a second worktree, which is the
+  # duplication this recovery path exists to prevent.
+  printf '%s' "$dir/proj" > "$dir/fake/cwd"
   out=$(run_spawn "$dir" rl42 --relaunch --harness claude); rc=$?
   expect_code 0 "$rc" "relaunching a vanished endpoint should succeed"$'\n'"$out"
   [ "$(meta_field "$dir" rl42 worktree)" = "$dir/wt" ] \
@@ -1500,6 +1514,10 @@ test_spawn_relaunch_replaces_a_vanished_endpoint() {
     || fail "a fresh endpoint must be recorded in place of the vanished one, got '$new_window'"
   launches=$(grep -c 'encode launch-brief' "$dir/fake/literal" 2>/dev/null || true)
   [ "$launches" = 1 ] || fail "exactly one agent should have been launched, got $launches"
+  assert_grep "cd '$dir/wt'" "$dir/fake/keys" \
+    "the replacement must be sent into the recorded worktree by an explicit cd"
+  assert_no_grep 'treehouse get' "$dir/fake/keys" \
+    "treehouse get would allocate a second worktree and must never be sent on this path"
   pass "fm-spawn --relaunch: a removed endpoint is replaced by a fresh one in the same worktree"
 }
 
@@ -1508,6 +1526,7 @@ test_control_relaunch_reaches_the_replacement_on_a_vanished_endpoint() {
   dir=$(new_case control-vanished rl43)
   add_ship_task "$dir" rl43 claude
   : > "$dir/fake/windows"  # the window is gone, not merely emptied
+  printf '%s' "$dir/proj" > "$dir/fake/cwd"
   out=$(run_control "$dir" rl43 relaunch --note "picking this back up"); rc=$?
   expect_code 0 "$rc" "fm-control relaunch on a vanished endpoint should reach the replacement launch"$'\n'"$out"
   assert_contains "$out" "relaunched rl43 harness=claude" "the outcome should confirm the replacement launched"

@@ -34,11 +34,11 @@
 #   freshly created target is published back to that same record. It refuses
 #   unless the recorded endpoint is positively agent-free or positively gone,
 #   on a backend with a recovery-grade agent-state classifier (tmux or herdr).
-#   For a ship or scout it then refuses unless the endpoint it is about to
-#   launch into is sitting in the recorded worktree; a secondmate's worktree is
-#   its own home and its endpoint is created there, so that kind has no
-#   separate landing to prove. It clears the previous harness's per-task wiring
-#   before arming the new incarnation.
+#   It then refuses unless the endpoint it is about to launch into is sitting
+#   in the recorded worktree; the stricter check that follows - that worktree
+#   must be an isolated worktree root rather than the primary checkout - is
+#   skipped for a secondmate, whose worktree is its own home. It clears the
+#   previous harness's per-task wiring before arming the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile

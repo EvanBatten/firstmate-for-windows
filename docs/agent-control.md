@@ -103,8 +103,8 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
   Only a positively classified state acts.
 - `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free or positively gone, so a replacement can never join a live agent.
   A vanished endpoint is the only state that licenses creating a new one, because an endpoint that no longer exists cannot be holding an agent; an alive, unattributed, ambiguous, or unreadable state refuses exactly as before.
-  For a ship or scout it then refuses again unless the endpoint it is about to launch into is proven to be sitting in the recorded worktree, so a replacement can never start outside the copy holding the work.
-  A secondmate's worktree is its own home and its endpoint is created there, so that kind has no separate landing to prove.
+  It then refuses again unless the endpoint it is about to launch into is proven to be sitting in the recorded worktree, so a replacement can never start outside the copy holding the work.
+  The stricter check that follows - that the recorded worktree is an isolated worktree root rather than the primary checkout - is skipped for a secondmate, whose worktree is its own home.
 - Removing an endpoint a failed relaunch created is best-effort, not guaranteed.
   When the replacement record was never published, the launch owner asks the backend to remove the endpoint it just created, so a retry usually meets the same vanished endpoint this attempt did rather than a name the backend now refuses.
   A removal the launch owner can see fail is reported as a warning naming the endpoint to remove by hand, and herdr's own refusal to close a pane without its session presentation lock is reported by that backend while the pane stays.
