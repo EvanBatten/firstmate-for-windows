@@ -38,7 +38,8 @@ Each fix sits behind a capability check instead of a `uname` test, so macOS and 
 
 Measured on Windows 11 26200 and Git Bash 5.2.37 (MINGW64), with Herdr 0.8.2, treehouse 2.3.0 and a native `claude.exe`.
 
-The full captain loop has run end to end three times on a real machine: register and clone a project, spawn a crewmate into a treehouse worktree on Herdr, answer its trust dialog, take its PR, merge on the captain's word, and tear down.
+The full captain loop has run end to end on a real machine, most recently on 2026-09-19 against this build: register and clone a project, spawn a crewmate into a treehouse worktree on Herdr, answer its trust dialog, steer it mid-flight through its durable inbox, take its PR, merge on the captain's word, tear down, and sync the clone.
+A session takes the fleet lock from the harness's own session-open hook, and an investigation task leaves its report behind the same way.
 
 A few things use upstream's fallbacks.
 Windows Python has no `socket.AF_UNIX`, so the watcher polls instead of subscribing to events.

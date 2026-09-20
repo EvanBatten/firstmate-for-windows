@@ -271,6 +271,18 @@ The whole real-Herdr lane's latest active verification uses both Herdr 0.7.4 pro
 Protocol 17 keeps every protocol-16 feature gate satisfied; the event and workspace-move floors remain 16.
 Default-on presentation projection has its own floor at Herdr 0.8.0, protocol 19, verified below.
 
+### Windows 11 under Git Bash, 2026-09-19
+
+The full captain loop ran twice on Windows 11 26200 with Git Bash 5.2.37, Herdr as the backend and a native `claude.exe`, against `windows` at 72acf90.
+
+| Cycle | Path exercised | Result |
+| --- | --- | --- |
+| Investigation | `fm-spawn.sh --scout`, one `fm-send.sh` steer mid-flight, `fm-teardown.sh` | The worker read its brief, the steer arrived through the durable inbox and was answered in the report, and the report survived teardown with no task state left behind. |
+| Delivery | `fm-spawn.sh --mode direct-PR`, `fm-pr-check.sh`, `fm-pr-merge.sh`, `fm-teardown.sh` | The worker opened its pull request, the merge was verified as landed rather than reported, and the clone synced and the backlog closed at teardown. |
+
+A locked session start on the same machine printed the complete digest in 32 to 47 seconds against its 120 second bound, from a tool shell and from the harness's own session-open hook.
+`lsof` is absent there, so teardown falls through to its process-group path, and the remote-job orphan scan cannot read the account's processes at all.
+
 Core read-only probes:
 
 ```sh
