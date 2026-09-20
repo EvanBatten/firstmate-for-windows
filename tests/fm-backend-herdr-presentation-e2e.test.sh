@@ -17,6 +17,13 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 77; }
 command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found"; exit 77; }
 [ -x "$HERDR_LAB_HELPER" ] || { echo "skip: Herdr lab helper not executable at $HERDR_LAB_HELPER"; exit 77; }
 
+# This suite resumes two tasks at once against one real Herdr session, so both
+# wait on the presentation order lock. The product's default budget is sized for
+# an operator's machine; a CI runner under a full test lane is slower than that,
+# and the refusal it earns there is the runner's speed, not the behavior under
+# test.
+export FM_HERDR_PRESENTATION_LOCK_WAIT_SECS=${FM_HERDR_PRESENTATION_LOCK_WAIT_SECS:-60}
+
 REAL_HERDR=$(command -v herdr)
 REAL_TREEHOUSE=$(command -v treehouse)
 HERDR_ORIGINAL_PATH=$PATH
