@@ -1183,6 +1183,31 @@ test_historical_annotation_skips_announced_status() {
   pass "historical annotations replay nothing already announced and keep everything new"
 }
 
+test_ack_that_empties_a_row_set_leaves_no_temp_file() {
+  local dir state out err sequence generation leftovers
+  dir=$(make_case ack-temp-files)
+  state="$dir/state"
+
+  append_wake "$state" check "some-poll.check.sh" "check: some-poll.check.sh: merged"     || fail "wake append failed"
+
+  out="$dir/drain.out"
+  err="$dir/drain.err"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "drain failed: $(cat "$err")"
+  sequence=$(awk '/^WAKE_ACK_REQUIRED:/ { for (i = 1; i <= NF; i++) if ($i == "--ack-through") print $(i + 1) }' "$err" | tail -1)
+  generation=$(awk '/^WAKE_ACK_REQUIRED:/ { for (i = 1; i <= NF; i++) if ($i == "--recovery-generation") print $(i + 1) }' "$err" | tail -1)
+  [ -n "$sequence" ] && [ -n "$generation" ] || fail "drain omitted its acknowledgement boundary"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation"     || fail "acknowledgement failed"
+
+  # The acknowledgement consumed every queued row, so each row file is rewritten
+  # from an EMPTY source. That is the ordinary case, and the writer owns its
+  # temp file on that path exactly as it does when the source has content.
+  leftovers=$(ls -A "$state" | grep -E '^\.(wake-rows\.consume|main-eligible-rows\.tmp)\.' || true)
+  [ -z "$leftovers" ] || fail "acknowledgement left temp files in state/: $(echo $leftovers)"
+
+  pass "wake drain: an acknowledgement that empties a row set leaves no temp file behind"
+}
+
 test_self_held_lock_reclaims_instead_of_deadlocking
 test_secondmate_foreign_queue_stall_is_one_shot_and_read_only
 test_secondmate_stall_marker_rejects_symlink
@@ -1211,4 +1236,5 @@ test_wake_publish_requires_atomic_recovery_evidence
 test_legacy_generationless_wake_is_adopted
 test_stale_recovery_generation_cannot_touch_a_newer_episode
 test_recovery_ack_failure_is_reported
+test_ack_that_empties_a_row_set_leaves_no_temp_file
 test_interruption_before_and_after_raw_commit
