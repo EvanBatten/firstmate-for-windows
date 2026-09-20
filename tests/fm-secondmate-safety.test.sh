@@ -135,6 +135,36 @@ EOF
   pass "seed allows overlapping project clone lists and drops the owns/owner routing"
 }
 
+test_seeded_home_keeps_its_harness_skill_links() {
+  # .claude/skills is a tracked symlink into .agents/skills, and it is how the
+  # Claude harness finds every skill AGENTS.md tells a mate to load. Git for
+  # Windows defaults core.symlinks to false, which checks that entry out as a
+  # text file holding the link target: a clean worktree and a mate with no
+  # skills at all. The fixture pins that default so this case asks about the
+  # clone the seed performs, not about which platform happens to run it.
+  local home mate gitconfig found
+  home="$TMP_ROOT/skill-link-main"
+  mate="$TMP_ROOT/skill-link-mate"
+  gitconfig="$TMP_ROOT/skill-link-gitconfig"
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  printf '[core]
+	symlinks = false
+' > "$gitconfig"
+
+  GIT_CONFIG_GLOBAL="$gitconfig" FM_HOME="$home"     FM_SECONDMATE_CHARTER='docs domain' FM_SECONDMATE_SCOPE='docs domain'     "$ROOT/bin/fm-home-seed.sh" skilllinkmate "$mate" --no-projects >/dev/null     || fail "seeding a home with symlinks disabled failed"
+
+  if [ ! -L "$mate/.claude/skills" ]; then
+    if [ -f "$mate/.claude/skills" ]; then
+      found="a plain file holding $(cat "$mate/.claude/skills")"
+    else
+      found="nothing"
+    fi
+    fail "the seeded home's harness skill link is $found, so that mate has no skills"
+  fi
+  [ -d "$mate/.claude/skills" ] || fail "the seeded home's skill link does not resolve to its skills directory"
+  pass "a seeded home keeps the harness skill link that carries its skills"
+}
+
 test_home_seed_validate_rejects_unparseable_registry_entry() {
   local home err
   home="$TMP_ROOT/unparseable-registry-home"
@@ -2968,5 +2998,6 @@ test_secondmate_force_teardown_refuses_unregistered_child_worktree
 test_secondmate_teardown_path_boundary_matrix
 test_secondmate_idle_pane_is_not_stale
 test_secondmate_charter_brief_is_idle_by_default
+test_seeded_home_keeps_its_harness_skill_links
 test_backlog_handoff_aborts_safely
 test_backlog_handoff_refuses_done_items_and_non_secondmate_homes
