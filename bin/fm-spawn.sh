@@ -1101,6 +1101,13 @@ FIRSTMATE_HOME=
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+# RELAUNCH_FRESH_ENDPOINT distinguishes the two endpoint states a relaunch may
+# license (bin/fm-backend.sh's fm_backend_agent_state contract): `dead` adopts
+# the recorded endpoint as before, while `missing` has nothing left to adopt,
+# so a relaunch stands up a fresh endpoint in the SAME recorded worktree
+# instead (issue #58). Every other state still refuses exactly as it always
+# has.
+RELAUNCH_FRESH_ENDPOINT=0
 if [ "$RELAUNCH" -eq 1 ]; then
   [ "${#POS[@]}" -eq 1 ] || {
     echo "error: --relaunch takes the task id only; its project or home comes from the task's own record" >&2
@@ -1135,10 +1142,14 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   }
   RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
-  [ "$RELAUNCH_STATE" = dead ] || {
-    echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
-    exit 1
-  }
+  case "$RELAUNCH_STATE" in
+    dead) ;;
+    missing) RELAUNCH_FRESH_ENDPOINT=1 ;;
+    *)
+      echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
+      exit 1
+      ;;
+  esac
   RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
   KIND=$(fm_meta_get "$RELAUNCH_META" kind)
   [ -n "$KIND" ] || KIND=ship
@@ -2079,14 +2090,18 @@ fi
 
 W="fm-$ID"
 if [ "$RELAUNCH" -eq 1 ]; then
+  # A secondmate's home already resolved WT above through the same validation a
+  # fresh secondmate spawn uses; every other kind takes the recorded worktree,
+  # whether the endpoint below is adopted or freshly created - either way the
+  # local copy is the one already on record, never a new one.
+  [ "$KIND" = secondmate ] || WT=$RELAUNCH_WT
+fi
+if [ "$RELAUNCH" -eq 1 ] && [ "$RELAUNCH_FRESH_ENDPOINT" -eq 0 ]; then
   # Adopt the recorded endpoint instead of creating one. This is what keeps a
   # relaunch a REPLACEMENT rather than a second copy of the task: no new
   # terminal, no second worktree, and every uncommitted change left exactly
   # where the previous agent left it.
   T=$RELAUNCH_TARGET
-  # A secondmate's home already resolved WT above through the same validation a
-  # fresh secondmate spawn uses; every other kind takes the recorded worktree.
-  [ "$KIND" = secondmate ] || WT=$RELAUNCH_WT
   WT_TARGET=$T
   SES=${T%%:*}
 else
@@ -2426,7 +2441,7 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$RELAUNCH" -eq 1 ]; then
+if [ "$RELAUNCH" -eq 1 ] && [ "$RELAUNCH_FRESH_ENDPOINT" -eq 0 ]; then
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
   # that worktree, so the replacement agent starts where the work is rather
@@ -2443,6 +2458,26 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
+elif [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+  # The prior endpoint is gone rather than merely agent-free, so a fresh one was
+  # just created above (never a fresh worktree - fm_control_backend_state_verified
+  # limits this whole relaunch path to tmux/herdr, so orca's own worktree-per-spawn
+  # branch is never reached here). Enter the recorded worktree directly instead of
+  # `treehouse get`, which would allocate a NEW worktree - the exact duplication
+  # this recovery path exists to prevent (issue #58).
+  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
+  relaunch_wt_real=$(real_path_or_raw "$WT")
+  relaunch_seen=
+  for _ in $(seq 1 60); do
+    relaunch_seen=$(spawn_current_path "$WT_TARGET" || true)
+    [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ] || break
+    sleep 0.5
+  done
+  if [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ]; then
+    echo "error: task $ID's replacement endpoint did not settle in its recorded worktree '$WT'; inspect window $T" >&2
+    exit 1
+  fi
+  validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
