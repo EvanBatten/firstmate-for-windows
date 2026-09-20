@@ -730,6 +730,8 @@ RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
 RELAUNCH_REPLACEMENT_STATE=
 RELAUNCH_REPLACEMENT_WT=
+RELAUNCH_FRESH_ENDPOINT_CLEANUP=0
+RELAUNCH_FRESH_ENDPOINT_TARGET=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 
@@ -762,12 +764,12 @@ parse_orca_worktree_result() {
 
 spawn_abort_cleanup() {
   local status=$?
-  if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] \
-     && [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] \
+  if [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] \
      && [ -n "$SPAWN_META_TMP" ] \
      && [ ! -e "$SPAWN_META_TMP" ] \
      && [ ! -L "$SPAWN_META_TMP" ]; then
     RELAUNCH_REPLACEMENT_PENDING=0
+    RELAUNCH_FRESH_ENDPOINT_CLEANUP=0
   fi
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ]; then
     RELAUNCH_REPLACEMENT_PENDING=0
@@ -803,6 +805,21 @@ spawn_abort_cleanup() {
   if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
+  fi
+  # A relaunch onto a VANISHED endpoint creates a fresh one, and until the
+  # replacement record is published nothing on disk names it - the record still
+  # points at the endpoint that is gone. An abort in that window would leave the
+  # new endpoint owned by nobody while it holds the exact name the next attempt
+  # asks the backend for, so every later relaunch would be refused for the
+  # endpoint this one orphaned. Remove it so a retry stays the ordinary next
+  # step. Sequenced after the presentation lock is released, because
+  # fm_backend_kill's herdr path acquires that same lock itself.
+  if [ "$RELAUNCH_FRESH_ENDPOINT_CLEANUP" = 1 ]; then
+    RELAUNCH_FRESH_ENDPOINT_CLEANUP=0
+    if [ -n "$RELAUNCH_FRESH_ENDPOINT_TARGET" ] \
+       && ! fm_backend_kill "$BACKEND" "$RELAUNCH_FRESH_ENDPOINT_TARGET"; then
+      echo "warning: could not remove endpoint $RELAUNCH_FRESH_ENDPOINT_TARGET created for the aborted relaunch of $ID; remove it before retrying" >&2
+    fi
   fi
   if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
     ORCA_ABORT_CLEANUP=0
@@ -2335,6 +2352,10 @@ EOF
     T="$ORCA_TERMINAL"
     ;;
 esac
+if [ "$RELAUNCH_FRESH_ENDPOINT" -eq 1 ]; then
+  RELAUNCH_FRESH_ENDPOINT_CLEANUP=1
+  RELAUNCH_FRESH_ENDPOINT_TARGET=$T
+fi
 fi
 if [ "$KIND" = secondmate ]; then
   FM_INHERITABLE_CONFIG=trace-context \
@@ -2441,24 +2462,44 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+# The one owner of "this endpoint's shell is sitting in the recorded worktree",
+# for both relaunch shapes: an adopted endpoint must already be there, a freshly
+# created one must land there after its explicit cd. Each side is reduced by
+# fm_path_canon_dir and compared with fm_path_dirs_equal - the same pair
+# validate_spawn_worktree uses - so the two callers cannot drift apart on what
+# "the same directory" means, and a Windows userland's case-insensitive spelling
+# of one directory never reads as two. The caller owns the poll budget and the
+# refusal wording; the last path read is left in RELAUNCH_LANDING_SEEN to report.
+RELAUNCH_LANDING_SEEN=
+relaunch_await_worktree_landing() {  # <polls>
+  local polls=$1 wt_real seen seen_real
+  wt_real=$(fm_path_canon_dir "$WT") || wt_real=$WT
+  RELAUNCH_LANDING_SEEN=
+  for _ in $(seq 1 "$polls"); do
+    seen=$(spawn_current_path "$WT_TARGET" || true)
+    RELAUNCH_LANDING_SEEN=$seen
+    if [ -n "$seen" ]; then
+      seen_real=$(fm_path_canon_dir "$seen") || seen_real=$seen
+      if fm_path_dirs_equal "$seen_real" "$wt_real"; then
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 if [ "$RELAUNCH" -eq 1 ] && [ "$RELAUNCH_FRESH_ENDPOINT" -eq 0 ]; then
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
   # that worktree, so the replacement agent starts where the work is rather
   # than wherever the pane happened to drift.
-  relaunch_wt_real=$(real_path_or_raw "$WT")
-  relaunch_seen=
-  for _ in $(seq 1 10); do
-    relaunch_seen=$(spawn_current_path "$WT_TARGET" || true)
-    [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ] || break
-    sleep 0.5
-  done
-  if [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ]; then
-    echo "error: task $ID's endpoint is in '${relaunch_seen:-unknown}', not its recorded worktree '$WT'; refusing to relaunch an agent outside the copy holding its work" >&2
+  if ! relaunch_await_worktree_landing 10; then
+    echo "error: task $ID's endpoint is in '${RELAUNCH_LANDING_SEEN:-unknown}', not its recorded worktree '$WT'; refusing to relaunch an agent outside the copy holding its work" >&2
     exit 1
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
-elif [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
+elif [ "$RELAUNCH_FRESH_ENDPOINT" -eq 1 ] && [ "$KIND" != secondmate ]; then
   # The prior endpoint is gone rather than merely agent-free, so a fresh one was
   # just created above (never a fresh worktree - fm_control_backend_state_verified
   # limits this whole relaunch path to tmux/herdr, so orca's own worktree-per-spawn
@@ -2466,15 +2507,8 @@ elif [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ]; then
   # `treehouse get`, which would allocate a NEW worktree - the exact duplication
   # this recovery path exists to prevent (issue #58).
   spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
-  relaunch_wt_real=$(real_path_or_raw "$WT")
-  relaunch_seen=
-  for _ in $(seq 1 60); do
-    relaunch_seen=$(spawn_current_path "$WT_TARGET" || true)
-    [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ] || break
-    sleep 0.5
-  done
-  if [ -z "$relaunch_seen" ] || [ "$(real_path_or_raw "$relaunch_seen")" != "$relaunch_wt_real" ]; then
-    echo "error: task $ID's replacement endpoint did not settle in its recorded worktree '$WT'; inspect window $T" >&2
+  if ! relaunch_await_worktree_landing 60; then
+    echo "error: task $ID's replacement endpoint is in '${RELAUNCH_LANDING_SEEN:-unknown}', not its recorded worktree '$WT'; inspect window $T" >&2
     exit 1
   fi
   validate_spawn_worktree "relaunch" "$T"
@@ -2989,6 +3023,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     exit 1
   fi
   RELAUNCH_REPLACEMENT_PENDING=0
+  RELAUNCH_FRESH_ENDPOINT_CLEANUP=0
   SPAWN_META_PUBLISH_STARTED=0
   SPAWN_META_TMP=
 fi

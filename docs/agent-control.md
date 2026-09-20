@@ -32,7 +32,7 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 | --- | --- | --- |
 | `interrupt` | Deliver the harness's verified interrupt sequence while leaving the agent running. | Delivery succeeds while the endpoint still exists and the agent is still alive where the backend can classify that; cancellation is confirmed only from an adapter-owned acknowledgement and otherwise reports `cancel=unconfirmed`. |
 | `exit` | Stop the agent, preserving the endpoint, the worktree, and every uncommitted change. | The backend's recovery-grade classifier reports the agent gone. Already-stopped is idempotent success. |
-| `relaunch` | Replace the running agent with a new one in the same endpoint and worktree, on the exact recorded adapter or an explicitly chosen harness, model, and effort. | The new agent is alive on the recorded endpoint, and the durable record names the harness that is actually running. |
+| `relaunch` | Replace the agent with a new one in the same worktree, on the exact recorded adapter or an explicitly chosen harness, model, and effort. The recorded endpoint is reused when it still exists; a vanished one is replaced by a freshly created endpoint for the same task. | The new agent is alive on the endpoint the durable record now names, and that record names the harness that is actually running. |
 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
 Interrupt never rewrites busy state as proof of its own success.
@@ -69,7 +69,10 @@ It is not deterministic across the verified adapters: codex and grok resume only
    A ship or scout relaunch requires `--note`, because the replacement inherits the local copy but none of the conversation; the note is appended to the instructions it reads.
    A secondmate relaunch does not require one and never rewrites its standing charter.
 4. **Stop the old agent** through the `exit` verb, with its postcondition.
-5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which adopts the recorded endpoint and worktree instead of creating either, clears the previous harness's per-task wiring, and arms a fresh busy generation.
+   A vanished endpoint is the one case that skips this step: there is no agent to stop and nothing to send a lifecycle command to, and the next step stands up a replacement regardless.
+   `exit` and `interrupt` on their own still refuse a vanished endpoint, because for them there is no next step that could make it right.
+5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which keeps the recorded worktree instead of acquiring one, adopts the recorded endpoint when it still exists and creates a fresh one for the same task only when the recorded one has vanished, clears the previous harness's per-task wiring, and arms a fresh busy generation.
+   A fresh endpoint keeps every recorded identity axis - task id, worktree, harness, kind, mode, project, and brief - and the replacement enters the recorded worktree directly, never acquiring a second one.
 
 Switching harness is therefore one ordinary relaunch rather than a separate mechanism.
 
@@ -98,7 +101,9 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
   zellij, orca, and cmux are refused rather than reported as successful blind.
 - An ambiguous or unreadable endpoint state refuses.
   Only a positively classified state acts.
-- `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free and its shell is sitting in the recorded worktree, so a replacement can never join a live agent or start outside the copy holding the work.
+- `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free or positively gone, and refuses again unless the endpoint it is about to launch into is proven to be sitting in the recorded worktree, so a replacement can never join a live agent or start outside the copy holding the work.
+  A vanished endpoint is the only state that licenses creating a new one, because an endpoint that no longer exists cannot be holding an agent; an alive, unattributed, ambiguous, or unreadable state refuses exactly as before.
+  An endpoint created for a relaunch that then fails before its replacement record is published is removed again, so a retry meets the same vanished endpoint this one did rather than a name the backend now refuses.
 
 ## Capability matrix
 
