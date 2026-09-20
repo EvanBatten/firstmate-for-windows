@@ -246,11 +246,40 @@ test_handled_mv_dedups_by_sequence() {
   pass "inbox: the handled mv is the idempotent ack and sequences are never reissued"
 }
 
+# A writer that loses the create race must wait for the lock rather than
+# refuse. The winner can release between the losing writer's create attempt
+# and any look it takes at the lock, and a writer that refused there dropped a
+# steer nothing was holding. The stub fails the first create exactly once,
+# which is the window itself; every later call is the real primitive.
+test_lost_create_race_waits_instead_of_refusing() {
+  local state out
+  state="$TMP_ROOT/lost-create/state"; mkdir -p "$state/t1.inbox/handled"
+  out=$(FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    eval "real_$(declare -f fm_lock_try_create)"
+    _fm_first_create=1
+    fm_lock_try_create() {
+      if [ "$_fm_first_create" = 1 ]; then _fm_first_create=0; return 1; fi
+      real_fm_lock_try_create "$@"
+    }
+    fm_task_inbox_lock_acquire "$2/t1.inbox/.seq.lock" || exit 1
+    printf ACQUIRED
+  ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$state") \
+    || fail "a writer that lost the create race refused instead of waiting"
+  [ "$out" = ACQUIRED ] || fail "the losing writer did not take the lock: $out"
+  pass "inbox: a lost create race waits for the lock instead of refusing"
+}
+
 test_concurrent_writers_never_clobber() {
-  local state i pids=() count
+  local state i pids=() count wait_secs
   state="$TMP_ROOT/race/state"; mkdir -p "$state"
+  # Six writers contend for one lock and each pays a bash start and a library
+  # source before it can take it. The product's own five-second default is a
+  # budget a loaded runner loses, so hand it one sized for this host instead.
+  wait_secs=$(fm_test_seconds 5)
   for i in 1 2 3 4 5 6; do
-    inbox_lib "$state" fm_task_inbox_write "$state" t1 "steer number $i" >/dev/null &
+    FM_TASK_INBOX_LOCK_WAIT_SECS=$wait_secs \
+      inbox_lib "$state" fm_task_inbox_write "$state" t1 "steer number $i" >/dev/null &
     pids+=($!)
   done
   for i in "${pids[@]}"; do
@@ -501,6 +530,7 @@ test_write_is_durable_and_exact
 test_idempotent_write_dedups_exact_body
 test_idempotent_write_follows_concurrent_ack
 test_handled_mv_dedups_by_sequence
+test_lost_create_race_waits_instead_of_refusing
 test_concurrent_writers_never_clobber
 test_ladder_writes_ignore_vanished_inbox
 test_fire_and_forget_records_never_enter_the_ladder

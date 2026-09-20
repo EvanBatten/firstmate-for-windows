@@ -125,9 +125,13 @@ fm_task_inbox_lock_acquire() {  # <lock-path>
   case "$wait" in ''|*[!0-9]*) wait=$FM_TASK_INBOX_LOCK_WAIT_DEFAULT ;; esac
   probe=$(mktemp "${lock%/*}/.lock-probe.XXXXXX") || return 1
   rm -f "$probe" || return 1
+  # Losing the create is not a refusal. The winner can release between our
+  # attempt and any test we make for the lock, so a writer that checked for it
+  # there refused a steer that nothing was holding; the wait below covers both
+  # a lock still held and a lock already gone, because fm_lock_try_acquire
+  # creates one when there is none.
   if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
     fm_lock_try_create "$lock" && return 0
-    [ -e "$lock" ] || [ -L "$lock" ] || return 1
   fi
   deadline=$(( $(date +%s) + wait ))
   while ! fm_lock_try_acquire "$lock"; do
