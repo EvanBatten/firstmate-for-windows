@@ -81,6 +81,14 @@ pass "repro setup: a pre-existing workspace labeled 'firstmate' collides with th
 # Simulate a live long-running agent in that pane: a heartbeat loop that
 # appends to a marker file, so liveness is independently verifiable (not just
 # "the pane object still exists").
+# A pane opens with the platform's own shell, and on Windows that is not one
+# any of the POSIX commands below can reach. The adapter bootstraps Git Bash
+# into every pane it makes an agent in; a pane built here with a plain
+# `workspace create` needs the same treatment or the heartbeat is typed into
+# pwsh and silently does nothing (issue #63). The readiness wait that follows
+# is what makes it usable: the launch line returns long before the shell is up.
+fm_backend_herdr_pane_start_bash "$SESSION" "$LIVE_PANE_ID"
+
 PANE_READY=false
 READY_SAMPLES=0
 for _ in $(seq 1 100); do
