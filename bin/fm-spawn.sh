@@ -33,10 +33,12 @@
 #   axis a relaunch may replace, and only in the vanished case, where the
 #   freshly created target is published back to that same record. It refuses
 #   unless the recorded endpoint is positively agent-free or positively gone,
-#   on a backend with a recovery-grade agent-state classifier (tmux or herdr),
-#   refuses unless the endpoint it is about to launch into is sitting in the
-#   recorded worktree, and clears the previous harness's per-task wiring before
-#   arming the new incarnation.
+#   on a backend with a recovery-grade agent-state classifier (tmux or herdr).
+#   For a ship or scout it then refuses unless the endpoint it is about to
+#   launch into is sitting in the recorded worktree; a secondmate's worktree is
+#   its own home and its endpoint is created there, so that kind has no
+#   separate landing to prove. It clears the previous harness's per-task wiring
+#   before arming the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -2513,10 +2515,10 @@ elif [ "$RELAUNCH_FRESH_ENDPOINT" -eq 1 ] && [ "$KIND" != secondmate ]; then
   # this recovery path exists to prevent (issue #58).
   spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$WT")"
   if ! relaunch_await_worktree_landing 60; then
-    echo "error: task $ID's replacement endpoint is in '${RELAUNCH_LANDING_SEEN:-unknown}', not its recorded worktree '$WT'; the endpoint this relaunch created is being removed again, so retry once that worktree is reachable" >&2
+    echo "error: task $ID's replacement endpoint is in '${RELAUNCH_LANDING_SEEN:-unknown}', not its recorded worktree '$WT'; removing the endpoint this relaunch created ($T) is attempted on the way out, so check for a leftover before retrying" >&2
     exit 1
   fi
-  validate_spawn_worktree "relaunch" "$T, which this aborted relaunch removes"
+  validate_spawn_worktree "relaunch" "task $ID's recorded worktree"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 

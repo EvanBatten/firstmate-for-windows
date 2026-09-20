@@ -57,17 +57,17 @@ make_tmux_stub() {  # <dir>
 set -u
 D=$FM_FAKE_DIR
 # The fake window inventory is keyed by session, exactly as tmux's own
-# list-windows -t is. The case's recorded session keeps $D/windows; every other
-# session - the one a fresh endpoint is created in - gets its own file, created
-# by new-session/new-window. A session with no file does not exist and answers
-# with tmux's own wording, which fm_backend_tmux_agent_state reads as `missing`.
-# Without this, one shared inventory answered for every session, so a poll of a
-# vanished endpoint found the replacement's window and read `alive`.
-FAKE_SES=${FM_FAKE_SESSION:-fmses}
+# list-windows -t is. fmses is the session every record in this file names, so
+# it keeps $D/windows; every other session - the one a fresh endpoint is
+# created in - gets its own file, created by new-session/new-window. A session
+# with no file does not exist and answers with tmux's own wording, which
+# fm_backend_tmux_agent_state reads as `missing`. Without this, one shared
+# inventory answered for every session, so a poll of a vanished endpoint found
+# the replacement's window and read `alive`. The only session spelling the code
+# under test sends is a bare name or a trailing-colon target.
 fake_ses_file() {  # <session-or-target>
   local ses=${1%:}
-  ses=${ses#=}
-  if [ -z "$ses" ] || [ "$ses" = "$FAKE_SES" ]; then
+  if [ -z "$ses" ] || [ "$ses" = fmses ]; then
     printf '%s\n' "$D/windows"
   else
     printf '%s\n' "$D/windows.$ses"
