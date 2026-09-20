@@ -33,15 +33,5 @@ jobs:
         # requests on a direct/ branch, because the pipeline cannot exercise any of
         # them. The gate reports those as exempt instead of red; every other branch,
         # including the pipeline's own, stays strictly checked.
-        #
-        # The Windows port's fm/ branches are exempt for as long as the port runs.
-        # Each of those fixes is small and already written, ci.yml still runs lint,
-        # the coverage guard and the behavior shards over every one of them, and a
-        # full pipeline run per fix costs more than it returns while the fork is
-        # still being assembled. The fork gets one end-to-end shakedown once the
-        # port's open issues are closed; drop the fm/* line then. Issue #25 tracks
-        # the port and carries that step.
         with:
-          exempt-head-branches: |
-            direct/*
-            fm/*
+          exempt-head-branches: 'direct/*'
