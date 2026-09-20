@@ -34,8 +34,9 @@ Run them by hand before trusting an installation, after a platform change, and w
 | `steer-guard` | An instruction is never delivered to a worker in the wrong home |
 | `local-only-landing` | Approved local work lands by fast-forward, and a diverged branch is refused |
 | `secondmate-home` | A provisioned second mate home has its identity, charter, routing entry, and working skills |
+| `vanished-endpoint-recovery` | A task whose endpoint disappeared can still be recovered, and its work survives either way |
 
-Two of these carry a regression that already bit us: `wake-queue` covers the temp files a drain used to abandon (#59), and `secondmate-home` covers the skills a mate used to be silently provisioned without (#60).
+Three of these carry a defect that already bit us. `wake-queue` covers the temp files a drain used to abandon (#59) and `secondmate-home` the skills a mate used to be silently provisioned without (#60), both now fixed. `vanished-endpoint-recovery` reproduces #58 and is the acceptance check for its fix: it fails on the code before the fix with the deadlock in its own words, and passes after.
 
 ## Adding one
 
