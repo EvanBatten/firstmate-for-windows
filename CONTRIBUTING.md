@@ -102,6 +102,8 @@ bin/fm-test-run.sh --all   # deliberate complete regression (optional local full
 bin/fm-test-isolation-proof.sh --list   # proven portable parallel candidate set
 bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json   # re-run the portable candidate proof
 bin/fm-test-isolation-proof.sh --pool watcher-wake-lock --jobs 4   # re-run an admitted family proof
+.agents/skills/verify-firstmate/verify.sh doctor   # read-only: is this checkout worth driving for real?
+.agents/skills/verify-firstmate/verify.sh run <feature>   # drive one feature's real scripts against a throwaway home and keep the evidence (the verify-firstmate skill owns the procedure)
 [ ! -L CLAUDE.md ] && cmp -s CLAUDE.md - <<'EOF'
 <!-- Points Claude at AGENTS.md via import; edit AGENTS.md, not this file. -->
 @AGENTS.md

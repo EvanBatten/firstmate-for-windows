@@ -42,6 +42,7 @@ Three of these carry a defect that already bit us. `wake-queue` covers the temp 
 ## Evidence
 
 Every run writes a transcript to `$TMPDIR/fm-verification-artifacts/<script>/`, naming the commit it ran against, so a result can be read an hour later instead of scrolling past. `VERIFY_ARTIFACT_DIR` moves that elsewhere. Scripts keep supporting files beside the transcript with `verify_keep`.
+A second run of the same script overwrites that transcript, so an agent proving a change drives the suite through the [`verify-firstmate`](../../.agents/skills/verify-firstmate/SKILL.md) skill, which gives every worktree and every run its own evidence directory.
 
 ## One of these is supposed to fail
 
