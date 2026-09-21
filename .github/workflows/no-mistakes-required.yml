@@ -31,7 +31,17 @@ jobs:
         uses: kunchenguid/no-mistakes/.github/actions/require-no-mistakes@32d396ac0f29135daf7fcb9964aba9d5f4e796d6 # post-v1.57.1, untagged (action added in #819)
         # Documentation, CI workflow and pipeline-config changes ship as plain pull
         # requests on a direct/ branch, because the pipeline cannot exercise any of
-        # them. The gate reports those as exempt instead of red; every other branch,
-        # including the pipeline's own, stays strictly checked.
+        # them. The gate reports those as exempt instead of red.
+        #
+        # fm/ branches are exempt too. They carry this fork's own development,
+        # which its owner builds and verifies outside the pipeline, and ci.yml
+        # still runs lint, the coverage guard and every behavior lane over each
+        # of them. A pull request that did come through the pipeline is
+        # unaffected: an exempt branch is never checked for an attestation, so
+        # one that carries it passes the same way.
+        #
+        # Every other branch stays strictly checked.
         with:
-          exempt-head-branches: 'direct/*'
+          exempt-head-branches: |
+            direct/*
+            fm/*
