@@ -17,8 +17,9 @@
 # ShellCheck set is only the changed files.
 #
 # With no explicit paths, the file set depends on context:
-#   - In CI (GITHUB_ACTIONS=true or CI=true), on the main branch, or when no
-#     merge-base against origin/main (or local main) can be found, it lints
+#   - In CI (GITHUB_ACTIONS=true or CI=true), on main or the repository's
+#     default branch, or when no merge-base against that default branch (the
+#     clone's origin/HEAD, else origin/main, else local main) can be found, it lints
 #     the full canonical set: bin/*.sh bin/backends/*.sh tests/*.sh. This is
 #     what CI always runs, so CI coverage never depends on a local diff.
 #   - Otherwise (an ordinary local branch with a real merge-base) it lints
@@ -185,11 +186,28 @@ if [ "$FAST" -eq 1 ] && { [ "${GITHUB_ACTIONS:-}" = true ] || [ "${CI:-}" = true
   exit 2
 fi
 
+# fm_lint_default_branch_ref prints the remote-tracking ref of the repository's
+# default branch, as the remote advertises it (origin/HEAD). Returns nonzero
+# when the clone does not record one.
+fm_lint_default_branch_ref() {
+  local ref
+  ref=$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null) || return 1
+  [ -n "$ref" ] || return 1
+  git rev-parse --verify -q "$ref" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$ref"
+}
+
 # fm_lint_changed_base_ref prints the ref to diff the working branch against:
-# the local origin/main tracking ref when present, else local main. Returns
-# nonzero when neither is resolvable, which the caller treats as "no
-# merge-base found" and falls back to a full lint.
+# the repository's default branch when the clone records one, else the local
+# origin/main tracking ref, else local main. A branch is compared with what it
+# will merge into: on a fork whose default branch is not main, main can sit far
+# behind, and the changed set measured against it is the whole fork. Returns
+# nonzero when none is resolvable, which the caller treats as "no merge-base
+# found" and falls back to a full lint.
 fm_lint_changed_base_ref() {
+  if fm_lint_default_branch_ref; then
+    return 0
+  fi
   if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
     printf 'origin/main\n'
     return 0
@@ -232,6 +250,9 @@ else
     && git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     && [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" != main ]; then
     base_ref=$(fm_lint_changed_base_ref) || base_ref=
+    # Standing on the default branch itself is the same case as standing on
+    # main: there is no branch diff to narrow to, so lint the full set.
+    [ "origin/$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" != "$base_ref" ] || base_ref=
     merge_base=
     [ -z "$base_ref" ] || merge_base=$(git merge-base "$base_ref" HEAD 2>/dev/null) || merge_base=
     [ -z "$merge_base" ] || full_lint=0

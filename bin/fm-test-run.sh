@@ -32,7 +32,7 @@
 #   --list          print selected script paths (one per line) and exit 0
 #   --list-scheduled
 #                   print selected paths longest-hint-first and exit 0
-#   --base <ref>    with --changed, compare against this ref (default: origin/main)
+#   --base <ref>    with --changed, compare against this ref (default: the repository default branch, else origin/main)
 #   --exclude-family <name>
 #                   drop scripts whose primary family matches <name> after selection
 #                   (repeatable; portable CI lanes exclude real-herdr-gated so the
@@ -148,7 +148,12 @@ CHECK_COVERAGE=0
 AGGREGATE_OUT=
 FAMILY=
 LANE=
-BASE_REF=origin/main
+# --changed compares the branch with what it will merge into: the repository's
+# default branch when the clone records one (origin/HEAD), else origin/main. On
+# a fork whose default branch is not main, main can sit far behind, and the
+# changed set measured against it is the whole fork.
+BASE_REF=$(git -C "$ROOT" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null) || BASE_REF=
+[ -n "$BASE_REF" ] || BASE_REF=origin/main
 JSON_PATH=
 SCRIPTS=()
 EXCLUDE_FAMILIES=()
