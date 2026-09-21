@@ -47,6 +47,7 @@ Name only user paths, stable handles, required state, commands, and observable p
 - [Notification queue](./wake-queue.md) covers durable delivery: presented, held until acknowledged, bound to the recovery episode that handed it out, and leaving nothing behind.
 - [Captain decision](./captain-decision.md) covers a question that waits on the captain: carried by a real work item and closed only by his recorded words.
 - [Local-only landing](./local-only-landing.md) covers approved local work: landed by fast-forward, and refused when the branch has diverged.
+- [Real session](./real-session.md) covers the whole loop with a real worker: spawn into a visible tab, isolated work, a checked result, landing, and cleanup; it is opt-in because it spends tokens.
 - [Second mate home](./secondmate-home.md) covers provisioning: identity, owner, charter, routing entry, and working skills.
 
 Four more features have a script and no feature file yet: `condition-watch`, `steer-guard`, `herdr-lab-pane`, and `vanished-endpoint-recovery`.

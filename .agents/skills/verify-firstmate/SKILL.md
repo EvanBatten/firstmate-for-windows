@@ -23,7 +23,7 @@ Read the feature file before you drive its feature.
 
 Two surfaces are not driven here.
 A worker pane in a runtime backend is touched by one feature only, `herdr-lab-pane`, and only through the guarded lab helper described under Cleanup.
-A whole session with a real model worker spends tokens and needs the captain's word, so no script here starts one.
+A whole session with a real model worker spends tokens and opens a tab the captain will see, so exactly one feature starts one, `real-session`, and only when `VERIFY_REAL_SESSION=1` is set.
 
 ## Launch
 

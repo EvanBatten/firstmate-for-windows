@@ -36,6 +36,7 @@ Run them by hand before trusting an installation, after a platform change, and w
 | `secondmate-home` | A provisioned second mate home has its identity, charter, routing entry, and working skills |
 | `herdr-lab-pane` | A pane firstmate is about to drive runs a shell firstmate can drive |
 | `vanished-endpoint-recovery` | A task whose endpoint disappeared can still be recovered, and its work survives either way |
+| `real-session` | The whole loop with a real worker: a spawn opens a visible Herdr tab, the worker builds a task in its own isolated copy, the result is checked, lands, and is cleaned up. Opt-in with `VERIFY_REAL_SESSION=1`, because it spends tokens |
 
 Three of these carry a defect that already bit us. `wake-queue` covers the temp files a drain used to abandon (#59) and `secondmate-home` the skills a mate used to be silently provisioned without (#60), both now fixed. `vanished-endpoint-recovery` reproduces #58 and is the acceptance check for its fix: it fails on the code before the fix with the deadlock in its own words, and passes after.
 
@@ -44,11 +45,25 @@ Three of these carry a defect that already bit us. `wake-queue` covers the temp 
 Every run writes a transcript to `$TMPDIR/fm-verification-artifacts/<script>/`, naming the commit it ran against, so a result can be read an hour later instead of scrolling past. `VERIFY_ARTIFACT_DIR` moves that elsewhere. Scripts keep supporting files beside the transcript with `verify_keep`.
 A second run of the same script overwrites that transcript, so an agent proving a change drives the suite through the [`verify-firstmate`](../../.agents/skills/verify-firstmate/SKILL.md) skill, which gives every worktree and every run its own evidence directory.
 
-## One of these is supposed to fail
+## A red script stays red
 
-`vanished-endpoint-recovery` reproduces #58, which is still open. It fails on `windows` today, with the tool's own refusal in its output, and passes against the fix. That is the point of it: it is the acceptance gate for that fix, and `run.sh` reporting one failure is the suite telling the truth about a defect the tool still has. When #58 lands it goes green and stays green.
+`vanished-endpoint-recovery` was written while #58 was still open, failed on `windows` with the tool's own refusal in its output, and went green when the fix landed.
+That is the pattern to keep: a script that reproduces a known defect is the acceptance check for its fix.
+Do not make a script skip to keep the summary tidy.
+A suite that is quiet about a known defect is worth less than one that is noisy about it.
 
-Do not make a script skip to keep the summary tidy. A suite that is quiet about a known defect is worth less than one that is noisy about it.
+## Measuring coverage
+
+```sh
+tests/verification/coverage.sh                # every script, as long as the suite takes
+tests/verification/coverage.sh real-session   # add one script to an earlier measurement
+```
+
+A claim that a feature is covered is only as good as the evidence that its code ran.
+`coverage.sh` runs each script with a `BASH_ENV` hook that records every bash script the run starts, then writes `coverage.tsv` beside the other evidence: one row for every script under `bin/`, whether a verification script really ran it and which one, and how many suites under `tests/` name it.
+A sourced library counts as run when a script that ran sources it.
+The report measures; it does not judge.
+[`coverage.tsv`](coverage.tsv) in this directory is the last committed measurement; regenerate it and commit it with the change that moved it.
 
 ## Adding one
 
