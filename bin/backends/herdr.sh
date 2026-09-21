@@ -545,6 +545,27 @@ fm_backend_herdr_task_tab_create() {  # <session> <workspace> <cwd> <label>
   [ -n "$bash_win" ] || return 0
   pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
   [ -n "$pane" ] || return 0
+  fm_backend_herdr_pane_start_bash "$session" "$pane"
+  return 0
+}
+
+# fm_backend_herdr_pane_start_bash <session> <pane>: make a freshly created
+# pane run Git Bash instead of the Windows shell it opens with. A no-op where
+# panes are already POSIX.
+#
+# This has its own name because a pane nobody bootstraps is not a pane firstmate
+# can drive, and that is not only true of task tabs. A test fixture that builds a
+# pane with a plain `workspace create` and then types a POSIX command into it is
+# talking to pwsh, and gets silence rather than an error (issues #63, #64).
+# Anything that intends to type POSIX into a pane it made calls this first.
+#
+# Sending it is best effort and never fails the caller: the pane exists either
+# way. A caller that needs the shell to be USABLE must then wait for it to
+# settle, because the launch line returns long before the shell is up.
+fm_backend_herdr_pane_start_bash() {  # <session> <pane>
+  local session=$1 pane=$2 bash_win quoted
+  bash_win=$(fm_backend_herdr_win32_pane_bash) || return 0
+  [ -n "$bash_win" ] || return 0
   # pwsh's call operator: the path is quoted because it contains spaces, and a
   # bare `bash` here would be WSL's. --login gives the same profile chain an
   # interactive Git Bash window gets; measured on this machine, nothing in that
