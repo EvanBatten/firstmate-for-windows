@@ -1756,9 +1756,9 @@ The last three came from the review: the first version of the suite had no stder
 Both are closed - the symlink branch now prints an explicit "was NOT checked" notice - and the mount case does the same where there is no `cygpath`, because it is the one assertion a fakebin cannot model: it needs a real MSYS `cd`, a real `cygpath` and a real overlapping mount.
 
 Named residuals rather than silence, all in the same family and none of them fixed here:
-`bin/fm-spawn.sh`'s relaunch dedup compares a `real_path_or_raw` pair with a bare `!=` and can false-mismatch on Windows through the same `pwd -P` case echo;
 `bin/fm-teardown.sh`'s `canonical_existing_dir` is still its own `cd`-and-`pwd -P`, which is correct because nothing compares its answer, but it is one more copy of the expression;
 and `fm_path_is_absolute` would still misfile a UNC answer (`\\server\share\...`) as relative, which is latent because Git for Windows emits forward-slash drive paths.
+This pass named a third one, `bin/fm-spawn.sh`'s relaunch landing check comparing a `real_path_or_raw` pair with a bare `!=`, and that one is since closed: the vanished-endpoint relaunch work reduces both sides through `fm_path_canon_dir` and compares them with `fm_path_dirs_equal`, as its own `relaunch_await_worktree_landing` comment records.
 
 ### Row 25, re-measured: what the identity is actually made of
 
