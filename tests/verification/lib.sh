@@ -35,8 +35,43 @@ verify_home() {
   cp "$VERIFY_ROOT/.tasks.toml" "$VERIFY_HOME/.tasks.toml"
 }
 
-ok()   { printf 'ok - %s\n' "$1"; }
-bad()  { printf 'not ok - %s\n' "$1"; VERIFY_FAILURES=$((VERIFY_FAILURES + 1)); }
+# Artifacts. A run that only prints to a terminal leaves nothing to inspect an
+# hour later, so every script keeps its evidence on disk: a transcript of what
+# it checked, plus any files it was told to keep. VERIFY_ARTIFACT_DIR moves
+# where they land.
+VERIFY_ARTIFACTS=${VERIFY_ARTIFACT_DIR:-${TMPDIR:-/tmp}/fm-verification-artifacts}
+VERIFY_ARTIFACT_RUN="$VERIFY_ARTIFACTS/$VERIFY_NAME"
+mkdir -p "$VERIFY_ARTIFACT_RUN" 2>/dev/null || true
+VERIFY_TRANSCRIPT="$VERIFY_ARTIFACT_RUN/transcript.txt"
+: > "$VERIFY_TRANSCRIPT" 2>/dev/null || VERIFY_TRANSCRIPT=/dev/null
+{
+  printf '# %s
+' "$VERIFY_NAME"
+  printf '# run %s
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '# code %s
+
+' "$(git -C "$VERIFY_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+} >> "$VERIFY_TRANSCRIPT"
+
+# verify_keep <label> <file>: keep a copy of evidence beside the transcript.
+verify_keep() {
+  [ -e "$2" ] || return 0
+  cp -f "$2" "$VERIFY_ARTIFACT_RUN/$1" 2>/dev/null || true
+  printf 'kept %s
+' "$1" >> "$VERIFY_TRANSCRIPT"
+}
+
+# verify_note <text>: context for the transcript, neither pass nor failure.
+verify_note() { printf '     %s
+' "$*" >> "$VERIFY_TRANSCRIPT"; }
+
+ok()   { printf 'ok - %s
+' "$1"; printf 'ok   %s
+' "$1" >> "$VERIFY_TRANSCRIPT"; }
+bad()  { printf 'not ok - %s
+' "$1"; printf 'FAIL %s
+' "$1" >> "$VERIFY_TRANSCRIPT"; VERIFY_FAILURES=$((VERIFY_FAILURES + 1)); }
 
 # verify_that <description> <command...>: run it, report, keep going.
 verify_that() {
@@ -47,9 +82,13 @@ verify_that() {
 verify_done() {
   if [ "$VERIFY_FAILURES" -eq 0 ]; then
     printf '# %s: all checks passed\n' "$VERIFY_NAME"
+    printf '# evidence: %s
+' "$VERIFY_ARTIFACT_RUN"
     exit 0
   fi
   printf '# %s: %d check(s) failed\n' "$VERIFY_NAME" "$VERIFY_FAILURES"
+  printf '# evidence: %s
+' "$VERIFY_ARTIFACT_RUN"
   exit 1
 }
 
