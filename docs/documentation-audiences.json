@@ -237,6 +237,34 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/README.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/captain-decision.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/captain-inbox.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/local-only-landing.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/secondmate-home.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/wake-queue.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".greptile/rules.md",
       "audience": "maintainer-architecture"
     },
@@ -507,6 +535,10 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "tests/verification/README.md",
+      "audience": "maintainer-verification"
     }
   ]
 }
