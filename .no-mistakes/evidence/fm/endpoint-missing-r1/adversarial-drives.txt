@@ -1,0 +1,93 @@
+Adversarial drives against the fix (target commit 4a3134f)
+Each one tries to make the new missing-endpoint path do the wrong thing.
+
+############################################################
+# 1. A backend that cannot be READ must not be mistaken for a vanished
+#    endpoint. list-windows fails with an error the classifier does not
+#    recognise as 'gone' -> state reads 'unreadable'.
+############################################################
+
+=== $ bin/fm-spawn.sh d60 --relaunch --harness claude   # must refuse, not create a second endpoint ===
+error: task d60's endpoint reads 'unreadable'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh d60 exit)
+exit status: 1
+
+=== $ bin/fm-control.sh d60 relaunch --note 'retry'   # must refuse too ===
+error: task d60's endpoint reads 'unreadable' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint
+error: relaunch of d60 failed while stopping the old agent and its state is 'unreadable'; the durable record and progress note were retained for recovery
+exit status: 1
+
+=== what the operator is left with ===
+recorded endpoint unchanged: window=fmses:fm-d60
+agents launched: 0
+extra window inventories created: 
+shell lines any pane received: []
+
+############################################################
+# 2. A freshly created endpoint whose shell never lands in the recorded
+#    worktree (wedged pane ignores the cd) must refuse before any agent
+#    is launched, keep the durable record, and ask the backend to remove
+#    the endpoint it created.
+############################################################
+
+=== $ bin/fm-spawn.sh d59 --relaunch --harness claude ===
+warning: /tmp/fm-control-relaunch.vZrOp1/land58-10974/home/data/d59/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: task d59's replacement endpoint is in '/tmp/fm-control-relaunch.vZrOp1/land58-10974/proj', not its recorded worktree '/tmp/fm-control-relaunch.vZrOp1/land58-10974/wt'; removing the endpoint this relaunch created (firstmate:fm-d59) is attempted on the way out, so check for a leftover before retrying
+exit status: 1
+
+=== what the operator is left with ===
+recorded endpoint (must still be the vanished one, not a half-written record): window=fmses:fm-d59
+recorded worktree: worktree=/tmp/fm-control-relaunch.vZrOp1/land58-10974/wt
+agents launched: 0
+backend asked to remove the orphaned endpoint: kill-window -t =firstmate:=fm-d59
+window inventories left behind:
+  windows -> 
+  windows.firstmate -> fm-d59 
+
+############################################################
+# 3. After that failure the operator's retry must be the ordinary next
+#    step: the orphaned endpoint is gone, so the replacement launches
+#    exactly once. (Here the fake backend honours kill-window for real.)
+############################################################
+
+=== act 1: $ bin/fm-control.sh d61 relaunch --note 'first try' ===
+warning: /tmp/fm-control-relaunch.aevivB/retry58-26058/home/data/d61/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: task d61's replacement endpoint is in '/tmp/fm-control-relaunch.aevivB/retry58-26058/proj', not its recorded worktree '/tmp/fm-control-relaunch.aevivB/retry58-26058/wt'; removing the endpoint this relaunch created (firstmate:fm-d61) is attempted on the way out, so check for a leftover before retrying
+error: the replacement agent for d61 could not be launched on claude
+error: d61's agent was stopped but the replacement did not launch; no agent is running, and its work plus the recorded progress note are preserved at /tmp/fm-control-relaunch.aevivB/retry58-26058/wt
+exit status: 1
+recorded endpoint after the failure: window=fmses:fm-d61
+endpoints the backend was asked to remove: firstmate:=fm-d61 
+window inventories now: windows=[] windows.firstmate=[] 
+agents launched so far: 0
+
+=== act 2: $ bin/fm-control.sh d61 relaunch --note 'second try' ===
+warning: /tmp/fm-control-relaunch.aevivB/retry58-26058/home/data/d61/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+relaunched d61 harness=claude from=claude model=default effort=default backend=tmux endpoint=firstmate:fm-d61 worktree=/tmp/fm-control-relaunch.aevivB/retry58-26058/wt
+exit status: 0
+recorded endpoint after the retry: window=firstmate:fm-d61
+recorded worktree: worktree=/tmp/fm-control-relaunch.aevivB/retry58-26058/wt
+agents launched in total: 1
+window inventories now: windows=[] windows.firstmate=[fm-d61 ] 
+
+############################################################
+# 4. A SECONDMATE whose endpoint vanished: its fresh endpoint is opened
+#    in its own home by the backend, so no cd is sent and no second home
+#    is allocated.
+############################################################
+
+=== $ bin/fm-control.sh sm58 relaunch   # a secondmate needs no --note ===
+warning: secondmate sm58 sync skipped before launch: primary default-branch commit cannot be resolved
+relaunched sm58 harness=claude from=claude model=default effort=default backend=tmux endpoint=firstmate:fm-sm58 worktree=/tmp/fm-control-relaunch.d8TYWW/sm58-22649/smhome
+exit status: 0
+
+=== what the operator is left with ===
+window=firstmate:fm-sm58
+worktree=/tmp/fm-control-relaunch.d8TYWW/sm58-22649/smhome
+project=/tmp/fm-control-relaunch.d8TYWW/sm58-22649/smhome
+kind=secondmate
+mode=secondmate
+home=/tmp/fm-control-relaunch.d8TYWW/sm58-22649/smhome
+agents launched: 1
+pane the replacement is sitting in: /tmp/fm-control-relaunch.d8TYWW/sm58-22649/smhome
+shell lines the replacement pane received: [export GOTMPDIR=/tmp/fm-sm58/gotmp;Enter;]
+window inventories: windows=[] windows.firstmate=[fm-sm58 ] 

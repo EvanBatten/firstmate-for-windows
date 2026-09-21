@@ -1,0 +1,96 @@
+issue #58: a task whose backend endpoint vanished could not be recovered
+Driven on Windows 11 / Git Bash (MINGW64) against the real bin/fm-control.sh and
+bin/fm-spawn.sh CLIs, with a session-aware fake tmux backend standing in for the
+terminal multiplexer (no tmux on this host). Same fixture, same commands, both trees.
+
+############################################################
+# BEFORE - base commit 392f93f (the reported bug)
+############################################################
+
+=== the task as recorded before anything goes wrong ===
+window=fmses:fm-d58
+worktree=/tmp/fm-control-relaunch.xalHTx/drive58-15799/wt
+project=/tmp/fm-control-relaunch.xalHTx/drive58-15799/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend window inventory: fm-d58
+
+=== the endpoint VANISHES (window removed from the backend, not merely agent-free) ===
+backend window inventory: (empty)
+
+=== $ bin/fm-control.sh d58 exit   # adversarial: exit must still refuse ===
+error: task d58's recorded endpoint is gone, so there is no agent to stop; reconcile the task before any further control action
+exit status: 1
+
+=== $ bin/fm-control.sh d58 interrupt   # adversarial: interrupt must still refuse ===
+error: no agent is running at task d58's recorded endpoint (state: missing); there is nothing to interrupt
+exit status: 1
+
+=== $ bin/fm-control.sh d58 relaunch --note 'picking this back up' ===
+error: task d58's recorded endpoint is gone, so there is no agent to stop; reconcile the task before any further control action
+error: relaunch of d58 failed while stopping the old agent and its state is 'missing'; the durable record and progress note were retained for recovery
+exit status: 1
+
+=== the task after recovery ===
+window=fmses:fm-d58
+worktree=/tmp/fm-control-relaunch.xalHTx/drive58-15799/wt
+project=/tmp/fm-control-relaunch.xalHTx/drive58-15799/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend window inventory now: worktree still the recorded one: yes
+sibling worktrees allocated: /tmp/fm-control-relaunch.xalHTx/drive58-15799/wt 
+agents launched (launch-brief literals): 0
+shell lines the replacement pane received:
+'treehouse get' sent? 0
+
+############################################################
+# AFTER - target commit 4a3134f (the fix)
+############################################################
+
+=== the task as recorded before anything goes wrong ===
+window=fmses:fm-d58
+worktree=/tmp/fm-control-relaunch.G1H469/drive58-20344/wt
+project=/tmp/fm-control-relaunch.G1H469/drive58-20344/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend window inventory: fm-d58
+
+=== the endpoint VANISHES (window removed from the backend, not merely agent-free) ===
+backend window inventory: (empty)
+
+=== $ bin/fm-control.sh d58 exit   # adversarial: exit must still refuse ===
+error: task d58's recorded endpoint is gone, so there is no agent to stop
+exit status: 1
+
+=== $ bin/fm-control.sh d58 interrupt   # adversarial: interrupt must still refuse ===
+error: no agent is running at task d58's recorded endpoint (state: missing); there is nothing to interrupt
+exit status: 1
+
+=== $ bin/fm-control.sh d58 relaunch --note 'picking this back up' ===
+warning: /tmp/fm-control-relaunch.G1H469/drive58-20344/home/data/d58/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+relaunched d58 harness=claude from=claude model=default effort=default backend=tmux endpoint=firstmate:fm-d58 worktree=/tmp/fm-control-relaunch.G1H469/drive58-20344/wt
+exit status: 0
+
+=== the task after recovery ===
+window=firstmate:fm-d58
+worktree=/tmp/fm-control-relaunch.G1H469/drive58-20344/wt
+project=/tmp/fm-control-relaunch.G1H469/drive58-20344/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend window inventory now: fm-d58
+worktree still the recorded one: yes
+sibling worktrees allocated: /tmp/fm-control-relaunch.G1H469/drive58-20344/wt 
+agents launched (launch-brief literals): 1
+shell lines the replacement pane received:
+  | cd '/tmp/fm-control-relaunch.G1H469/drive58-20344/wt'
+  | export GOTMPDIR=/tmp/fm-d58/gotmp
+  | Enter
+'treehouse get' sent? 0
