@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for the verification suite.
 #
 # These scripts are a different class from tests/*.test.sh. A test there pins a

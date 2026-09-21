@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Feature: the durable notification queue delivers work once, holds it until it
 # is acknowledged with the generation it was handed, and leaves nothing behind.
+# shellcheck source=tests/verification/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
 verify_home
@@ -13,20 +14,29 @@ STATE="$HOME_DIR/state"
 "$BIN/fm-inbox.sh" note "second" >/dev/null 2>&1
 
 drain=$("$BIN/fm-wake-drain.sh" 2>&1)
-[ "$(printf '%s' "$drain" | grep -c 'check: captain inbox note')" -eq 2 ] \
-  && ok "every queued item is presented" || bad "the queue did not present both items"
+if [ "$(printf '%s' "$drain" | grep -c 'check: captain inbox note')" -eq 2 ]; then
+  ok "every queued item is presented"
+else
+  bad "the queue did not present both items"
+fi
 
 seq=$(printf '%s' "$drain" | awk '/WAKE_ACK_REQUIRED/ { for (i=1;i<=NF;i++) if ($i=="--ack-through") print $(i+1) }' | tail -1)
 gen=$(printf '%s' "$drain" | awk '/WAKE_ACK_REQUIRED/ { for (i=1;i<=NF;i++) if ($i=="--recovery-generation") print $(i+1) }' | tail -1)
-[ -n "$seq" ] && [ -n "$gen" ] && ok "the drain names the acknowledgement it requires" \
-  || { bad "the drain did not name its acknowledgement"; verify_done; }
+if [ -n "$seq" ] && [ -n "$gen" ]; then
+  ok "the drain names the acknowledgement it requires"
+else
+  bad "the drain did not name its acknowledgement"
+  verify_done
+fi
 
 # Unacknowledged work must survive, or an interrupted turn loses it.
-[ "$("$BIN/fm-wake-drain.sh" 2>/dev/null | grep -c 'check: captain inbox note')" -eq 2 ] \
-  && ok "work not yet acknowledged is presented again" || bad "unacknowledged work was dropped"
+if [ "$("$BIN/fm-wake-drain.sh" 2>/dev/null | grep -c 'check: captain inbox note')" -eq 2 ]; then
+  ok "work not yet acknowledged is presented again"
+else
+  bad "unacknowledged work was dropped"
+fi
 
-"$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation 99999.1.bogus >/dev/null 2>&1 \
-# The generation binds an acknowledgement to one recovery episode. With no
+"$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation 99999.1.bogus >/dev/null 2>&1 # The generation binds an acknowledgement to one recovery episode. With no
 # episode pending there is nothing to bind to and any generation is fine, so
 # the question only means something once an episode exists.
 printf 'pending:handling:fixture
@@ -48,16 +58,29 @@ else
 fi
 rm -f "$STATE/.watcher-down"
 
-"$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$gen" >/dev/null 2>&1 \
-  && ok "the right acknowledgement is accepted" || bad "the correct acknowledgement was refused"
+if "$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$gen" >/dev/null 2>&1; then
+  ok "the right acknowledgement is accepted"
+else
+  bad "the correct acknowledgement was refused"
+fi
 
-[ -z "$("$BIN/fm-wake-drain.sh" 2>/dev/null | grep 'check: captain inbox note')" ] \
-  && ok "acknowledged work is gone" || bad "acknowledged work came back"
+if ! "$BIN/fm-wake-drain.sh" 2>/dev/null | grep -q 'check: captain inbox note'; then
+  ok "acknowledged work is gone"
+else
+  bad "acknowledged work came back"
+fi
 
 # Regression, issue #59: an acknowledgement that empties the row set used to
 # abandon its temp file, one per acknowledgement, forever.
-leftovers=$(ls -A "$STATE" 2>/dev/null | grep -E '^\.(wake-rows\.consume|main-eligible-rows\.tmp)\.' || true)
-[ -z "$leftovers" ] && ok "no temp files are left in the home" \
-  || bad "the home was left holding temp files: $(echo $leftovers)"
+leftovers=
+for leftover in "$STATE"/.wake-rows.consume.* "$STATE"/.main-eligible-rows.tmp.*; do
+  [ -e "$leftover" ] || continue
+  leftovers="$leftovers $(basename "$leftover")"
+done
+if [ -z "$leftovers" ]; then
+  ok "no temp files are left in the home"
+else
+  bad "the home was left holding temp files:$leftovers"
+fi
 
 verify_done

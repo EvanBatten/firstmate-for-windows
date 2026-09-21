@@ -39,6 +39,12 @@ Run them by hand before trusting an installation, after a platform change, and w
 
 Three of these carry a defect that already bit us. `wake-queue` covers the temp files a drain used to abandon (#59) and `secondmate-home` the skills a mate used to be silently provisioned without (#60), both now fixed. `vanished-endpoint-recovery` reproduces #58 and is the acceptance check for its fix: it fails on the code before the fix with the deadlock in its own words, and passes after.
 
+## One of these is supposed to fail
+
+`vanished-endpoint-recovery` reproduces #58, which is still open. It fails on `windows` today, with the tool's own refusal in its output, and passes against the fix. That is the point of it: it is the acceptance gate for that fix, and `run.sh` reporting one failure is the suite telling the truth about a defect the tool still has. When #58 lands it goes green and stays green.
+
+Do not make a script skip to keep the summary tidy. A suite that is quiet about a known defect is worth less than one that is noisy about it.
+
 ## Adding one
 
 Copy the shape of an existing script: source `lib.sh`, call `verify_home`, use `ok` and `bad`, end with `verify_done`.

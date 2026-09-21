@@ -2,6 +2,7 @@
 # Feature: work delivered as a local branch lands on the project's own main by
 # fast-forward, and only by fast-forward. Anything else would rewrite history
 # in a repository firstmate does not own.
+# shellcheck source=tests/verification/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
 verify_home
@@ -33,16 +34,23 @@ yolo=off
 branch=fm/demo
 META
 
-"$BIN/fm-merge-local.sh" demo >/dev/null 2>&1 \
-  && ok "approved local work lands" || bad "the landing was refused"
+if "$BIN/fm-merge-local.sh" demo >/dev/null 2>&1; then
+  ok "approved local work lands"
+else
+  bad "the landing was refused"
+fi
 
-[ "$(git -C "$PROJ" rev-parse main)" = "$TIP" ] \
-  && ok "the project's main is at the delivered commit" \
-  || bad "main is not at the delivered commit"
+if [ "$(git -C "$PROJ" rev-parse main)" = "$TIP" ]; then
+  ok "the project's main is at the delivered commit"
+else
+  bad "main is not at the delivered commit"
+fi
 
-[ "$(git -C "$PROJ" rev-list --count "$BASE..main")" -eq 1 ] \
-  && ok "it landed as a fast-forward, with no merge commit" \
-  || bad "landing did not fast-forward"
+if [ "$(git -C "$PROJ" rev-list --count "$BASE..main")" -eq 1 ]; then
+  ok "it landed as a fast-forward, with no merge commit"
+else
+  bad "landing did not fast-forward"
+fi
 
 # A branch that has diverged must not land: fast-forward is the whole contract.
 printf 'three\n' > "$PROJ/c.txt"
@@ -50,9 +58,15 @@ git -C "$PROJ" add -A && git -C "$PROJ" commit -qm "diverge on main"
 printf 'four\n' > "$WT/d.txt"
 git -C "$WT" add -A && git -C "$WT" commit -qm "diverge on the branch"
 AFTER=$(git -C "$PROJ" rev-parse main)
-"$BIN/fm-merge-local.sh" demo >/dev/null 2>&1 \
-  && bad "a diverged branch was landed anyway" || ok "a diverged branch is refused"
-[ "$(git -C "$PROJ" rev-parse main)" = "$AFTER" ] \
-  && ok "the refusal left main untouched" || bad "the refused landing still moved main"
+if "$BIN/fm-merge-local.sh" demo >/dev/null 2>&1; then
+  bad "a diverged branch was landed anyway"
+else
+  ok "a diverged branch is refused"
+fi
+if [ "$(git -C "$PROJ" rev-parse main)" = "$AFTER" ]; then
+  ok "the refusal left main untouched"
+else
+  bad "the refused landing still moved main"
+fi
 
 verify_done

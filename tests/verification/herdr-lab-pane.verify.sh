@@ -10,6 +10,7 @@
 #
 # Every herdr call is bounded. An earlier hand probe of this question hung for
 # hours; a check that cannot answer must say so and stop, not wait forever.
+# shellcheck source=tests/verification/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
 command -v herdr >/dev/null 2>&1 || verify_skip "herdr is not installed"
@@ -26,11 +27,13 @@ MARKER_BUDGET=60
 SESSION=$(timeout 30 bash "$BIN/fm-herdr-lab.sh" name paneshell 2>/dev/null) || SESSION=
 [ -n "$SESSION" ] || verify_skip "the herdr lab helper could not name a session within 30s"
 
+# shellcheck disable=SC2329  # runs from the EXIT trap below
 lab_teardown() { timeout 90 bash "$BIN/fm-herdr-lab.sh" teardown "$SESSION" >/dev/null 2>&1 || true; }
 trap 'lab_teardown; verify_cleanup' EXIT
 
 # herdr_call <args...>: one bounded backend call. Times out rather than hanging.
 herdr_call() {
+  # shellcheck disable=SC2016  # the single-quoted program is bash -c text
   timeout "$CALL_BUDGET" bash -c '
     . "$1"; shift; session="$1"; shift
     fm_backend_herdr_cli "$session" "$@"
@@ -41,6 +44,7 @@ if ! timeout 120 bash "$BIN/fm-herdr-lab.sh" prepare "$SESSION" >/dev/null 2>&1;
   bad "the lab session could not be prepared within 120s, so this machine cannot answer the question"
   verify_done
 fi
+# shellcheck disable=SC2016  # the single-quoted program is bash -c text
 if ! timeout "$CALL_BUDGET" bash -c '. "$1"; fm_backend_herdr_server_ensure "$2"' _ "$BACKEND" "$SESSION" >/dev/null 2>&1; then
   bad "the lab session's server did not start within ${CALL_BUDGET}s"
   verify_done
@@ -86,8 +90,12 @@ poke() {
 RAW_CWD="$VERIFY_TMP/raw"; mkdir -p "$RAW_CWD"
 RAW=$(herdr_call workspace create --cwd "$RAW_CWD" --label raw --no-focus)
 RAW_PANE=$(printf '%s' "$RAW" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
-[ -n "$RAW_PANE" ] && ok "a plain workspace pane can be created" \
-  || { bad "a plain workspace pane could not be created within ${CALL_BUDGET}s"; verify_done; }
+if [ -n "$RAW_PANE" ]; then
+  ok "a plain workspace pane can be created"
+else
+  bad "a plain workspace pane could not be created within ${CALL_BUDGET}s"
+  verify_done
+fi
 
 if poke "$RAW_PANE" "$VERIFY_TMP/raw.marker"; then
   RAW_RUNS=yes
@@ -98,12 +106,17 @@ fi
 # 2. The shape the production path builds, bootstrap included.
 TASK_CWD="$VERIFY_TMP/task"; mkdir -p "$TASK_CWD"
 WSID=$(printf '%s' "$RAW" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
+# shellcheck disable=SC2016  # the single-quoted program is bash -c text
 TAB=$(timeout "$CALL_BUDGET" bash -c '
   . "$1"; fm_backend_herdr_task_tab_create "$2" "$3" "$4" "$5"
 ' _ "$BACKEND" "$SESSION" "$WSID" "$TASK_CWD" fmverify 2>/dev/null)
 TASK_PANE=$(printf '%s' "$TAB" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
-[ -n "$TASK_PANE" ] && ok "a task pane can be created the way firstmate creates one" \
-  || { bad "a task pane could not be created within ${CALL_BUDGET}s"; verify_done; }
+if [ -n "$TASK_PANE" ]; then
+  ok "a task pane can be created the way firstmate creates one"
+else
+  bad "a task pane could not be created within ${CALL_BUDGET}s"
+  verify_done
+fi
 
 if poke "$TASK_PANE" "$VERIFY_TMP/task.marker"; then
   TASK_RUNS=yes
@@ -113,9 +126,11 @@ fi
 
 # The verdict. A task pane MUST run what firstmate types into it - that is the
 # product guarantee, and everything else here is diagnosis.
-[ "$TASK_RUNS" = yes ] \
-  && ok "a task pane runs what firstmate types into it" \
-  || bad "a task pane did NOT run what firstmate typed into it within ${MARKER_BUDGET}s of its shell settling - this is a product failure, not a fixture one"
+if [ "$TASK_RUNS" = yes ]; then
+  ok "a task pane runs what firstmate types into it"
+else
+  bad "a task pane did NOT run what firstmate typed into it within ${MARKER_BUDGET}s of its shell settling - this is a product failure, not a fixture one"
+fi
 
 if [ "$RAW_RUNS" = no ] && [ "$TASK_RUNS" = yes ]; then
   ok "a plain pane does not, which is why #63 and #64 fail: those fixtures skip the bootstrap"

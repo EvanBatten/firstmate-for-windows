@@ -11,6 +11,7 @@
 # refuses to run, so a recovery that gets moving fails at the launch, for an
 # obviously different reason, while everything else on the path still works.
 # The question asked is only whether the operator is given a way forward.
+# shellcheck source=tests/verification/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
 verify_home
@@ -54,9 +55,11 @@ spawn_gen=s1.1.1
 META
 
 state=$(timeout 90 "$BIN/fm-crew-state.sh" "$ID" 2>&1 | head -1)
-printf '%s' "$state" | grep -Eqi 'gone|missing|unknown' \
-  && ok "the vanished endpoint is recognised as gone" \
-  || bad "the endpoint does not read as gone, so this is not the situation under test: $state"
+if printf '%s' "$state" | grep -Eqi 'gone|missing|unknown'; then
+  ok "the vanished endpoint is recognised as gone"
+else
+  bad "the endpoint does not read as gone, so this is not the situation under test: $state"
+fi
 
 SHIM="$VERIFY_TMP/shim"
 mkdir -p "$SHIM"
@@ -67,8 +70,7 @@ mkdir -p "$SHIM"
 } > "$SHIM/claude"
 chmod +x "$SHIM/claude"
 
-out=$(PATH="$SHIM:$PATH" timeout 180 "$BIN/fm-control.sh" "$ID" relaunch \
-  --note 'the window was closed; pick the work back up' 2>&1)
+out=$(PATH="$SHIM:$PATH" timeout 180 "$BIN/fm-control.sh" "$ID" relaunch   --note 'the window was closed; pick the work back up' 2>&1)
 [ -n "${VERIFY_DEBUG:-}" ] && printf 'relaunch said >>>\n%s\n<<<\n' "$out"
 
 # The claim: recovery must not refuse on the grounds that there is nothing to
@@ -86,16 +88,28 @@ fi
 
 # Stopping is still the right answer for stopping: there genuinely is nothing
 # to stop, and that refusal should stay exactly as it is.
-timeout 90 "$BIN/fm-control.sh" "$ID" exit >/dev/null 2>&1 \
-  && bad "stopping a worker that is not there reported success" \
-  || ok "stopping still refuses, which is correct - there is nothing to stop"
+if timeout 90 "$BIN/fm-control.sh" "$ID" exit >/dev/null 2>&1; then
+  bad "stopping a worker that is not there reported success"
+else
+  ok "stopping still refuses, which is correct - there is nothing to stop"
+fi
 
 # Whatever happened above, the work is untouched. This is what makes a failed
 # recovery survivable rather than a loss.
-[ -d "$WT" ] && ok "the local copy survives" || bad "the local copy was removed"
-[ "$(git -C "$WT" rev-parse HEAD 2>/dev/null)" = "$WIP" ] \
-  && ok "the unlanded commit survives" || bad "the unlanded commit was lost"
-[ -f "$HOME_DIR/state/$ID.meta" ] && ok "the task's record survives" \
-  || bad "the task's record was removed"
+if [ -d "$WT" ]; then
+  ok "the local copy survives"
+else
+  bad "the local copy was removed"
+fi
+if [ "$(git -C "$WT" rev-parse HEAD 2>/dev/null)" = "$WIP" ]; then
+  ok "the unlanded commit survives"
+else
+  bad "the unlanded commit was lost"
+fi
+if [ -f "$HOME_DIR/state/$ID.meta" ]; then
+  ok "the task's record survives"
+else
+  bad "the task's record was removed"
+fi
 
 verify_done
