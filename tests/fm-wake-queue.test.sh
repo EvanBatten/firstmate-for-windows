@@ -1184,7 +1184,7 @@ test_historical_annotation_skips_announced_status() {
 }
 
 test_ack_that_empties_a_row_set_leaves_no_temp_file() {
-  local dir state out err sequence generation leftovers
+  local dir state out err sequence generation leftovers leftover
   dir=$(make_case ack-temp-files)
   state="$dir/state"
 
@@ -1202,8 +1202,12 @@ test_ack_that_empties_a_row_set_leaves_no_temp_file() {
   # The acknowledgement consumed every queued row, so each row file is rewritten
   # from an EMPTY source. That is the ordinary case, and the writer owns its
   # temp file on that path exactly as it does when the source has content.
-  leftovers=$(ls -A "$state" | grep -E '^\.(wake-rows\.consume|main-eligible-rows\.tmp)\.' || true)
-  [ -z "$leftovers" ] || fail "acknowledgement left temp files in state/: $(echo $leftovers)"
+  leftovers=
+  for leftover in "$state"/.wake-rows.consume.* "$state"/.main-eligible-rows.tmp.*; do
+    [ -e "$leftover" ] || continue
+    leftovers="$leftovers $(basename "$leftover")"
+  done
+  [ -z "$leftovers" ] || fail "acknowledgement left temp files in state/:$leftovers"
 
   pass "wake drain: an acknowledgement that empties a row set leaves no temp file behind"
 }
