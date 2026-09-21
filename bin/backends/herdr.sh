@@ -499,6 +499,27 @@ fm_backend_herdr_win32_pane_bash() {
   printf '%s' "$win"
 }
 
+# fm_backend_herdr_win32_pane_path: firstmate's own PATH in the Win32 spelling,
+# for the pane to adopt before it starts Git Bash.
+#
+# A new pane is a child of the herdr SERVER, so it starts with the registered
+# Windows PATH, not with the PATH bootstrap checked the toolchain against.
+# Measured on Windows 11 with herdr 0.8.2: a spawn typed `treehouse get` into
+# such a pane, the pane answered `bash: treehouse: command not found`, and the
+# spawn reported a 60 second worktree timeout, while `command -v treehouse`
+# succeeded in firstmate's own shell. no-mistakes and the -axi tools were
+# missing from the pane the same way.
+#
+# herdr drops a PATH passed through `tab create --env`, under either spelling,
+# but carries any other variable. So the PATH rides in as FM_PANE_PATH and the
+# pane's first command adopts it; measured with that in place, all four tools
+# resolved in the pane.
+fm_backend_herdr_win32_pane_path() {
+  local win
+  win=$(cygpath -w -p "$PATH" 2>/dev/null) && [ -n "$win" ] || return 1
+  printf '%s' "$win"
+}
+
 # fm_backend_herdr_win32_pane_prompt_command: the PROMPT_COMMAND a bootstrapped
 # Git Bash pane needs so herdr keeps seeing where that pane actually is.
 #
@@ -528,15 +549,19 @@ fm_backend_herdr_win32_pane_prompt_command() {
 # On a POSIX host this is byte-for-byte the call each site made inline before:
 # `tab create --workspace W --cwd C --label L --no-focus`. On MSYS it also
 # carries SHELL (so treehouse's own subshell is Git Bash rather than whatever a
-# native Windows binary would pick) and PROMPT_COMMAND, and then sends the Git
-# Bash launch line as the pane's first command. Both halves belong here because
-# both must hold for every pane an agent is ever launched into.
+# native Windows binary would pick), PROMPT_COMMAND, and firstmate's own PATH as
+# FM_PANE_PATH, and then sends the Git Bash launch line as the pane's first
+# command. All of it belongs here because all of it must hold for every pane an
+# agent is ever launched into.
 fm_backend_herdr_task_tab_create() {  # <session> <workspace> <cwd> <label>
-  local session=$1 workspace=$2 cwd=$3 label=$4 out pane bash_win quoted
+  local session=$1 workspace=$2 cwd=$3 label=$4 out pane bash_win pane_path
   local -a env_args=()
   if bash_win=$(fm_backend_herdr_win32_pane_bash); then
     env_args=(--env "SHELL=$bash_win" \
       --env "PROMPT_COMMAND=$(fm_backend_herdr_win32_pane_prompt_command)")
+    if pane_path=$(fm_backend_herdr_win32_pane_path); then
+      env_args+=(--env "FM_PANE_PATH=$pane_path")
+    fi
   fi
   out=$(fm_backend_herdr_cli "$session" tab create \
     --workspace "$workspace" --cwd "$cwd" --label "$label" \
@@ -573,9 +598,14 @@ fm_backend_herdr_pane_start_bash() {  # <session> <pane>
   # pwsh escapes a single quote inside a single-quoted string by DOUBLING it,
   # which is what a per-user Git install under a path like C:\Users\o'brien
   # needs to parse at all.
+  # The guard in front adopts the PATH a task tab was created with (see
+  # fm_backend_herdr_win32_pane_path). It is a test, not an assignment, because
+  # a pane made some other way carries no FM_PANE_PATH, and assigning an unset
+  # variable would leave that pane with no PATH at all.
   quoted=${bash_win//\'/\'\'}
+  # shellcheck disable=SC2016 # pwsh variables: the pane expands them, not this shell.
   fm_backend_herdr_cli "$session" pane run "$pane" \
-    "& '$quoted' --login" >/dev/null 2>&1 ||
+    'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1 ||
     echo "warning: herdr pane $pane was created but its Git Bash bootstrap command could not be sent; the pane is still running its default Windows shell" >&2
   return 0
 }
