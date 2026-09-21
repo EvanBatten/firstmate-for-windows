@@ -507,6 +507,10 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "tests/verification/README.md",
+      "audience": "maintainer-verification"
     }
   ]
 }
