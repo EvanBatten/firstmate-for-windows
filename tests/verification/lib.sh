@@ -12,6 +12,15 @@
 
 set -u
 
+# Every FM_*_OVERRIDE wins over FM_HOME inside the bin/ scripts. One inherited
+# from the caller would send this run into the directory it names - an operating
+# home, if that is where the caller stands - and the run would still pass. The
+# throwaway home is the only home, so none of them survives into a script.
+for verify_override in $(compgen -v | grep -E '^FM_[A-Z0-9_]*_OVERRIDE$'); do
+  unset "$verify_override"
+done
+unset verify_override
+
 VERIFY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERIFY_NAME=$(basename "${BASH_SOURCE[1]:-verification}" .verify.sh)
 VERIFY_FAILURES=0
