@@ -54,6 +54,17 @@ make_cygpath() {  # <dir> -> echoes fakebin dir
 #!/usr/bin/env bash
 set -u
 mode=$1; path=$2
+if [ "$mode" = -w ] && [ "$path" = -p ]; then
+  # A path list: convert each entry the way -w converts one path.
+  list=$3 out=
+  while [ -n "$list" ]; do
+    entry=${list%%:*}
+    case "$list" in *:*) list=${list#*:} ;; *) list= ;; esac
+    out="${out:+$out;}$("$0" -w "$entry")"
+  done
+  printf '%s\n' "$out"
+  exit 0
+fi
 case "$mode" in
   -u)
     drive=$(printf '%s' "${path%%:*}" | tr '[:upper:]' '[:lower:]')
@@ -502,10 +513,32 @@ test_task_tab_create_posix_call_is_unchanged() {
   pass "fm_backend_herdr_task_tab_create: the POSIX call is byte-identical and bootstraps nothing"
 }
 
+test_win32_pane_path_is_this_shells_own_path() {
+  local fb out
+  fb=$(make_cygpath "$TMP_ROOT/pane-path")
+  # A short, known PATH: the directory a tool was installed into but never
+  # registered with Windows is exactly the entry a pane has to be handed.
+  out=$(adapter "$fb" 'PATH="$1:/c/sentinel/tools:/usr/bin"; fm_backend_herdr_win32_pane_path' "$fb")
+  expect_code 0 $? "a convertible PATH must be offered to the pane"
+  assert_contains "$out" 'C:\sentinel\tools' "the pane PATH must carry this shell's own tool directories in their Win32 spelling"
+  assert_contains "$out" ';C:\sentinel\tools;' "the pane PATH must be a Win32 list, separated by semicolons and in the same order"
+  pass "fm_backend_herdr_win32_pane_path: hands the pane the PATH firstmate itself resolved its tools on"
+}
+
+test_win32_pane_path_is_withheld_when_it_cannot_be_converted() {
+  local fb
+  fb="$TMP_ROOT/pane-path-broken/fakebin"; mkdir -p "$fb"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$fb/cygpath"; chmod +x "$fb/cygpath"
+  adapter "$fb" 'PATH="$1:/usr/bin"; fm_backend_herdr_win32_pane_path' "$fb" >/dev/null
+  expect_code 1 $? "an unconvertible PATH must be withheld, never handed to the pane empty"
+  pass "fm_backend_herdr_win32_pane_path: withholds a PATH it could not convert"
+}
+
 test_task_tab_create_bootstraps_git_bash_on_msys() {
-  local fb log want emitter
+  local fb log want emitter jqdir
   fb=$(make_cygpath "$TMP_ROOT/task-win32"); log="$TMP_ROOT/task-win32/log"; : > "$log"
   make_task_herdr "$fb"
+  jqdir=$(dirname "$(command -v jq)")
   want=$(adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_win32_pane_bash')
   [ -n "$want" ] || fail "the bootstrap path probe returned nothing"
   # The WHOLE emitter, not just the key: an empty or truncated PROMPT_COMMAND
@@ -513,15 +546,20 @@ test_task_tab_create_bootstraps_git_bash_on_msys() {
   # .cwd, which is a 60-second spawn timeout naming the wrong cause.
   emitter=$(adapter "$fb" 'fm_backend_herdr_win32_pane_prompt_command')
   [ -n "$emitter" ] || fail "the emitter is empty"
+  # shellcheck disable=SC2016 # $1 and $2 belong to the snippet's own bash -c.
   FM_HERDR_LOG="$log" adapter "$fb" \
-    'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_task_tab_create fmtest w1 /c/Users/ebatt/proj fm-x' >/dev/null
+    'PATH="$1:/c/sentinel/tools:$2:/usr/bin:/bin"; FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_task_tab_create fmtest w1 /c/Users/ebatt/proj fm-x' \
+    "$fb" "$jqdir" >/dev/null
   assert_contains "$(cat "$log")" \
-    "${US}--label${US}fm-x${US}--env${US}SHELL=${want}${US}--env${US}PROMPT_COMMAND=${emitter}${US}--no-focus" \
-    "the Windows task tab create must carry SHELL and the COMPLETE OSC 9;9 emitter into the pane's environment"
+    "${US}--label${US}fm-x${US}--env${US}SHELL=${want}${US}--env${US}PROMPT_COMMAND=${emitter}${US}--env${US}FM_PANE_PATH=" \
+    "the Windows task tab create must carry SHELL, the COMPLETE OSC 9;9 emitter, and firstmate's PATH into the pane's environment"
+  assert_contains "$(cat "$log")" ';C:\sentinel\tools;' \
+    "the PATH handed to the pane must include a tool directory that only firstmate's own shell knows about"
+  # shellcheck disable=SC2016 # pwsh variables, asserted as the literal text the pane receives.
   assert_contains "$(cat "$log")" \
-    "${US}pane${US}run${US}w1:p2${US}& '${want}' --login" \
-    "the Windows pane's FIRST command must launch Git Bash by full path through pwsh's call operator"
-  pass "fm_backend_herdr_task_tab_create: an MSYS pane gets SHELL, the OSC 9;9 emitter, and a Git Bash first command"
+    "${US}pane${US}run${US}w1:p2${US}"'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '${want}' --login" \
+    "the Windows pane's FIRST command must adopt that PATH only when it was handed one, then launch Git Bash by full path"
+  pass "fm_backend_herdr_task_tab_create: an MSYS pane gets SHELL, the OSC 9;9 emitter, firstmate's PATH, and a Git Bash first command"
 }
 
 test_task_tab_create_never_bootstraps_a_pane_it_did_not_create() {
@@ -922,6 +960,8 @@ test_namespace_valid_still_refuses_another_owner
 test_mover_accepts_a_windows_socket_path_shape
 test_win32_pane_bash_is_absent_on_a_posix_host
 test_win32_pane_bash_names_this_shells_own_interpreter
+test_win32_pane_path_is_this_shells_own_path
+test_win32_pane_path_is_withheld_when_it_cannot_be_converted
 test_task_tab_create_posix_call_is_unchanged
 test_task_tab_create_bootstraps_git_bash_on_msys
 test_task_tab_create_never_bootstraps_a_pane_it_did_not_create
