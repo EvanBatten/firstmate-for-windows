@@ -56,6 +56,32 @@ make_tmux_stub() {  # <dir>
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+# The fake window inventory is keyed by session, exactly as tmux's own
+# list-windows -t is. fmses is the session every record in this file names, so
+# it keeps $D/windows; every other session - the one a fresh endpoint is
+# created in - gets its own file, created by new-session/new-window. A session
+# with no file does not exist and answers with tmux's own wording, which
+# fm_backend_tmux_agent_state reads as `missing`. Without this, one shared
+# inventory answered for every session, so a poll of a vanished endpoint found
+# the replacement's window and read `alive`. The only session spelling the code
+# under test sends is a bare name or a trailing-colon target.
+fake_ses_file() {  # <session-or-target>
+  local ses=${1%:}
+  if [ -z "$ses" ] || [ "$ses" = fmses ]; then
+    printf '%s\n' "$D/windows"
+  else
+    printf '%s\n' "$D/windows.$ses"
+  fi
+}
+fake_arg_after() {  # <flag> <args...>
+  local flag=$1 prev= a
+  shift
+  for a in "$@"; do
+    [ "$prev" != "$flag" ] || { printf '%s\n' "$a"; return 0; }
+    prev=$a
+  done
+  return 1
+}
 case "${1:-}" in
   send-keys)
     shift
@@ -83,6 +109,15 @@ case "${1:-}" in
     else
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
+        'cd '*)
+          # A real shell moves the pane; the fake pane path is where that is
+          # observable, so an explicit cd is the only thing that moves it.
+          # `treehouse get` deliberately does not, so a pane reaches the
+          # recorded worktree only down the path that cd's into it.
+          fake_cd=
+          eval "fake_cd=${payload#cd }" 2>/dev/null || fake_cd=
+          [ -z "$fake_cd" ] || [ ! -d "$fake_cd" ] || printf '%s' "$fake_cd" > "$D/cwd"
+          ;;
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
@@ -110,7 +145,27 @@ case "${1:-}" in
     done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
-  list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
+  has-session)
+    [ -f "$(fake_ses_file "$(fake_arg_after -t "$@" || true)")" ] || exit 1
+    exit 0 ;;
+  new-session)
+    : >> "$(fake_ses_file "$(fake_arg_after -s "$@" || true)")"
+    exit 0 ;;
+  list-windows)
+    ses=$(fake_arg_after -t "$@" || true)
+    f=$(fake_ses_file "$ses")
+    if [ ! -f "$f" ]; then
+      printf "can't find session: %s\n" "${ses%:}" >&2
+      exit 1
+    fi
+    cat "$f"
+    exit 0 ;;
+  new-window)
+    wname=$(fake_arg_after -n "$@" || true)
+    [ -z "$wname" ] || printf '%s\n' "$wname" >> "$(fake_ses_file "$(fake_arg_after -t "$@" || true)")"
+    printf '@1\n'
+    exit 0
+    ;;
 esac
 exit 0
 SH
@@ -1431,6 +1486,58 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding the work"
 }
 
+# --- 7. fm-spawn --relaunch: a vanished endpoint (issue #58) ----------------
+#
+# `dead` (the endpoint exists with no agent) has always had an owner: adopt
+# it. `missing` (the endpoint itself is gone) did not, so both fm-spawn
+# --relaunch and fm-control relaunch simply refused. These pin its owner: a
+# relaunch onto a REMOVED (not merely emptied) endpoint stands up a fresh one
+# in the SAME recorded worktree, never a second worktree, and the alive/
+# unattributed refusals above are untouched.
+
+test_spawn_relaunch_replaces_a_vanished_endpoint() {
+  local dir out rc new_window launches
+  dir=$(new_case vanished rl42)
+  add_ship_task "$dir" rl42 claude
+  : > "$dir/fake/windows"  # the window is gone, not merely emptied
+  # A freshly created window opens in the project, not the worktree: only an
+  # explicit cd into the recorded worktree can move it there. `treehouse get`
+  # would leave it in the project AND allocate a second worktree, which is the
+  # duplication this recovery path exists to prevent.
+  printf '%s' "$dir/proj" > "$dir/fake/cwd"
+  out=$(run_spawn "$dir" rl42 --relaunch --harness claude); rc=$?
+  expect_code 0 "$rc" "relaunching a vanished endpoint should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl42 worktree)" = "$dir/wt" ] \
+    || fail "the recorded worktree must be reused, not reallocated"
+  new_window=$(meta_field "$dir" rl42 window)
+  [ -n "$new_window" ] && [ "$new_window" != "fmses:fm-rl42" ] \
+    || fail "a fresh endpoint must be recorded in place of the vanished one, got '$new_window'"
+  launches=$(grep -c 'encode launch-brief' "$dir/fake/literal" 2>/dev/null || true)
+  [ "$launches" = 1 ] || fail "exactly one agent should have been launched, got $launches"
+  assert_grep "cd '$dir/wt'" "$dir/fake/keys" \
+    "the replacement must be sent into the recorded worktree by an explicit cd"
+  assert_no_grep 'treehouse get' "$dir/fake/keys" \
+    "treehouse get would allocate a second worktree and must never be sent on this path"
+  pass "fm-spawn --relaunch: a removed endpoint is replaced by a fresh one in the same worktree"
+}
+
+test_control_relaunch_reaches_the_replacement_on_a_vanished_endpoint() {
+  local dir out rc new_window
+  dir=$(new_case control-vanished rl43)
+  add_ship_task "$dir" rl43 claude
+  : > "$dir/fake/windows"  # the window is gone, not merely emptied
+  printf '%s' "$dir/proj" > "$dir/fake/cwd"
+  out=$(run_control "$dir" rl43 relaunch --note "picking this back up"); rc=$?
+  expect_code 0 "$rc" "fm-control relaunch on a vanished endpoint should reach the replacement launch"$'\n'"$out"
+  assert_contains "$out" "relaunched rl43 harness=claude" "the outcome should confirm the replacement launched"
+  new_window=$(meta_field "$dir" rl43 window)
+  [ -n "$new_window" ] && [ "$new_window" != "fmses:fm-rl43" ] \
+    || fail "a fresh endpoint must be recorded in place of the vanished one, got '$new_window'"
+  [ "$(meta_field "$dir" rl43 worktree)" = "$dir/wt" ] \
+    || fail "the worktree must be reused, not reallocated"
+  pass "fm-control relaunch: a vanished endpoint is routed into the replacement launch instead of dying on the way there"
+}
+
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it() {
   local dir out rc=0
   command -v tasks-axi >/dev/null 2>&1 || {
@@ -1515,5 +1622,7 @@ test_spawn_relaunch_refuses_a_pending_authoritative_close
 test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
+test_spawn_relaunch_replaces_a_vanished_endpoint
+test_control_relaunch_reaches_the_replacement_on_a_vanished_endpoint
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight

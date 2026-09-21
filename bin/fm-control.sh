@@ -31,10 +31,14 @@
 #              busy, then submits the harness's exit command. Postcondition:
 #              the backend's recovery-grade classifier reports the agent gone.
 #              Already-stopped is success (idempotent).
-#   relaunch   Transactionally replace the running agent with a new one, in the
-#              SAME endpoint and SAME worktree, on the same or a newly chosen
-#              harness/model/effort - so switching harness is one ordinary use
-#              of this verb. With no explicit axis, a secondmate re-resolves its
+#   relaunch   Transactionally replace the agent with a new one, in the SAME
+#              worktree and - when it still exists - the SAME endpoint; a
+#              vanished endpoint is replaced by a freshly created one for the
+#              same task, because there is nothing left to adopt and every
+#              other identity axis is still on record. Either shape runs on the
+#              same or a newly chosen harness/model/effort - so switching
+#              harness is one ordinary use of this verb.
+#              With no explicit axis, a secondmate re-resolves its
 #              durable config/secondmate-harness pin (harness plus its optional
 #              model and effort tokens) exactly as any other respawn does, while
 #              a ship or scout keeps the exact adapter already recorded for it.
@@ -458,7 +462,7 @@ do_exit() {
       return 0
       ;;
     alive) ;;
-    missing) die "task $ID's recorded endpoint is gone, so there is no agent to stop; reconcile the task before any further control action" ;;
+    missing) die "task $ID's recorded endpoint is gone, so there is no agent to stop" ;;
     *) die "task $ID's endpoint reads '$state' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint" ;;
   esac
   # A busy agent is interrupted first before the exit command is submitted.
@@ -827,7 +831,17 @@ do_relaunch() {
   journal_write noted "${CHECKPOINT_LINES[@]}" "$note_line"
 
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
-  exit_result=$(do_exit)
+  # A vanished endpoint (state: missing) has no agent to stop, which is exactly
+  # why it needs this path: do_exit's "missing" refusal exists for a bare exit
+  # or interrupt, where there is genuinely nothing to do, but a relaunch's next
+  # step is to stand up a replacement endpoint regardless, so skip straight to
+  # it instead of dying on the way there (issue #58).
+  if [ "$(agent_state)" = missing ]; then
+    retire_busy_incarnation
+    exit_result='endpoint already gone; nothing to stop'
+  else
+    exit_result=$(do_exit)
+  fi
   journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
@@ -845,6 +859,16 @@ do_relaunch() {
       || RELAUNCH_META_PUBLISHED=1
     die "the replacement agent for $ID could not be launched on $TARGET_HARNESS"
   fi
+
+  # Re-resolve the endpoint from the just-published record: an adopted endpoint
+  # keeps the same target, but a vanished one (state: missing) was just
+  # replaced by a freshly created one, and the wait below must poll the
+  # endpoint that actually exists now, not the vanished one this process
+  # started with (issue #58).
+  fm_backend_validate_task_endpoint "$META" "$ID" \
+    || die "task $ID's replacement record could not be read back after launch"
+  BACKEND=$FM_BACKEND_VALIDATED_BACKEND
+  T=$FM_BACKEND_VALIDATED_TARGET
 
   state=$(wait_agent_state "$LAUNCH_WAIT" alive) || {
     die "the replacement agent for $ID did not come up within ${LAUNCH_WAIT}s (endpoint reads '$state')"

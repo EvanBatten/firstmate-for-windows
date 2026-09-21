@@ -32,7 +32,7 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 | --- | --- | --- |
 | `interrupt` | Deliver the harness's verified interrupt sequence while leaving the agent running. | Delivery succeeds while the endpoint still exists and the agent is still alive where the backend can classify that; cancellation is confirmed only from an adapter-owned acknowledgement and otherwise reports `cancel=unconfirmed`. |
 | `exit` | Stop the agent, preserving the endpoint, the worktree, and every uncommitted change. | The backend's recovery-grade classifier reports the agent gone. Already-stopped is idempotent success. |
-| `relaunch` | Replace the running agent with a new one in the same endpoint and worktree, on the exact recorded adapter or an explicitly chosen harness, model, and effort. | The new agent is alive on the recorded endpoint, and the durable record names the harness that is actually running. |
+| `relaunch` | Replace the agent with a new one in the same worktree, on the exact recorded adapter or an explicitly chosen harness, model, and effort. The recorded endpoint is reused when it still exists; a vanished one is replaced by a freshly created endpoint for the same task. | The new agent is alive on the endpoint the durable record now names, and that record names the harness that is actually running. |
 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
 Interrupt never rewrites busy state as proof of its own success.
@@ -69,7 +69,10 @@ It is not deterministic across the verified adapters: codex and grok resume only
    A ship or scout relaunch requires `--note`, because the replacement inherits the local copy but none of the conversation; the note is appended to the instructions it reads.
    A secondmate relaunch does not require one and never rewrites its standing charter.
 4. **Stop the old agent** through the `exit` verb, with its postcondition.
-5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which adopts the recorded endpoint and worktree instead of creating either, clears the previous harness's per-task wiring, and arms a fresh busy generation.
+   A vanished endpoint is the one case that skips this step: there is no agent to stop and nothing to send a lifecycle command to, and the next step stands up a replacement regardless.
+   `exit` and `interrupt` on their own still refuse a vanished endpoint, because for them there is no next step that could make it right.
+5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which keeps the recorded worktree instead of acquiring one, adopts the recorded endpoint when it still exists and creates a fresh one for the same task only when the recorded one has vanished, clears the previous harness's per-task wiring, and arms a fresh busy generation.
+   A fresh endpoint keeps every recorded identity axis - task id, worktree, harness, kind, mode, project, and brief - and the replacement enters the recorded worktree directly, never acquiring a second one.
 
 Switching harness is therefore one ordinary relaunch rather than a separate mechanism.
 
@@ -98,7 +101,13 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
   zellij, orca, and cmux are refused rather than reported as successful blind.
 - An ambiguous or unreadable endpoint state refuses.
   Only a positively classified state acts.
-- `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free and its shell is sitting in the recorded worktree, so a replacement can never join a live agent or start outside the copy holding the work.
+- `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free or positively gone, so a replacement can never join a live agent.
+  A vanished endpoint is the only state that licenses creating a new one, because an endpoint that no longer exists cannot be holding an agent; an alive, unattributed, ambiguous, or unreadable state refuses exactly as before.
+  It then refuses again unless the endpoint it is about to launch into is proven to be sitting in the recorded worktree, so a replacement can never start outside the copy holding the work.
+  The stricter check that follows - that the recorded worktree is an isolated worktree root rather than the primary checkout - is skipped for a secondmate, whose worktree is its own home.
+- Removing an endpoint a failed relaunch created is best-effort, not guaranteed.
+  When the replacement record was never published, the launch owner asks the backend to remove the endpoint it just created, so a retry usually meets the same vanished endpoint this attempt did rather than a name the backend now refuses.
+  A removal the launch owner can see fail is reported as a warning naming the endpoint to remove by hand, and herdr's own refusal to close a pane without its session presentation lock is reported by that backend while the pane stays.
 
 ## Capability matrix
 
@@ -118,5 +127,5 @@ The empirical basis for each adapter's value is the `harness-adapters` skill's v
 ## Verification
 
 - `tests/fm-control.test.sh` - the adapter contract for every verified harness, the backend capability matrix, exact-id scoping, the closed verb list, the busy, idle, dead, and idempotent lifecycle cases, and marker non-regression, all against a stubbed session provider.
-- `tests/fm-control-relaunch.test.sh` - the relaunch transaction: identity preservation, harness switching, the progress note, checkpoint refusals, and rollback after a failed launch.
+- `tests/fm-control-relaunch.test.sh` - the relaunch transaction: identity preservation, harness switching, the progress note, checkpoint refusals, rollback after a failed launch, and recovery of a task whose recorded endpoint has vanished.
 - `tests/fm-control-herdr-smoke.test.sh` - the second state-verified backend against the real herdr binary, on an isolated throwaway lab session.
