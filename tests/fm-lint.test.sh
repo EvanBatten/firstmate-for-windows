@@ -246,13 +246,22 @@ case "$*" in
     printf '%s\n' "${FM_TEST_GIT_BRANCH:-feature}"
     exit 0
     ;;
+  "symbolic-ref --short -q refs/remotes/origin/HEAD")
+    [ -n "${FM_TEST_GIT_ORIGIN_HEAD:-}" ] || exit 1
+    printf '%s\n' "$FM_TEST_GIT_ORIGIN_HEAD"
+    exit 0
+    ;;
   "rev-parse --verify -q origin/main")
     [ "${FM_TEST_GIT_HAS_ORIGIN_MAIN:-1}" = 1 ] && exit 0 || exit 1
+    ;;
+  "rev-parse --verify -q ${FM_TEST_GIT_ORIGIN_HEAD:-origin/unset}")
+    exit 0
     ;;
   "rev-parse --verify -q main")
     [ "${FM_TEST_GIT_HAS_MAIN:-1}" = 1 ] && exit 0 || exit 1
     ;;
   "merge-base "*)
+    [ -z "${FM_TEST_GIT_MERGE_BASE_LOG:-}" ] || printf '%s\n' "$2" >> "$FM_TEST_GIT_MERGE_BASE_LOG"
     if [ "${FM_TEST_GIT_MERGE_BASE_OK:-1}" = 1 ]; then
       printf '%s\n' "${FM_TEST_GIT_MERGE_BASE:-fakebase123}"
       exit 0
@@ -454,6 +463,42 @@ test_main_branch_forces_full_lint() {
   [ "$(printf '%s\n' "$listed" | LC_ALL=C sort)" = "$expected" ] \
     || fail "fm-lint.sh did not force a full lint when HEAD is on main"
   pass "fm-lint.sh forces a full lint when HEAD is on main"
+}
+
+test_changed_mode_compares_with_the_default_branch() {
+  local tmp fakebin log diff_file base_log out
+  tmp=$(fm_test_tmproot fm-lint-default-branch)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  log="$tmp/shellcheck.log"; base_log="$tmp/merge-base.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  fm_lint_write_diff_file "$diff_file" "bin/fm-install-shellcheck.sh"
+
+  # A fork whose default branch is not main still has an origin/main, far
+  # behind. The branch must be compared with the default branch, not with it.
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+    FM_TEST_GIT_BRANCH=feature FM_TEST_GIT_ORIGIN_HEAD=origin/windows \
+    FM_TEST_GIT_MERGE_BASE_LOG="$base_log" \
+    FM_TEST_GIT_DIFF_FILE="$diff_file" "$LINT" 2>&1) \
+    || fail "changed-mode lint run failed"$'\n'"$out"
+  [ "$(cat "$base_log")" = origin/windows ] \
+    || fail "the branch was compared with '$(cat "$base_log")', not with the repository's default branch"
+  pass "fm-lint.sh compares a branch with the repository's default branch when the clone records one"
+}
+
+test_default_branch_forces_full_lint() {
+  local tmp fakebin listed expected
+  tmp=$(fm_test_tmproot fm-lint-default-full)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+
+  listed=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' \
+    FM_TEST_GIT_BRANCH=windows FM_TEST_GIT_ORIGIN_HEAD=origin/windows "$LINT" --list-files)
+  expected=$(find bin bin/backends tests -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
+  [ "$(printf '%s\n' "$listed" | LC_ALL=C sort)" = "$expected" ] \
+    || fail "fm-lint.sh did not force a full lint when HEAD is on the default branch"
+  pass "fm-lint.sh forces a full lint when HEAD is on the repository's default branch"
 }
 
 test_explicit_path_bypasses_changed_logic() {
@@ -1093,6 +1138,8 @@ test_seeded_module_boundary_parity
 test_changed_mode_lints_only_the_changed_file
 test_ci_forces_full_lint_even_with_empty_diff
 test_main_branch_forces_full_lint
+test_changed_mode_compares_with_the_default_branch
+test_default_branch_forces_full_lint
 test_explicit_path_bypasses_changed_logic
 test_zero_changed_files_exits_clean
 test_list_files_respects_changed_mode

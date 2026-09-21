@@ -1,0 +1,11 @@
+# The files that define what the check enforces. A change to any of them is a
+# change to the gate itself and needs the owner's review.
+/bin/fm-check.sh              @EvanBatten
+/bin/fm-lint.sh               @EvanBatten
+/bin/fm-lint-workflows.sh     @EvanBatten
+/bin/fm-repo-invariants.sh    @EvanBatten
+/bin/fm-doc-audience-check.sh @EvanBatten
+/bin/fm-test-run.sh           @EvanBatten
+/docs/documentation-audiences.json @EvanBatten
+/.githooks/                   @EvanBatten
+/.github/                     @EvanBatten

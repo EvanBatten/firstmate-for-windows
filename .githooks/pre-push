@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Run the repository's check before anything leaves this machine.
+# Enable once per clone with: bin/fm-check.sh --install-hook
+exec "$(git rev-parse --show-toplevel)/bin/fm-check.sh"

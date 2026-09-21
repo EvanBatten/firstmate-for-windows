@@ -40,7 +40,11 @@ jobs:
       # extended-analysis directive, would buy speed by giving up ShellCheck's
       # flow analysis on another file, and a green gate is worth more here than
       # ten minutes. See docs/windows/measurement.md, "Linux baseline".
-      - run: bin/fm-lint.sh
+      # bin/fm-check.sh is the one command CI and the tracked pre-push hook both
+      # call. It runs the cheap layers first (shell syntax, the documentation
+      # inventory) and then this same bin/fm-lint.sh, so nothing below changes
+      # about the lint itself.
+      - run: bin/fm-check.sh
         env:
           FM_LINT_JOBS: 1
 
