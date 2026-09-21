@@ -253,6 +253,14 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/condition-watch.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/herdr-lab-pane.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/local-only-landing.md",
       "audience": "agent-runtime"
     },
@@ -262,6 +270,14 @@
     },
     {
       "path": ".agents/skills/verify-firstmate/features/secondmate-home.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/steer-guard.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/vanished-endpoint-recovery.md",
       "audience": "agent-runtime"
     },
     {

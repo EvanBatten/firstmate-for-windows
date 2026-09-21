@@ -48,7 +48,11 @@ Name only user paths, stable handles, required state, commands, and observable p
 - [Captain decision](./captain-decision.md) covers a question that waits on the captain: carried by a real work item and closed only by his recorded words.
 - [Local-only landing](./local-only-landing.md) covers approved local work: landed by fast-forward, and refused when the branch has diverged.
 - [Real session](./real-session.md) covers the whole loop with a real worker: spawn into a visible tab, isolated work, a checked result, landing, and cleanup; it is opt-in because it spends tokens.
+- [Condition watch](./condition-watch.md) covers "do X as soon as Y is true": armed, held until the condition holds, fired, reported, and retired.
+- [Steer guard](./steer-guard.md) covers the two refusals that keep an instruction out of the wrong home.
+- [Herdr lab pane](./herdr-lab-pane.md) covers the shell a worker pane runs: a pane made the production way runs what firstmate types, and a plain pane does not.
+- [Vanished endpoint recovery](./vanished-endpoint-recovery.md) covers getting a worker back after its window disappeared, without losing its work.
 - [Second mate home](./secondmate-home.md) covers provisioning: identity, owner, charter, routing entry, and working skills.
 
-Four more features have a script and no feature file yet: `condition-watch`, `steer-guard`, `herdr-lab-pane`, and `vanished-endpoint-recovery`.
-The coverage table in [`tests/verification/README.md`](../../../../tests/verification/README.md) says what each one answers; write its feature file before relying on it as proof of a change.
+Every verification script has a feature file here and every feature file has a script.
+The doctor checks that, so a script added without its feature file makes the checkout not worth driving until the map is whole again.

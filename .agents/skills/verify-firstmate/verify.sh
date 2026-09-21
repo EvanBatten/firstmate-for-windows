@@ -53,7 +53,7 @@ d_warn() { printf 'warn - %s\n' "$1"; }
 d_bad()  { printf 'not ok - %s\n' "$1"; DOCTOR_BAD=$((DOCTOR_BAD + 1)); }
 
 cmd_doctor() {
-  local tool dirty tmp var leaked=
+  local tool dirty tmp var f b leaked=
   DOCTOR_BAD=0
 
   if [ -f "$SUITE/run.sh" ] && [ -f "$SUITE/lib.sh" ] && [ -d "$ROOT/bin" ]; then
@@ -66,6 +66,22 @@ cmd_doctor() {
     d_warn "this is the primary checkout: driving it is safe, changing code in it is not"
   else
     d_ok "this is a linked worktree"
+  fi
+
+  # The feature map is the recipe for every drive, so a script with no feature
+  # file, or a feature file with no script, is a hole in the proof.
+  local mapped scripted unmapped
+  mapped=$(for f in "$HERE"/features/*.md; do b=$(basename "$f" .md); [ "$b" = README ] || printf '%s
+' "$b"; done | LC_ALL=C sort)
+  scripted=$(features | LC_ALL=C sort)
+  if [ "$mapped" = "$scripted" ]; then
+    d_ok "every verification script has a feature file, and every feature file a script"
+  else
+    unmapped=$(printf '%s
+%s
+' "$mapped" "$scripted" | LC_ALL=C sort | uniq -u | tr '
+' ' ')
+    d_bad "the feature map and the scripts disagree about: $unmapped"
   fi
 
   dirty=$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')

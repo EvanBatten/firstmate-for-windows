@@ -86,9 +86,11 @@ ${TMPDIR:-/tmp}/fm-verification-artifacts/<worktree name>-<path checksum>/<UTC t
   run.log                     everything the run printed
   <feature>/transcript.txt    each claim the script checked, and the commit it ran against
   <feature>/<kept file>       any record the script chose to keep
+  <feature>/drive.mkv         a screen recording of the drive, only with VERIFY_RECORD=1
 ```
 
 `VERIFY_EVIDENCE_ROOT` moves the root.
+`VERIFY_RECORD=1` records the whole desktop for the length of each drive, on Windows with `ffmpeg` installed; it shows whatever is on screen, so it adds something only for a drive that opens panes, and the transcript stays the proof.
 The directory sits outside every worktree, so it survives the cleanup of the worktree that produced it.
 
 A proof meets these standards.
