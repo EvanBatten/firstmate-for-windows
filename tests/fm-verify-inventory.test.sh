@@ -146,6 +146,25 @@ test_doctor_refuses_a_missing_feature_row() {
   pass "verify.sh doctor refuses a checkout whose inventory is missing a feature row"
 }
 
+test_runner_reports_passed_skipped_and_failed() {
+  local fix out rc
+  fix=$(fm_verify_fixture)
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$fix/tests/verification/status-pass.verify.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 77' > "$fix/tests/verification/status-skip.verify.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$fix/tests/verification/status-fail.verify.sh"
+  out=$(bash "$fix/tests/verification/run.sh" status-pass status-skip status-fail); rc=$?
+  expect_code 1 "$rc" "one failed script must make the runner exit 1"
+  assert_contains "$out" "result: status-pass passed" \
+    "a script that exits 0 must be reported as passed"
+  assert_contains "$out" "result: status-skip skipped" \
+    "a script that exits 77 must be reported as skipped"
+  assert_contains "$out" "result: status-fail failed" \
+    "a script that exits 1 must be reported as failed"
+  assert_contains "$out" "verification: 1 passed, 1 failed, 1 skipped" \
+    "the summary must count one of each outcome"
+  pass "the verification runner reports passed, skipped, and failed from the child's own status"
+}
+
 
 test_check_refuses_a_row_proven_by_a_drive() {
   local fix tsv out rc
@@ -172,3 +191,4 @@ test_check_refuses_a_row_proven_by_a_drive
 test_verdict_counts_a_pass_only_for_a_proven_row
 test_verdict_never_counts_a_skip_as_proven
 test_doctor_refuses_a_missing_feature_row
+test_runner_reports_passed_skipped_and_failed
