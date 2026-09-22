@@ -25,8 +25,8 @@ for s in $scripts; do
   name=$(basename "$s" .verify.sh)
   printf '\n=== %s\n' "$name"
   bash "$s"
-  outcome=
-  case "$?" in
+  status=$?
+  case "$status" in
     0)  passed=$((passed + 1));  outcome=passed ;;
     77) skipped=$((skipped + 1)); outcome=skipped ;;
     *)  failed=$((failed + 1));  outcome=failed ;;
