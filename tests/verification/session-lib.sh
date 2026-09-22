@@ -302,17 +302,31 @@ session_task_tabs() {
     awk -F'\t' -v ids="$ids" 'BEGIN{n=split(ids,a," "); for(i=1;i<=n;i++) want["fm-" a[i]]=1} want[$2]'
 }
 
+# session_lock_debris: owner directories no live lock points to, owner
+# directories whose recorded pid is dead, and dangling lock links. A held
+# lock's owner directory is not debris while its watcher lives.
+session_lock_debris() {
+  local state="$SESSION_HOME/state" d lock pid
+  for d in "$state"/*.lock.owner.* "$state"/.*.lock.owner.*; do
+    [ -d "$d" ] || continue
+    lock=${d%.owner.*}
+    pid=$(cat "$d/pid" 2>/dev/null)
+    if [ -L "$lock" ] && [ "$lock" -ef "$d" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then continue; fi
+    basename "$d"
+  done
+  find "$state" -maxdepth 1 -name '*.lock' -xtype l 2>/dev/null | sed 's|.*/||'
+}
+
 session_health() {
-  local state="$SESSION_HOME/state" n list rows metas stale tabs
+  local state="$SESSION_HOME/state" n list rows metas stale tabs debris
   n=$(find "$state" -maxdepth 1 -name '*.steal*' 2>/dev/null | wc -l | tr -d ' ')
   if [ "$n" -eq 0 ]; then ok "the home has no lock takeover chain"; else
     list=$(find "$state" -maxdepth 1 -name '*.steal*' | sed 's|.*/||' | head -3 | tr '\n' ' ')
     bad "the home holds $n lock takeover entries: $list"
   fi
-  n=$(find "$state" -maxdepth 1 \( -name '*.lock.owner.*' -o \( -name '*.lock' -xtype l \) \) 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$n" -eq 0 ]; then ok "no lock owner is left behind"; else
-    list=$(find "$state" -maxdepth 1 \( -name '*.lock.owner.*' -o \( -name '*.lock' -xtype l \) \) | sed 's|.*/||' | head -3 | tr '\n' ' ')
-    bad "$n lock owner(s) left behind: $list"
+  debris=$(session_lock_debris | tr '\n' ' ')
+  if [ -z "$debris" ]; then ok "no lock owner is left behind"; else
+    bad "lock owners left behind: $debris"
   fi
   rows=$(grep -c . "$state/.wake-queue" 2>/dev/null || true); rows=${rows:-0}
   if [ "$rows" -eq 0 ]; then ok "the notification queue is empty and acknowledged"; else
