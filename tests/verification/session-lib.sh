@@ -34,6 +34,11 @@ SESSION_TICKS="$VERIFY_ARTIFACT_RUN/ticks.tsv"
 SESSION_TASK_IDS="$VERIFY_ARTIFACT_RUN/task-ids.txt"
 SESSION_CAPTAIN_LOG="$VERIFY_ARTIFACT_RUN/captain.log"
 
+# session_scratch: the bare scratch directory a session and its project share.
+session_scratch() {
+  VERIFY_TMP=${VERIFY_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-$VERIFY_NAME.XXXXXX")}
+}
+
 session_require() {
   local tool
   [ "${VERIFY_REAL_SESSION:-}" = 1 ] ||
@@ -222,7 +227,7 @@ session_start() {  # <workspace label>
   # A session gets a bare scratch directory, never verify_home's empty
   # firstmate-shaped home: a primary that finds one beside its clone may
   # adopt it as FM_HOME, and every record then lands where no claim looks.
-  VERIFY_TMP=${VERIFY_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-$VERIFY_NAME.XXXXXX")}
+  session_scratch
   [ ! -d "$VERIFY_TMP/home" ] || { bad "the scratch directory holds a home/ directory; a session must not be started after verify_home"; verify_done; }
   mkdir -p "$VERIFY_ARTIFACT_RUN/panes" "$VERIFY_ARTIFACT_RUN/records"
   printf 'ts\tmetas\tbeacon_age\tprimary\n' > "$SESSION_TICKS"
@@ -258,6 +263,11 @@ session_wait() {
       bad "$claim: the primary exited first. Its pane last showed: $(session_last_lines)"
       return 1
     fi
+    if [ "$(session_agent_status)" = blocked ]; then
+      session_snapshot blocked
+      bad "$claim: the primary stopped to ask the captain a question. Its pane shows: $(session_last_lines)"
+      return 1
+    fi
     sleep 5
   done
   session_snapshot timeout
@@ -265,8 +275,9 @@ session_wait() {
   return 1
 }
 
-# Herdr reports a finished turn as done and a fresh pane as idle; both mean
-# the primary is waiting for input.
+# Herdr reports a finished turn as done, a fresh pane as idle, and a turn
+# parked on a question as blocked; the first two mean the primary is waiting
+# for input, the third means it is waiting for an answer.
 session_idle() { case "$(session_agent_status)" in idle|done) return 0 ;; esac; return 1; }
 
 session_task_ids() { find "$SESSION_HOME/state" -maxdepth 1 -name "*.meta" 2>/dev/null | sed "s|.*/||; s|.meta$||"; }
@@ -387,6 +398,7 @@ session_finish() {
 PROJECT_ORIGIN=
 PROJECT_BASE=
 project_seed() {
+  session_scratch
   local name=$1 seed="$VERIFY_TMP/$1-seed"
   PROJECT_ORIGIN="$VERIFY_TMP/$name.git"
   git init -q --bare -b main "$PROJECT_ORIGIN"
