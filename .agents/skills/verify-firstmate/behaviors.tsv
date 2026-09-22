@@ -1,7 +1,7 @@
 id	source	behavior	status	ref	evidence
-readme-one-liaison	readme:features	You talk only to the first mate, which dispatches, supervises, and brings you only the decisions that are yours.	unproven	#83	
-readme-visible-crew	readme:features	Each crewmate works in its own visible tab you can watch or type into.	unproven	#83	
-readme-disposable-worktrees	readme:features	Each task runs in a clean, disposable worktree, so parallel work on one repo never collides.	unproven	#92	
+readme-one-liaison	readme:features	You talk only to the first mate, which dispatches, supervises, and brings you only the decisions that are yours.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt
+readme-visible-crew	readme:features	Each crewmate works in its own visible tab you can watch or type into.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt
+readme-disposable-worktrees	readme:features	Each task runs in a clean, disposable worktree, so parallel work on one repo never collides.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt
 readme-ship-and-scout	readme:features	Ship tasks deliver authorized changes, and scout tasks leave standalone investigation reports.	unproven	#88	
 readme-project-modes	readme:features	Each project ships through no-mistakes, direct-PR or local-only, with an optional yolo merge flag.	unproven	#84	
 readme-second-mates	readme:features	Second mates are optional persistent helpers that run from isolated homes with their own state, projects and session lock, locally or remotely.	unproven	#89	
@@ -156,4 +156,5 @@ fm-remote-job-reap-orphans	bin:fm-remote-job-reap-orphans.sh	Reaps remote job wo
 fm-remote-job-worker	bin:fm-remote-job-worker.sh	Runs the long-lived per-account worker that services remote secondmate commands.	blocked-here	#97	
 fm-remote-secondmate-control	bin:fm-remote-secondmate-control.sh	Controls a remote secondmate's lifecycle, launch and state, from the host side.	blocked-here	#97	
 fm-on	bin:fm-on.sh	Executes one tracked firstmate command inside a remote secondmate's home over SSH.	blocked-here	#97	
-feature-lock-home-spelling	feature:lock-home-spelling	A home reached by two spellings of its path is one home to every record lock: the command completes, the lock is released, and no takeover chain grows.	unproven	#98	
+feature-lock-home-spelling	feature:lock-home-spelling	A home reached by two spellings of its path is one home to every record lock: the command completes, the lock is released, and no takeover chain grows.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt
+feature-ship-three-parallel	feature:ship-three-parallel	One request for three changes becomes three workers in their own tabs and copies, three landings on main, cleanup, and a healthy home, judged from records of a real session.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt

@@ -102,6 +102,9 @@ cmd_check() {
       proven)
         [ -f "$SUITE/$ref.verify.sh" ] \
           || n_bad "row '$id' is proven but ref '$ref' names no tests/verification/$ref.verify.sh"
+        # A drive plays firstmate; only a real session proves a behavior.
+        [ ! -f "$SUITE/$ref.verify.sh" ] || grep -q "session-lib.sh" "$SUITE/$ref.verify.sh" \
+          || n_bad "row '$id' is proven by '$ref', which drives scripts itself instead of running a session; only a session script proves a behavior"
         ;;
       unproven | broken)
         case "$ref" in

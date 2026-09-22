@@ -277,6 +277,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/ship-three-parallel.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/steer-guard.md",
       "audience": "agent-runtime"
     },
