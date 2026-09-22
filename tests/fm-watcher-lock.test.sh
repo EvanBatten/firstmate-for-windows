@@ -262,7 +262,6 @@ wait_for_absence() {
 }
 
 if mkdir "$FM_TEST_GATE/first" 2>/dev/null; then
-  : > "$FM_TEST_GATE/first-ready"
   wait_for_path "$FM_TEST_GATE/second-ready" || exit 90
   "$FM_TEST_REAL_LN" "$@" || exit $?
   : > "$FM_TEST_GATE/published"
@@ -274,7 +273,6 @@ fi
 wait_for_path "$FM_TEST_GATE/published" || exit 92
 "$FM_TEST_REAL_LN" "$@"
 rc=$?
-printf '%s\n' "$rc" > "$FM_TEST_GATE/loser-ln-status"
 : > "$FM_TEST_GATE/loser-attempted"
 if [ "$rc" -eq 0 ]; then
   wait_for_absence "$FM_TEST_LOCK" || exit 93

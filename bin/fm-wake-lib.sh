@@ -759,8 +759,6 @@ fm_lock_discard_owner() {
   [ -n "$ownerdir" ] || return 0
   [ -d "$ownerdir" ] && [ ! -L "$ownerdir" ] || return 0
   fm_lock_clean_known_files "$ownerdir"
-  # A contender can race publication and deposit its owner symlink here.
-  # Remove direct symlink children only; never recurse through an owner path.
   for child in "$ownerdir"/* "$ownerdir"/.[!.]* "$ownerdir"/..?*; do
     [ -L "$child" ] && rm -f "$child" 2>/dev/null
   done
