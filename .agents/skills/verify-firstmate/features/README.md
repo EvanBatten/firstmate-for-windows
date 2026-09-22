@@ -50,8 +50,11 @@ Name only user paths, stable handles, required state, commands, and observable p
 - [Captain decision](./captain-decision.md) covers a question that waits on the captain: carried by a real work item and closed only by his recorded words.
 - [Local-only landing](./local-only-landing.md) covers approved local work: landed by fast-forward, and refused when the branch has diverged.
 - [Real session](./real-session.md) covers the whole loop with a real worker: spawn into a visible tab, isolated work, a checked result, landing, and cleanup; it is opt-in because it spends tokens.
+- [Restart is a non-event](./restart-primary.md) covers a new session in the same home with a worker in flight: it takes the lock, finds the worker from the records, lands its work and cleans up, as a real session.
+- [Scout, report, promote](./scout-report.md) covers an investigation that leaves a report without touching the project, promotion of the same task to build the authorized change, and a report that survives cleanup, as a real session.
 - [Condition watch](./condition-watch.md) covers "do X as soon as Y is true": armed, held until the condition holds, fired, reported, and retired.
 - [Steer guard](./steer-guard.md) covers the two refusals that keep an instruction out of the wrong home.
+- [Steer a worker, refuse an early cleanup, land on the captain's word](./steer-worker.md) covers a mid-task instruction reaching the worker as a durable record, cleanup refusing unlanded work, and landing on the captain's word, as a real session.
 - [Supervision wakes](./supervision-wakes.md) covers low-token supervision as a real session: the primary ends its turn with a worker in flight, the watcher takes over, and the worker's done line wakes the primary to land the work.
 - [Herdr lab pane](./herdr-lab-pane.md) covers the shell a worker pane runs: a pane made the production way runs what firstmate types, and a plain pane does not.
 - [One home, two spellings](./lock-home-spelling.md) covers a home reached by two spellings of its path: every record lock under `state/` treats them as one home, completes, releases, and never grows a takeover chain.

@@ -34,6 +34,7 @@ Run them by hand before trusting an installation, after a platform change, and w
 | `captain-decision` | A question for the captain is carried by a real work item until his own words close it |
 | `condition-watch` | "Do X as soon as Y is true" fires its action and tells firstmate |
 | `steer-guard` | An instruction is never delivered to a worker in the wrong home |
+| `steer-worker` | A mid-task instruction reaches the worker as a durable inbox record it acknowledges and that shows in its commit, cleanup refuses unlanded work, and the change lands on the captain's word; a session, opt-in with `VERIFY_REAL_SESSION=1` |
 | `supervision-wakes` | With a worker in flight the primary ends its turn, the watcher takes over with a fresh beacon, and the done line wakes the primary to land the work; a session, opt-in with `VERIFY_REAL_SESSION=1` |
 | `local-only-landing` | Approved local work lands by fast-forward, and a diverged branch is refused |
 | `secondmate-home` | A provisioned second mate home has its identity, charter, routing entry, and working skills |
@@ -41,6 +42,8 @@ Run them by hand before trusting an installation, after a platform change, and w
 | `lock-home-spelling` | A home reached by two spellings of its path is one home to every record lock: the command completes, the lock is released, and no takeover chain grows (#82) |
 | `vanished-endpoint-recovery` | A task whose endpoint disappeared can still be recovered, and its work survives either way |
 | `real-session` | The whole loop with a real worker: a spawn opens a visible Herdr tab, the worker builds a task in its own isolated copy, the result is checked, lands, and is cleaned up. Opt-in with `VERIFY_REAL_SESSION=1`, because it spends tokens |
+| `restart-primary` | With a worker in flight the primary exits and a new one starts in the same home, takes the lock under its own identity, lands the worker's change and cleans up; a session, opt-in with `VERIFY_REAL_SESSION=1` |
+| `scout-report` | A scout answers the captain's question in data/<id>/report.md without touching the project, the same task is promoted to build the authorized change, and the report survives cleanup; a session, opt-in with `VERIFY_REAL_SESSION=1` |
 | `ship-three-parallel` | A real firstmate primary in a fresh home takes one request for three changes, dispatches three workers into their own tabs and isolated copies, lands all three on main and cleans up, judged from records; a session, opt-in with `VERIFY_REAL_SESSION=1` |
 
 Three of these carry a defect that already bit us. `wake-queue` covers the temp files a drain used to abandon (#59) and `secondmate-home` the skills a mate used to be silently provisioned without (#60), both now fixed. `vanished-endpoint-recovery` reproduces #58 and is the acceptance check for its fix: it fails on the code before the fix with the deadlock in its own words, and passes after.

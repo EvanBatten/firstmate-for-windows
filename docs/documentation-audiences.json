@@ -273,6 +273,14 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/restart-primary.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/scout-report.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/secondmate-home.md",
       "audience": "agent-runtime"
     },
@@ -282,6 +290,10 @@
     },
     {
       "path": ".agents/skills/verify-firstmate/features/steer-guard.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/verify-firstmate/features/steer-worker.md",
       "audience": "agent-runtime"
     },
     {
