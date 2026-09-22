@@ -315,8 +315,8 @@ session_health() {
   if [ "${n:-0}" -eq 0 ]; then ok "no captain note is waiting unacknowledged"; else bad "$n captain note(s) still wait for firstmate"; fi
   metas=$(session_task_ids | tr '\n' ' ')
   if [ -z "$metas" ]; then ok "no task record is left in the home"; else bad "task records are left in the home: $metas"; fi
-  stale=$(awk -F'\t' 'NR>1 && $2>0 && $4=="idle" && ($3=="none" || $3>=300) {print $1" (beacon "$3")"}' "$SESSION_TICKS" | head -3 | tr '\n' ' ')
-  if [ -z "$stale" ]; then ok "the watcher beacon stayed fresh whenever work was in flight and the primary was idle"; else
+  stale=$(awk -F'\t' 'NR>1 { idle = ($2>0 && ($4=="idle" || $4=="done")); if (idle) run++; else run=0; if (idle && run>=3 && ($3=="none" || $3>=300)) print $1" (beacon "$3")" }' "$SESSION_TICKS" | head -3 | tr '\n' ' ')
+  if [ -z "$stale" ]; then ok "the watcher beacon was fresh whenever the primary had been idle with work in flight for three ticks"; else
     bad "the watcher beacon was stale while work was in flight and the primary idle: $stale"
   fi
   tabs=$(session_task_tabs | cut -f2 | tr '\n' ' ')

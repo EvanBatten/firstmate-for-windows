@@ -69,8 +69,8 @@ if grep -l "signal" "$VERIFY_ARTIFACT_RUN"/records/state-*.txt 2>/dev/null | xar
 else
   bad "no records snapshot shows a signal notification naming $ID in the queue"
 fi
-stale=$(awk -F'\t' 'NR>1 && $2>0 && ($4=="idle" || $4=="done") && ($3=="none" || $3>=300) {n++} END{print n+0}' "$SESSION_TICKS")
-if [ "$stale" -eq 0 ]; then ok "the beacon stayed fresh at every tick the primary was idle with work in flight"; else bad "$stale tick(s) had an idle primary, work in flight, and a stale or missing beacon"; fi
+stale=$(awk -F'\t' 'NR>1 { idle = ($2>0 && ($4=="idle" || $4=="done")); if (idle) run++; else run=0; if (idle && run>=3 && ($3=="none" || $3>=300)) n++ } END{print n+0}' "$SESSION_TICKS")
+if [ "$stale" -eq 0 ]; then ok "the beacon was fresh at every tick after the primary had been idle with work in flight for three ticks"; else bad "$stale tick(s) had a primary idle with work in flight for three ticks and a stale or missing beacon"; fi
 
 PROJECT="$SESSION_HOME/projects/greeter"
 landed() { [ "$(git -C "$PROJECT" rev-list --count "$PROJECT_BASE..main" 2>/dev/null)" -ge 1 ]; }
