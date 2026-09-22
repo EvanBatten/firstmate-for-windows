@@ -277,6 +277,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/scout-report.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/secondmate-home.md",
       "audience": "agent-runtime"
     },
