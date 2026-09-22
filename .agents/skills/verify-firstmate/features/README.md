@@ -2,7 +2,7 @@
 
 This directory is the maintained source for the scripts that drive part of what firstmate does for the captain, real `bin/` calls against a real throwaway home.
 It is not the full account of what is proven.
-[`../behaviors.tsv`](../behaviors.tsv) is the one table that counts every behavior the product claims, this directory's ten features included, and says which are proven, unproven, broken, or blocked on this machine.
+[`../behaviors.tsv`](../behaviors.tsv) is the one table that counts every behavior the product claims, this directory's sixteen features included, and says which are proven, unproven, broken, or blocked on this machine.
 Read this index before driving anything, then use the matching feature file as the recipe.
 
 ## Baseline preconditions

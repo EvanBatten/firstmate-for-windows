@@ -32,6 +32,6 @@ Preconditions:
 ## Gotchas
 
 - This proves the two refusals only.
-  An accepted text steer, its durable inbox record, and the worker's acknowledgement are not proved by any script yet; [Real session](./real-session.md) sends keys, not text.
+  An accepted text steer, its durable inbox record, and the worker's acknowledgement are proved by [Steer a worker...](./steer-worker.md).
 - The first drive removes `FM_HOME` from the environment on purpose.
   Running the same command from a shell that exports `FM_HOME` proves nothing about the refusal.
