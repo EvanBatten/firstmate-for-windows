@@ -11,7 +11,7 @@ set -u
 WATCH="$ROOT/bin/fm-watch.sh"
 WATCH_ARM="$ROOT/bin/fm-watch-arm.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
-LIB=${FM_TEST_WAKE_LIB:-"$ROOT/bin/fm-wake-lib.sh"}
+LIB="$ROOT/bin/fm-wake-lib.sh"
 
 # An arm only reports its typed failure after wait_for_healthy_successor has
 # spent the whole confirmation budget, so cases that wait for that failure must
@@ -1942,7 +1942,6 @@ test_msys_pid_identity_uses_proc() {
 
 test_lock_takeover_removes_a_contender_deposit
 test_lock_losing_publish_leaves_no_owner_debris
-[ "${FM_TEST_LOCK_RACE_ONLY:-0}" != 1 ] || exit 0
 test_singleton_start
 test_pid_identity_is_locale_invariant
 test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
