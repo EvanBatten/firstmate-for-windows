@@ -35,6 +35,7 @@ Run them by hand before trusting an installation, after a platform change, and w
 | `local-only-landing` | Approved local work lands by fast-forward, and a diverged branch is refused |
 | `secondmate-home` | A provisioned second mate home has its identity, charter, routing entry, and working skills |
 | `herdr-lab-pane` | A pane firstmate is about to drive runs a shell firstmate can drive |
+| `lock-home-spelling` | A home reached by two spellings of its path is one home to every record lock: the command completes, the lock is released, and no takeover chain grows (#82) |
 | `vanished-endpoint-recovery` | A task whose endpoint disappeared can still be recovered, and its work survives either way |
 | `real-session` | The whole loop with a real worker: a spawn opens a visible Herdr tab, the worker builds a task in its own isolated copy, the result is checked, lands, and is cleaned up. Opt-in with `VERIFY_REAL_SESSION=1`, because it spends tokens |
 
