@@ -353,8 +353,14 @@ session_close() {
   done
   [ -z "$SESSION_WS" ] || session_herdr workspace close "$SESSION_WS" >/dev/null 2>&1 || true
   session_destroy_pools
-  tar -cf "$VERIFY_ARTIFACT_RUN/home-records.tar" -C "$SESSION_HOME" state data 2>/dev/null || true
-  printf 'kept home-records.tar\n' >> "$VERIFY_TRANSCRIPT"
+  # --force-local: an evidence path spelled C:\... would otherwise be read as
+  # a remote host.
+  if tar --force-local -cf "$VERIFY_ARTIFACT_RUN/home-records.tar" -C "$SESSION_HOME" state data 2>/dev/null &&
+     [ "$(tar --force-local -tf "$VERIFY_ARTIFACT_RUN/home-records.tar" 2>/dev/null | wc -l)" -gt 2 ]; then
+    printf 'kept home-records.tar\n' >> "$VERIFY_TRANSCRIPT"
+  else
+    verify_note "the home's state/ and data/ could not be archived; the records/ snapshots are what remains"
+  fi
 }
 
 session_finish() {

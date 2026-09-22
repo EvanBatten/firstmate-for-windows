@@ -56,6 +56,7 @@ Name only user paths, stable handles, required state, commands, and observable p
 - [One home, two spellings](./lock-home-spelling.md) covers a home reached by two spellings of its path: every record lock under `state/` treats them as one home, completes, releases, and never grows a takeover chain.
 - [Vanished endpoint recovery](./vanished-endpoint-recovery.md) covers getting a worker back after its window disappeared, without losing its work.
 - [Second mate home](./secondmate-home.md) covers provisioning: identity, owner, charter, routing entry, and working skills.
+- [Ship three changes in parallel](./ship-three-parallel.md) covers the whole loop as a real session: one request, three workers in their own tabs and copies, three landings, cleanup, and a healthy home, judged from records.
 
 Every verification script has a feature file here and every feature file has a script.
 The doctor checks that, so a script added without its feature file makes the checkout not worth driving until the map is whole again.
