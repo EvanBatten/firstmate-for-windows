@@ -261,6 +261,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/lock-home-spelling.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/local-only-landing.md",
       "audience": "agent-runtime"
     },

@@ -748,7 +748,10 @@ fm_lock_link_owner() {
 fm_lock_points_to_owner() {
   local lockdir=$1 ownerdir=$2 actual
   actual=$(readlink "$lockdir" 2>/dev/null) || return 1
-  [ "$actual" = "$ownerdir" ]
+  [ "$actual" = "$ownerdir" ] && return 0
+  # One directory can have two spellings, such as Git Bash's /tmp mount
+  # alias: readlink reports one and mktemp kept the other (#82).
+  [ -d "$ownerdir" ] && [ "$actual" -ef "$ownerdir" ]
 }
 
 fm_lock_discard_owner() {
@@ -761,7 +764,7 @@ fm_lock_discard_owner() {
 fm_lock_remove_stray_owner_link() {
   local lockdir=$1 ownerdir=$2 stray
   stray="$lockdir/$(basename "$ownerdir")"
-  if [ -L "$stray" ] && [ "$(readlink "$stray" 2>/dev/null || true)" = "$ownerdir" ]; then
+  if [ -L "$stray" ] && fm_lock_points_to_owner "$stray" "$ownerdir"; then
     rm -f "$stray" 2>/dev/null || true
   fi
 }
@@ -1218,6 +1221,13 @@ fm_lock_try_acquire() {
     return 1
   fi
 
+  # A takeover of a takeover lock is as deep as recovery goes. Every level
+  # below it would be the same failed claim again with a longer name (#82).
+  case "$lockdir" in
+    *.steal.steal)
+      FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+      return 1 ;;
+  esac
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire "$steal"; then
     FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
