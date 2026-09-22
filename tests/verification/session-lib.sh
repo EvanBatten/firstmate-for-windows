@@ -259,7 +259,9 @@ session_wait() {
   return 1
 }
 
-session_idle() { [ "$(session_agent_status)" = idle ]; }
+# Herdr reports a finished turn as done and a fresh pane as idle; both mean
+# the primary is waiting for input.
+session_idle() { case "$(session_agent_status)" in idle|done) return 0 ;; esac; return 1; }
 
 session_task_ids() { find "$SESSION_HOME/state" -maxdepth 1 -name "*.meta" 2>/dev/null | sed "s|.*/||; s|.meta$||"; }
 session_meta() { sed -n "s/^$2=//p" "$SESSION_HOME/state/$1.meta" 2>/dev/null | head -1; }
@@ -365,7 +367,11 @@ session_close() {
 
 session_finish() {
   [ "$SESSION_CLOSED" = 0 ] && [ -n "$SESSION_PANE" ] || return 0
-  session_wait "the primary is idle before the health check" 300 session_idle >/dev/null || true
+  local deadline=$(( $(date +%s) + 300 ))
+  until session_idle; do
+    [ "$(date +%s)" -lt "$deadline" ] || { verify_note "the primary was still working 300 s after the last claim; the health check runs anyway"; break; }
+    sleep 5
+  done
   session_health
   session_close
 }
@@ -373,7 +379,6 @@ session_finish() {
 # project_seed <name>: a throwaway project with its own local bare origin and
 # one commit on main. Sets PROJECT_ORIGIN and PROJECT_BASE.
 PROJECT_ORIGIN=
-# shellcheck disable=SC2034 # read by the scenario that called project_seed
 PROJECT_BASE=
 project_seed() {
   local name=$1 seed="$VERIFY_TMP/$1-seed"
@@ -386,6 +391,7 @@ project_seed() {
   git -C "$seed" checkout -q -b main 2>/dev/null || true
   printf '# %s\n\nA throwaway project for a firstmate verification session.\n' "$name" > "$seed/README.md"
   git -C "$seed" add -A && git -C "$seed" commit -qm "start the $name project" && git -C "$seed" push -q -u origin main
+  # shellcheck disable=SC2034 # read by the scenario that called project_seed
   PROJECT_BASE=$(git -C "$PROJECT_ORIGIN" rev-parse main)
   rm -rf "$seed"
 }

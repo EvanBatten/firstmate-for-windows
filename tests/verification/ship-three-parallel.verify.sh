@@ -55,14 +55,16 @@ all_done() {
 session_wait "every worker reports its task done" "$WAIT" all_done
 for id in $ids; do verify_keep "$id.status" "$SESSION_HOME/state/$id.status"; done
 
-landed() { [ "$(git -C "$PROJECT_ORIGIN" rev-list --count "$PROJECT_BASE..main" 2>/dev/null)" -ge 3 ]; }
+# A local-only project lands on the clone in the home, never on a remote.
+PROJECT="$SESSION_HOME/projects/greeter"
+landed() { [ "$(git -C "$PROJECT" rev-list --count "$PROJECT_BASE..main" 2>/dev/null)" -ge 3 ]; }
 session_wait "all three changes are on the project's main" 900 landed
-git -C "$PROJECT_ORIGIN" for-each-ref > "$VERIFY_TMP/refs.txt"; verify_keep project-refs.txt "$VERIFY_TMP/refs.txt"
-git -C "$PROJECT_ORIGIN" log --oneline "$PROJECT_BASE..main" > "$VERIFY_TMP/log.txt"; verify_keep project-log.txt "$VERIFY_TMP/log.txt"
+git -C "$PROJECT" for-each-ref > "$VERIFY_TMP/refs.txt"; verify_keep project-refs.txt "$VERIFY_TMP/refs.txt"
+git -C "$PROJECT" log --oneline "$PROJECT_BASE..main" > "$VERIFY_TMP/log.txt"; verify_keep project-log.txt "$VERIFY_TMP/log.txt"
 
 # The landing is the agent's claim. This runs the work.
 check=$(mktemp -d "$VERIFY_TMP/check.XXXXXX")
-git clone -q "$PROJECT_ORIGIN" "$check/greeter" 2>/dev/null
+git clone -q "$PROJECT" "$check/greeter" 2>/dev/null
 got_greet=$(cd "$check/greeter" && bash greet.sh 2>&1)
 got_bye=$(cd "$check/greeter" && bash farewell.sh 2>&1)
 got_ver=$(tr -d '[:space:]' < "$check/greeter/VERSION" 2>/dev/null)
@@ -71,10 +73,10 @@ if [ "$got_greet" = "hello from the crew" ] && [ "$got_bye" = "goodbye from the 
 else
   bad "the landed work is wrong: greet '$got_greet', farewell '$got_bye', VERSION '$got_ver'"
 fi
-if [ "$(git -C "$PROJECT_ORIGIN" rev-list --count "$PROJECT_BASE..main")" -eq 3 ]; then
+if [ "$(git -C "$PROJECT" rev-list --count "$PROJECT_BASE..main")" -eq 3 ]; then
   ok "main is exactly three commits ahead of where it started, one per change"
 else
-  bad "main is $(git -C "$PROJECT_ORIGIN" rev-list --count "$PROJECT_BASE..main") commits ahead, not three"
+  bad "main is $(git -C "$PROJECT" rev-list --count "$PROJECT_BASE..main") commits ahead, not three"
 fi
 
 cleaned() { [ -z "$(session_task_ids)" ] && [ -z "$(session_task_tabs)" ]; }
