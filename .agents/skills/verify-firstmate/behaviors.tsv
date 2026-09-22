@@ -21,7 +21,7 @@ agents-7-merge-authority	agents:7-merge-authority	With yolo off the captain appr
 agents-7-teardown-refusal	agents:7-teardown-refusal	Teardown refuses to discard a task with uncommitted or unlanded work, and that refusal is a stop-and-investigate result, never bypassed.	unproven	#91	
 agents-7-scout-report-gate	agents:7-scout-report-gate	A scout leaves a self-contained report before its scratch worktree is discarded, and that report is what promotion carries forward.	unproven	#88	
 agents-7-promotion-carryover	agents:7-promotion-carryover	Promoting a scout to a ship keeps its window and context, carrying over only the intended fix, not its scratch commits.	unproven	#88	
-agents-8-live-cycle	agents:8-live-cycle	Exactly one live supervision cycle runs whenever work is in flight, so no turn ends blind to what the crew is doing.	unproven	#86	
+agents-8-live-cycle	agents:8-live-cycle	Exactly one live supervision cycle runs whenever work is in flight, so no turn ends blind to what the crew is doing.	proven	supervision-wakes	fm-verification-artifacts/e2e1-730573854/20260922T064625Z-4cfd0ee-51824/supervision-wakes/transcript.txt
 agents-8-wake-drain	agents:8-wake-drain	Every wake-handling turn drains the queue and reconciles open decisions and unread status before doing anything else that turn.	unproven	#86	
 agents-8-actionable-wakes	agents:8-actionable-wakes	A signal, stale, check, or heartbeat wake each gets its own documented handling, from reading the event to escalating a real blocker.	unproven	#86	
 agents-8-away-mode-stub	agents:8-away-mode-stub	While away mode is active the daemon owns supervision, and only a genuine unmarked message from the captain ends it.	unproven	#94	
@@ -60,14 +60,14 @@ fm-branch-prompt	bin:fm-branch-prompt.sh	Renders the fixed system prompt the Pi 
 fm-send	bin:fm-send.sh	Delivers a steering message to a worker as a durable record and rings its terminal, never guessing at the wrong endpoint.	unproven	#85	
 fm-peek	bin:fm-peek.sh	Prints a bounded tail of a worker's terminal for a cheap look at what it is doing.	unproven	#85	
 fm-watch	bin:fm-watch.sh	Blocks until a worker's status needs firstmate's attention, absorbing benign wakes and surfacing only actionable ones.	unproven	#86	
-fm-watch-arm	bin:fm-watch-arm.sh	(Re-)arms the watcher for this home so a wake reliably reaches firstmate instead of going unheard.	unproven	#86	
+fm-watch-arm	bin:fm-watch-arm.sh	(Re-)arms the watcher for this home so a wake reliably reaches firstmate instead of going unheard.	proven	supervision-wakes	fm-verification-artifacts/e2e1-730573854/20260922T064625Z-4cfd0ee-51824/supervision-wakes/transcript.txt
 fm-watch-checkpoint	bin:fm-watch-checkpoint.sh	Runs one bounded watcher checkpoint for a harness that cannot rely on a background wake.	unproven	#86	
 fm-wake-drain	bin:fm-wake-drain.sh	Presents every durable wake, unread status line and open decision, then acknowledges only what was handled.	unproven	#86	
 fm-wake-grant	bin:fm-wake-grant.sh	Grants the supervision branch an exact, non-overlapping set of wake rows it may act on, so main and branch never double-handle one wake.	unproven	#86	
 fm-turnend-guard	bin:fm-turnend-guard.sh	Checks at every turn boundary that live supervision is still running for this session, and repairs it if not.	unproven	#86	
 fm-turnend-guard-cursor	bin:fm-turnend-guard-cursor.sh	Runs the same turn-end supervision check as a Cursor stop hook, parking the turn until a wake needs firstmate.	unproven	#86	
 fm-turnend-guard-grok	bin:fm-turnend-guard-grok.sh	Runs the same turn-end supervision check as a Grok stop hook.	unproven	#86	
-fm-claude-stop-autoarm	bin:fm-claude-stop-autoarm.sh	Re-arms the watcher automatically every time a Claude primary session ends a turn.	unproven	#86	
+fm-claude-stop-autoarm	bin:fm-claude-stop-autoarm.sh	Re-arms the watcher automatically every time a Claude primary session ends a turn.	proven	supervision-wakes	fm-verification-artifacts/e2e1-730573854/20260922T064625Z-4cfd0ee-51824/supervision-wakes/transcript.txt
 fm-guard	bin:fm-guard.sh	Prints a banner the agent cannot miss when a task is in flight but supervision is not healthy.	unproven	#86	
 fm-supervise-daemon	bin:fm-supervise-daemon.sh	Runs the away-mode daemon that classifies routine wakes on its own and escalates only what the captain needs to see.	unproven	#86	
 fm-inbox	bin:fm-inbox.sh	Captures a captain note, typed or spoken, dropped mid-turn and delivers it once at firstmate's next drain.	unproven	#86	
@@ -158,4 +158,4 @@ fm-remote-secondmate-control	bin:fm-remote-secondmate-control.sh	Controls a remo
 fm-on	bin:fm-on.sh	Executes one tracked firstmate command inside a remote secondmate's home over SSH.	blocked-here	#97	
 feature-lock-home-spelling	feature:lock-home-spelling	A home reached by two spellings of its path is one home to every record lock: the command completes, the lock is released, and no takeover chain grows.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt
 feature-ship-three-parallel	feature:ship-three-parallel	One request for three changes becomes three workers in their own tabs and copies, three landings on main, cleanup, and a healthy home, judged from records of a real session.	proven	ship-three-parallel	fm-verification-artifacts/e2e1-730573854/20260922T052134Z-648949c-8237/ship-three-parallel/transcript.txt
-feature-supervision-wakes	feature:supervision-wakes	With a worker in flight the primary ends its turn, a tokenless watcher takes over with a fresh beacon, the worker's done line becomes a notification that wakes the primary, and the work lands and is acknowledged, judged from records of a real session.	unproven	#86	
+feature-supervision-wakes	feature:supervision-wakes	With a worker in flight the primary ends its turn, a tokenless watcher takes over with a fresh beacon, the worker's done line becomes a notification that wakes the primary, and the work lands and is acknowledged, judged from records of a real session.	proven	supervision-wakes	fm-verification-artifacts/e2e1-730573854/20260922T064625Z-4cfd0ee-51824/supervision-wakes/transcript.txt
