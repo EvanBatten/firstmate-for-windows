@@ -51,6 +51,7 @@ Name only user paths, stable handles, required state, commands, and observable p
 - [Condition watch](./condition-watch.md) covers "do X as soon as Y is true": armed, held until the condition holds, fired, reported, and retired.
 - [Steer guard](./steer-guard.md) covers the two refusals that keep an instruction out of the wrong home.
 - [Herdr lab pane](./herdr-lab-pane.md) covers the shell a worker pane runs: a pane made the production way runs what firstmate types, and a plain pane does not.
+- [One home, two spellings](./lock-home-spelling.md) covers a home reached by two spellings of its path: every record lock under `state/` treats them as one home, completes, releases, and never grows a takeover chain.
 - [Vanished endpoint recovery](./vanished-endpoint-recovery.md) covers getting a worker back after its window disappeared, without losing its work.
 - [Second mate home](./secondmate-home.md) covers provisioning: identity, owner, charter, routing entry, and working skills.
 
