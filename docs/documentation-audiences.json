@@ -273,6 +273,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/restart-primary.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/secondmate-home.md",
       "audience": "agent-runtime"
     },

@@ -436,3 +436,21 @@ project_seed() {
   PROJECT_BASE=$(git -C "$PROJECT_ORIGIN" rev-parse main)
   rm -rf "$seed"
 }
+
+# session_relaunch: what a captain does when the window was closed and opened
+# again. Exits the primary, starts claude again in the same pane, and waits
+# for it to be ready; the home, its records and any worker are untouched.
+session_relaunch() {
+  local deadline
+  session_snapshot before-relaunch
+  session_herdr pane send-text "$SESSION_PANE" '/exit' >/dev/null 2>&1
+  sleep 1
+  session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
+  deadline=$(( $(date +%s) + 90 ))
+  until session_at_shell_prompt; do
+    [ "$(date +%s)" -lt "$deadline" ] || { bad "the primary did not exit on /exit within 90 s, so no restart could happen"; return 1; }
+    sleep 3
+  done
+  ok "the primary exited on the captain's /exit"
+  session_launch
+}
