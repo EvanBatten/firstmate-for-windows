@@ -183,14 +183,16 @@ session_last_lines() {
 }
 
 # One line per tick: when, how many task records the home holds, how old the
-# watcher beacon is, and what the primary is doing. session_health reads it.
+# watcher beacon is, what the primary is doing, and how many workers have
+# reported done. session_health and the scenarios read it.
 session_observe_tick() {
-  local metas beat age status p
+  local metas beat age status p dones
   metas=$(session_task_ids | wc -l | tr -d " ")
+  dones=$(grep -l "^done:" "$SESSION_HOME"/state/*.status 2>/dev/null | wc -l | tr -d " ")
   beat="$SESSION_HOME/state/.last-watcher-beat"
   if [ -f "$beat" ]; then age=$(( $(date +%s) - $(stat -c %Y "$beat") )); else age=none; fi
   status=$(session_agent_status)
-  printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$metas" "$age" "$status" >> "$SESSION_TICKS"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$metas" "$age" "$status" "$dones" >> "$SESSION_TICKS"
   session_task_ids >> "$SESSION_TASK_IDS"
   for p in $SESSION_PANE $(sed -n 's/^herdr_pane_id=//p' "$SESSION_HOME"/state/*.meta 2>/dev/null); do
     session_pane_text "$p" 300 > "$VERIFY_TMP/observe.tmp" 2>/dev/null || continue
@@ -230,7 +232,7 @@ session_start() {  # <workspace label>
   session_scratch
   [ ! -d "$VERIFY_TMP/home" ] || { bad "the scratch directory holds a home/ directory; a session must not be started after verify_home"; verify_done; }
   mkdir -p "$VERIFY_ARTIFACT_RUN/panes" "$VERIFY_ARTIFACT_RUN/records"
-  printf 'ts\tmetas\tbeacon_age\tprimary\n' > "$SESSION_TICKS"
+  printf 'ts\tmetas\tbeacon_age\tprimary\tdones\n' > "$SESSION_TICKS"
   : > "$SESSION_TASK_IDS"
   : > "$SESSION_CAPTAIN_LOG"
   verify_at_done session_finish
