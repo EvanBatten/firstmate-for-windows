@@ -691,6 +691,48 @@ GITHUB_TOKEN=ghp_supersecretvalue" \
   pass "fm-startup-network: the timing artifact cannot carry a command line or forge records"
 }
 
+test_harvest_returns_while_the_publish_lock_is_held() {
+  local rec home root log holder out status=0 waited=0
+  rec=$(new_world harvest-while-locked)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2" || exit 1
+    sleep 90
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$home/state/.startup-network.lock" &
+  holder=$!
+  while [ ! -L "$home/state/.startup-network.lock" ] && [ "$waited" -lt 20 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if [ ! -L "$home/state/.startup-network.lock" ]; then
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    fail "the publish lock was never taken"
+  fi
+
+  out=$(PATH="$root/bin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    FM_TIMEOUT_MECHANISM_OVERRIDE=bash bash -c '
+      . "$1"
+      fm_run_timed 25 "$2" harvest --pid "$3"
+    ' _ "$ROOT/bin/fm-timeout-lib.sh" "$root/bin/fm-startup-network.sh" $$) || status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$status" -ne 124 ] || fail "harvest waited on the publish lock until the bound"
+  [ "$status" -eq 0 ] || fail "harvest exited $status while the publish lock was held: $out"
+  assert_contains "$out" "IN PROGRESS - the deferred network checks have not finished yet." \
+    "harvest did not say the checks were still in progress"
+  assert_contains "$out" "Register a local project without waiting on network checks." \
+    "harvest did not release local registration from the network worker"
+  assert_not_contains "$out" "Rerun bin/fm-session-start.sh now" \
+    "harvest ordered a session-start rerun while the worker held the lock"
+  pass "fm-startup-network: harvest returns while the worker holds the publish lock"
+}
+
+test_harvest_returns_while_the_publish_lock_is_held
 test_wait_fails_without_a_published_stage
 test_start_returns_without_holding_the_callers_stdout
 test_harvest_acknowledgement_suppresses_the_wake_and_no_claim_produces_it
