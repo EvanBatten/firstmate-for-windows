@@ -44,11 +44,13 @@ watcher_armed() {
 }
 session_wait "a watcher with a fresh beacon holds the home while the primary is idle" 300 watcher_armed
 ls -la "$SESSION_HOME/state" > "$VERIFY_TMP/state-armed.txt"; verify_keep state-armed.txt "$VERIFY_TMP/state-armed.txt"
-if [ -f "$SESSION_HOME/state/.turnend-claude-blocks" ]; then
-  verify_keep turnend-claude-blocks.txt "$SESSION_HOME/state/.turnend-claude-blocks"
-  bad "the turn-end guard blocked the primary's first turn end in this fresh home: $(tr '\n' ' ' < "$SESSION_HOME/state/.turnend-claude-blocks" | cut -c1-200)"
+# The guard clears its block record on a later clean allow, so the snapshots
+# are the evidence, not the file as it is now.
+if grep -l "\.turnend-claude-blocks" "$VERIFY_ARTIFACT_RUN"/records/state-*.txt >/dev/null 2>&1 || [ -f "$SESSION_HOME/state/.turnend-claude-blocks" ]; then
+  [ ! -f "$SESSION_HOME/state/.turnend-claude-blocks" ] || verify_keep turnend-claude-blocks.txt "$SESSION_HOME/state/.turnend-claude-blocks"
+  bad "the turn-end guard blocked a turn end in this fresh home: a records snapshot lists state/.turnend-claude-blocks"
 else
-  ok "the turn-end guard did not block the first turn end in a fresh home"
+  ok "the turn-end guard did not block a turn end in this fresh home"
 fi
 
 worker_done() { grep -q '^done:' "$SESSION_HOME/state/$ID.status" 2>/dev/null || [ -z "$(session_task_ids)" ]; }
