@@ -1,7 +1,7 @@
 ---
 name: verify-firstmate
 description: >-
-  Prove that a firstmate feature works by driving the real bin/ scripts against a throwaway home and keeping the evidence.
+  Measure which firstmate behaviors are proven, and say which are not, by driving the real bin/ scripts against a throwaway home, weighing the result against a tracked inventory of every claim the product makes, and keeping the evidence.
   Use before reporting a change to firstmate's own scripts as done, when checking that an installation or a platform works, and when something feels wrong and you need to know which feature is at fault.
   Firstmate's surface is its command-line scripts and the durable records they keep, so this skill drives scripts and reads records; it does not drive a browser.
 user-invocable: true
@@ -14,7 +14,7 @@ metadata:
 The captain talks to an agent, and everything that agent does mechanically is a `bin/fm-*.sh` script acting on one operational home: the `data/`, `state/`, `config/`, and `projects/` directories that `FM_HOME` selects.
 That pair, a script and the records it leaves in a home, is the surface this skill drives.
 A test in `tests/` pins a contract with fakes and must pass on any machine.
-This skill answers the other question: does the feature work for real, on this machine, with this code.
+This skill measures the other question, whether the feature works for real on this machine with this code, and it says plainly when the honest answer is "not yet proven" rather than reporting a script's own map as the product.
 
 Two files own the detail, and this skill points at them instead of repeating them.
 [`tests/verification/README.md`](../../../tests/verification/README.md) owns the contract every verification script keeps, the coverage table, and the name of any script that is red on purpose.
@@ -54,6 +54,28 @@ It reports whether the suite is present, whether this is a linked worktree or th
 A `warn -` line does not stop a run, but read it: a missing optional tool means a feature will skip, and a skip proves nothing.
 `run` calls the doctor itself and refuses to drive a checkout the doctor rejects.
 
+## Behavior inventory
+
+[`behaviors.tsv`](behaviors.tsv) beside this file is the ledger every claim in this skill answers to, one row per behavior, not per script.
+Its `source` names where the claim comes from, one of four shapes.
+
+- A bullet under `README.md`'s `## Features`.
+- A lifecycle step in `AGENTS.md`.
+- A `kind=entry` script in [`tests/verification/coverage.tsv`](../../../tests/verification/coverage.tsv).
+- A file under `features/`.
+
+Its `status` is exactly one of four words.
+
+- `proven` - a named verification script drives this behavior for real, and `ref` is that script's name.
+- `unproven` - nothing here drives it yet, and `ref` is the issue that owns closing the gap.
+- `broken` - it is known not to work, and `ref` is the issue that tracks the fix.
+- `blocked-here` - it needs a harness, backend, remote second mate, Relay, or voice this machine cannot supply, and `ref` is `#97`.
+
+`verify.sh doctor` runs `inventory.sh check` and refuses a checkout whose table has a hole, whether that is a `bin/` script, a feature file, or a README bullet with no row, a `proven` row whose script does not exist, or a malformed `ref`.
+`verify.sh run` ends with the fractional verdict `inventory.sh verdict` computes from that run's log, `proven N of M behaviors; K unproven; J broken; B blocked here`.
+That fraction, not the suite's own `<n> passed, <n> failed, <n> skipped` line, is what "verified" means for this repository.
+A `proven` row whose script skipped, or did not run at all, counts toward `unproven`, never toward `proven`, so a skip can never read as proof.
+
 ## Drive
 
 ```sh
@@ -63,8 +85,8 @@ A `warn -` line does not stop a run, but read it: a missing optional tool means 
 ```
 
 Every line a script prints is a claim about its feature in plain language, `ok - <claim>` or `not ok - <what is wrong>`.
-The run ends with `verification: <n> passed, <n> failed, <n> skipped` and exits with the number of failed scripts.
-A skipped script is one this machine could not answer, so report it as skipped and never as verified.
+The run ends with `verification: <n> passed, <n> failed, <n> skipped`, then the inventory's fractional verdict, and exits with the number of failed scripts.
+A skipped script is one this machine could not answer, so report it as skipped and never as verified; the verdict line scores it as unproven for the same reason.
 
 To prove a change, run the feature twice: once on the base your branch started from, in a worktree of that commit, and once on your change.
 A script that is red on both sides is not your defect; check the suite README for a script that is red on purpose before you chase it.
@@ -114,10 +136,18 @@ Never stop a process by name, and never aim a `herdr` command at a session you d
 
 ## Helpers
 
-[`verify.sh`](verify.sh) is the only helper, and the three invocations above are all of it.
-Run it with no arguments to print its own usage.
+[`verify.sh`](verify.sh) is the helper you run; the three invocations under Doctor and Drive above are all of it, and it calls [`inventory.sh`](inventory.sh) itself, at both points.
+Run `verify.sh` with no arguments to print its own usage.
+
+`inventory.sh` is driven directly only when you are working on the table itself:
+
+```sh
+.agents/skills/verify-firstmate/inventory.sh check              # the same hole check verify.sh doctor runs
+.agents/skills/verify-firstmate/inventory.sh verdict <run.log>  # the fraction for an already-captured run.log
+```
 
 ## Keeping the map honest
 
 When a change alters how a feature is reached or which record proves it, update that feature's file under `features/` in the same change.
-When a change adds a verification script, add its feature file and its line in the feature index.
+When a change adds a verification script, add its feature file, its line in the feature index, and flip its `behaviors.tsv` row to `proven` with that script's name as `ref`.
+When a change adds or removes a `bin/` entry point, a README feature bullet, or an `AGENTS.md` lifecycle step, add or remove its row in `behaviors.tsv` in the same change; `inventory.sh check` is what catches the ones left behind.

@@ -12,6 +12,8 @@ tests/verification/run.sh secondmate-home # just one
 A script in `tests/` pins a contract with fakes and must pass on any machine.
 A script here runs the real `bin/` scripts against a real throwaway home and reports what actually happened.
 They exist because a green portable lane does not tell you the tool works on the machine in front of you: two of the defects they cover shipped green lanes and a clean worktree while the feature was silently broken.
+A script passing here is evidence about one path through one feature, driven against a throwaway home with no real firstmate agent in it; it is not proof that the behavior works end to end, and this directory does not claim otherwise.
+[`../../.agents/skills/verify-firstmate/behaviors.tsv`](../../.agents/skills/verify-firstmate/behaviors.tsv) is the one place that counts what is actually proven, and a script's own green run never promotes a row there by itself.
 
 Run them by hand before trusting an installation, after a platform change, and when something feels wrong and you want to know which feature is at fault.
 
