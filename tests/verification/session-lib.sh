@@ -8,8 +8,9 @@
 # claim is read from the home's records, the project's refs and Herdr's own
 # tab list. What the agent prints is kept as evidence and is never a claim.
 #
-# Source lib.sh first, then this file, then call session_require, verify_home,
-# session_start, captain_says and session_wait. verify_done runs the health
+# Source lib.sh first, then this file, then call session_require,
+# session_start, captain_says and session_wait. Do not call verify_home: a
+# session clones the code under test and that clone is the home. verify_done runs the health
 # check and the close through the hook this file registers, so no script can
 # end without them.
 #
@@ -218,6 +219,11 @@ session_observer() {
 }
 
 session_start() {  # <workspace label>
+  # A session gets a bare scratch directory, never verify_home's empty
+  # firstmate-shaped home: a primary that finds one beside its clone may
+  # adopt it as FM_HOME, and every record then lands where no claim looks.
+  VERIFY_TMP=${VERIFY_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-$VERIFY_NAME.XXXXXX")}
+  [ ! -d "$VERIFY_TMP/home" ] || { bad "the scratch directory holds a home/ directory; a session must not be started after verify_home"; verify_done; }
   mkdir -p "$VERIFY_ARTIFACT_RUN/panes" "$VERIFY_ARTIFACT_RUN/records"
   printf 'ts\tmetas\tbeacon_age\tprimary\n' > "$SESSION_TICKS"
   : > "$SESSION_TASK_IDS"

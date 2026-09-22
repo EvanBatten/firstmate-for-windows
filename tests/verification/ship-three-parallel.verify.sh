@@ -17,7 +17,6 @@
 . "$(dirname "$0")/session-lib.sh"
 
 session_require
-verify_home
 WAIT=${VERIFY_SESSION_WAIT:-1500}
 
 project_seed greeter
