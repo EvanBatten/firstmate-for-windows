@@ -84,6 +84,22 @@ cmd_doctor() {
     d_bad "the feature map and the scripts disagree about: $unmapped"
   fi
 
+  # The inventory is the unit of truth this doctor enforces: a bin/ script,
+  # a feature file, or a README bullet with no row is a hole in the proof,
+  # and it refuses the checkout the same way a missing feature file does.
+  local inv_out inv_line
+  if [ -x "$HERE/inventory.sh" ]; then
+    inv_out=$(bash "$HERE/inventory.sh" check 2>&1)
+    while IFS= read -r inv_line; do
+      case "$inv_line" in
+        'ok - '*)     d_ok "${inv_line#ok - }" ;;
+        'not ok - '*) d_bad "${inv_line#not ok - }" ;;
+      esac
+    done <<< "$inv_out"
+  else
+    d_bad "no inventory.sh beside this doctor, so the behavior table cannot be checked"
+  fi
+
   dirty=$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
   if [ "$dirty" -eq 0 ]; then
     d_ok "code under test: $(git -C "$ROOT" rev-parse --short HEAD) ($(git -C "$ROOT" rev-parse --abbrev-ref HEAD)), clean"
@@ -161,6 +177,7 @@ cmd_run() {
 
   VERIFY_ARTIFACT_DIR="$run_dir" bash "$SUITE/run.sh" "$@" 2>&1 | tee "$run_dir/run.log"
   status=${PIPESTATUS[0]}
+  bash "$HERE/inventory.sh" verdict "$run_dir/run.log" | tee -a "$run_dir/run.log"
   printf '# evidence: %s\n' "$run_dir"
   return "$status"
 }

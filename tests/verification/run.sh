@@ -7,6 +7,10 @@
 # throwaway home, and cleans up after itself, so a failure in one says nothing
 # about the others. Exit status is the number of scripts that failed, capped at
 # 125; a script that skipped is not a failure.
+#
+# Each script's block ends with one line, "result: <name> passed|failed|skipped",
+# which ../../.agents/skills/verify-firstmate/inventory.sh verdict reads to score
+# the behavior table; keep that line's shape if you change this runner.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -21,11 +25,13 @@ for s in $scripts; do
   name=$(basename "$s" .verify.sh)
   printf '\n=== %s\n' "$name"
   bash "$s"
+  outcome=
   case "$?" in
-    0)  passed=$((passed + 1)) ;;
-    77) skipped=$((skipped + 1)) ;;
-    *)  failed=$((failed + 1)) ;;
+    0)  passed=$((passed + 1));  outcome=passed ;;
+    77) skipped=$((skipped + 1)); outcome=skipped ;;
+    *)  failed=$((failed + 1));  outcome=failed ;;
   esac
+  printf 'result: %s %s\n' "$name" "$outcome"
 done
 
 printf '\n%s\n' "-----------------------------------------"

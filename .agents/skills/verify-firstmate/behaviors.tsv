@@ -1,0 +1,158 @@
+id	source	behavior	status	ref	evidence
+readme-one-liaison	readme:features	You talk only to the first mate, which dispatches, supervises, and brings you only the decisions that are yours.	unproven	#83	
+readme-visible-crew	readme:features	Each crewmate works in its own visible tab you can watch or type into.	unproven	#83	
+readme-disposable-worktrees	readme:features	Each task runs in a clean, disposable worktree, so parallel work on one repo never collides.	unproven	#92	
+readme-ship-and-scout	readme:features	Ship tasks deliver authorized changes, and scout tasks leave standalone investigation reports.	unproven	#88	
+readme-project-modes	readme:features	Each project ships through no-mistakes, direct-PR or local-only, with an optional yolo merge flag.	unproven	#84	
+readme-second-mates	readme:features	Second mates are optional persistent helpers that run from isolated homes with their own state, projects and session lock, locally or remotely.	unproven	#89	
+readme-low-token-supervision	readme:features	A watcher wakes the first mate only when something needs it, without spending tokens on idle polling.	unproven	#86	
+readme-project-boundary	readme:features	The first mate stays read-only over your projects outside a narrow set of operations, and crewmates make every other change.	unproven	#83	
+readme-restart-proof	readme:features	All state lives on disk and in the session backend, so a new session reconciles and carries on after a restart.	unproven	#87	
+agents-3-session-start	agents:3-session-start	One command runs session start once, so the captain gets one ordered digest instead of scattered reads.	unproven	#87	
+agents-3-wake-queue	agents:3-wake-queue	The durable wake queue is presented raw at every locked session start and stays queued until explicitly acknowledged.	unproven	#86	
+agents-3-bootstrap-consent	agents:3-bootstrap-consent	Bootstrap only detects missing tools or problems; it installs anything only after the captain approves in the current session.	unproven	#93	
+agents-5-restart-non-event	agents:5-restart-non-event	A restart is a non-event: durable records and live backend state, not conversation memory, pick the session back up.	unproven	#87	
+agents-5-stuck-recovery	agents:5-stuck-recovery	A dead or metadata-less direct report is reconciled and its unlanded work preserved before any new work starts.	unproven	#90	
+agents-7-project-resolution	agents:7-project-resolution	Every request resolves to one project before work starts, asking the captain only when more than one plausibly matches.	unproven	#83	
+agents-7-ship-vs-scout	agents:7-ship-vs-scout	Work is classified as a ship, an authorized change, or a scout, a report only, before anything is dispatched.	unproven	#83	
+agents-7-delivery-mode	agents:7-delivery-mode	A ship task's delivery mode and yolo merge posture are resolved once at intake and recorded in the backlog note.	unproven	#83	
+agents-7-review-owned-by-path	agents:7-review-owned-by-path	The selected delivery path owns its own review; no second manual gate is stacked on top of it.	unproven	#83	
+agents-7-merge-authority	agents:7-merge-authority	With yolo off the captain approves every PR merge and every local landing; with it on firstmate merges green work itself, and never a red PR either way.	unproven	#84	
+agents-7-teardown-refusal	agents:7-teardown-refusal	Teardown refuses to discard a task with uncommitted or unlanded work, and that refusal is a stop-and-investigate result, never bypassed.	unproven	#91	
+agents-7-scout-report-gate	agents:7-scout-report-gate	A scout leaves a self-contained report before its scratch worktree is discarded, and that report is what promotion carries forward.	unproven	#88	
+agents-7-promotion-carryover	agents:7-promotion-carryover	Promoting a scout to a ship keeps its window and context, carrying over only the intended fix, not its scratch commits.	unproven	#88	
+agents-8-live-cycle	agents:8-live-cycle	Exactly one live supervision cycle runs whenever work is in flight, so no turn ends blind to what the crew is doing.	unproven	#86	
+agents-8-wake-drain	agents:8-wake-drain	Every wake-handling turn drains the queue and reconciles open decisions and unread status before doing anything else that turn.	unproven	#86	
+agents-8-actionable-wakes	agents:8-actionable-wakes	A signal, stale, check, or heartbeat wake each gets its own documented handling, from reading the event to escalating a real blocker.	unproven	#86	
+agents-8-away-mode-stub	agents:8-away-mode-stub	While away mode is active the daemon owns supervision, and only a genuine unmarked message from the captain ends it.	unproven	#94	
+agents-8-stuck-trigger	agents:8-stuck-trigger	A stale wake, a looping pane, or a failed steer triggers stuck-worker recovery before anything else is tried.	unproven	#90	
+agents-9-plain-language	agents:9-plain-language	Every captain-facing message translates internal mechanics into the project outcome, using the captain's own nouns, never internal jargon.	unproven	#95	
+agents-9-escalation-triggers	agents:9-escalation-triggers	Only work ready for review, finished findings, real blockers, and destructive or credential needs reach the captain; routine progress is batched.	unproven	#95	
+agents-10-backlog-decision-hold	agents:10-backlog-decision-hold	A captain decision is simply a task held for the captain, closed only by his own recorded words.	unproven	#86	
+agents-10-requeue-after-teardown	agents:10-requeue-after-teardown	Queued backlog work is re-evaluated after every teardown and heartbeat, and dispatched only once its blockers and time gates have cleared.	unproven	#92	
+agents-11-brief-scaffold	agents:11-brief-scaffold	Every ship brief keeps the worktree-isolation assertion and stops the task if it was launched in the primary checkout.	unproven	#83	
+agents-11-herdr-lab-scaffold	agents:11-herdr-lab-scaffold	A task that will drive Herdr lifecycle behavior is scaffolded to use the guarded lab helper, never the live default session.	unproven	#98	
+agents-12-self-update	agents:12-self-update	/updatefirstmate fast-forwards this firstmate repo and every registered secondmate home from origin, without touching project work.	unproven	#93	
+agents-14-relay-consent	agents:14-relay-consent	Relay stays inert and causes no behavior change until the captain places a pairing token in this home's private config.	blocked-here	#97	
+feature-captain-decision	feature:captain-decision	A question that waits on the captain is carried by a real work item and closed only by his recorded words.	unproven	#98	
+feature-captain-inbox	feature:captain-inbox	A note dropped while firstmate is busy is queued, listed, delivered once, acknowledged, and stops counting as waiting.	unproven	#98	
+feature-condition-watch	feature:condition-watch	"Do X as soon as Y is true" is armed, held until the condition holds, fired, reported, and retired.	unproven	#98	
+feature-herdr-lab-pane	feature:herdr-lab-pane	A worker pane made the production way runs the shell firstmate types into, and a plain pane does not.	unproven	#98	
+feature-local-only-landing	feature:local-only-landing	Approved local work lands by fast-forward, and a diverged branch is refused instead of forced.	unproven	#98	
+feature-real-session	feature:real-session	A real worker spawns into a visible tab, does isolated work, gets a checked result, lands, and is cleaned up.	unproven	#98	
+feature-secondmate-home	feature:secondmate-home	A provisioned second mate home has its identity, owner, charter, routing entry, and working skills.	unproven	#98	
+feature-steer-guard	feature:steer-guard	An instruction to a worker is refused rather than delivered to the wrong home.	unproven	#98	
+feature-vanished-endpoint-recovery	feature:vanished-endpoint-recovery	A worker whose window disappeared is recovered without losing its work.	unproven	#98	
+feature-wake-queue	feature:wake-queue	Work is delivered durably, survives until acknowledged with the generation it was handed, and leaves nothing behind.	unproven	#98	
+fm-brief	bin:fm-brief.sh	Scaffolds a crewmate's or secondmate's brief with the task's setup, rules and definition of done before dispatch.	unproven	#83	
+fm-spawn	bin:fm-spawn.sh	Launches a crewmate or secondmate into its own isolated worktree or home, refusing to spawn inside the primary checkout.	unproven	#83	
+fm-merge-local	bin:fm-merge-local.sh	Fast-forwards a project's default branch to a local-only task's approved branch, and refuses a diverged one.	unproven	#83	
+fm-teardown	bin:fm-teardown.sh	Retires a finished task's worktree or home and closes its backlog item only after landing is confirmed.	unproven	#83	
+fm-crew-state	bin:fm-crew-state.sh	Reads a crew's current run state directly instead of trusting a possibly stale status log.	unproven	#83	
+backend-herdr	bin:backends/herdr.sh	Drives the Herdr session backend that opens, types into, and reads a crewmate's visible tab.	unproven	#83	
+fm-backend	bin:fm-backend.sh	Resolves which session backend a spawn or steer uses and dispatches the call to its adapter.	unproven	#83	
+fm-project-mode	bin:fm-project-mode.sh	Looks up a project's registered delivery mode and yolo posture from the project registry.	unproven	#83	
+fm-pr-check	bin:fm-pr-check.sh	Records a task's PR URL and head commit, then arms the watcher to notice when it merges.	unproven	#84	
+fm-pr-merge	bin:fm-pr-merge.sh	Merges an approved PR or merge request and confirms the forge reports it landed before teardown trusts it.	unproven	#84	
+fm-pr-poll	bin:fm-pr-poll.sh	Watches a recorded PR and reports the moment it merges, staying silent on every other outcome.	unproven	#84	
+fm-branch-outcome	bin:fm-branch-outcome.sh	Keeps the append-only log of outcomes the Pi supervision branch has handled.	unproven	#84	
+fm-branch-prompt	bin:fm-branch-prompt.sh	Renders the fixed system prompt the Pi supervision branch runs on.	unproven	#84	
+fm-send	bin:fm-send.sh	Delivers a steering message to a worker as a durable record and rings its terminal, never guessing at the wrong endpoint.	unproven	#85	
+fm-peek	bin:fm-peek.sh	Prints a bounded tail of a worker's terminal for a cheap look at what it is doing.	unproven	#85	
+fm-watch	bin:fm-watch.sh	Blocks until a worker's status needs firstmate's attention, absorbing benign wakes and surfacing only actionable ones.	unproven	#86	
+fm-watch-arm	bin:fm-watch-arm.sh	(Re-)arms the watcher for this home so a wake reliably reaches firstmate instead of going unheard.	unproven	#86	
+fm-watch-checkpoint	bin:fm-watch-checkpoint.sh	Runs one bounded watcher checkpoint for a harness that cannot rely on a background wake.	unproven	#86	
+fm-wake-drain	bin:fm-wake-drain.sh	Presents every durable wake, unread status line and open decision, then acknowledges only what was handled.	unproven	#86	
+fm-wake-grant	bin:fm-wake-grant.sh	Grants the supervision branch an exact, non-overlapping set of wake rows it may act on, so main and branch never double-handle one wake.	unproven	#86	
+fm-turnend-guard	bin:fm-turnend-guard.sh	Checks at every turn boundary that live supervision is still running for this session, and repairs it if not.	unproven	#86	
+fm-turnend-guard-cursor	bin:fm-turnend-guard-cursor.sh	Runs the same turn-end supervision check as a Cursor stop hook, parking the turn until a wake needs firstmate.	unproven	#86	
+fm-turnend-guard-grok	bin:fm-turnend-guard-grok.sh	Runs the same turn-end supervision check as a Grok stop hook.	unproven	#86	
+fm-claude-stop-autoarm	bin:fm-claude-stop-autoarm.sh	Re-arms the watcher automatically every time a Claude primary session ends a turn.	unproven	#86	
+fm-guard	bin:fm-guard.sh	Prints a banner the agent cannot miss when a task is in flight but supervision is not healthy.	unproven	#86	
+fm-supervise-daemon	bin:fm-supervise-daemon.sh	Runs the away-mode daemon that classifies routine wakes on its own and escalates only what the captain needs to see.	unproven	#86	
+fm-inbox	bin:fm-inbox.sh	Captures a captain note, typed or spoken, dropped mid-turn and delivers it once at firstmate's next drain.	unproven	#86	
+fm-captain-hold	bin:fm-captain-hold.sh	Records a task held for the captain, and closes it only on the captain's own recorded words.	unproven	#86	
+fm-decision-hold	bin:fm-decision-hold.sh	Maps the retired standalone "decision" command surface onto the captain-hold record it now shares.	unproven	#86	
+fm-busy-event	bin:fm-busy-event.sh	Records whether a worker is busy or idle so the watcher can tell real silence from ordinary thinking.	unproven	#86	
+fm-procevent	bin:fm-procevent.sh	Supervises a registered long-polling source in the background and turns its result into a durable wake.	unproven	#86	
+fm-procevent-lavish	bin:fm-procevent-lavish.sh	Polls an armed Lavish board and classifies its state for the process-event runner.	unproven	#86	
+fm-procevent-when	bin:fm-procevent-when.sh	Arms a condition-then-action rule and fires its action once, exactly when the condition first holds.	unproven	#86	
+fm-supervision-instructions	bin:fm-supervision-instructions.sh	Renders the supervision operating block a session's harness follows to stay awake for wakes.	unproven	#86	
+fm-extension	bin:fm-extension.sh	Binds, lists, and verifies trusted external process-event adapter packages.	unproven	#86	
+fm-session-start	bin:fm-session-start.sh	Runs the whole session-start digest in one pass: lock, bootstrap, wake queue, and fleet state.	unproven	#87	
+fm-sessionstart-cursor	bin:fm-sessionstart-cursor.sh	Delivers the session-start digest into a Cursor session's first turn.	unproven	#87	
+fm-sessionstart-nudge	bin:fm-sessionstart-nudge.sh	Prints the one-line reminder to run session start when a harness will not run it for you.	unproven	#87	
+fm-sessionstart-run	bin:fm-sessionstart-run.sh	Runs the session-start digest directly for a harness that executes it instead of asking the agent to.	unproven	#87	
+fm-lock	bin:fm-lock.sh	Acquires and verifies this home's session lock so only one session mutates fleet state at a time.	unproven	#87	
+fm-inactive-reconcile	bin:fm-inactive-reconcile.sh	Scans for a task whose worker looks inactive and reconciles it before it goes stale.	unproven	#87	
+fm-herdr-session-cleanup	bin:fm-herdr-session-cleanup.sh	Retires a stale restored-shell Herdr tab left behind from a prior session.	unproven	#87	
+fm-promote	bin:fm-promote.sh	Promotes a scout's investigation into a ship task in place, keeping its worktree and context.	unproven	#88	
+fm-review-diff	bin:fm-review-diff.sh	Diffs a crewmate's branch against the current authoritative base for review.	unproven	#88	
+fm-secondmate-reconcile	bin:fm-secondmate-reconcile.sh	Nudges a secondmate to reconcile its own backlog when nothing else already has.	unproven	#89	
+fm-secondmate-report	bin:fm-secondmate-report.sh	Appends a secondmate's correlated reply on the parent's status channel.	unproven	#89	
+fm-home-seed	bin:fm-home-seed.sh	Provisions a persistent secondmate home with its identity, projects and routing.	unproven	#89	
+fm-backlog-handoff	bin:fm-backlog-handoff.sh	Moves already-identified backlog items from the main queue into a secondmate's own queue.	unproven	#89	
+fm-backlog-receive	bin:fm-backlog-receive.sh	Receives a remote secondmate's delivered backlog items into this home's queue.	unproven	#89	
+fm-config-push	bin:fm-config-push.sh	Pushes updated shared configuration out to every live secondmate home mid-session.	unproven	#89	
+fm-control	bin:fm-control.sh	Interrupts, exits, or relaunches a worker by its exact task id, verifying each lifecycle action.	unproven	#90	
+fm-lease	bin:fm-lease.sh	Arbitrates which supervision actor may steer, stop, or clean up a task at a given moment.	unproven	#90	
+fm-bootstrap	bin:fm-bootstrap.sh	Detects missing tools, stale clones and configuration problems, and installs only after the captain approves.	unproven	#93	
+fm-update	bin:fm-update.sh	Self-updates the running firstmate and every registered secondmate home from origin, fast-forward only.	unproven	#93	
+fm-fleet-sync	bin:fm-fleet-sync.sh	Refreshes every project clone to the latest default branch and prunes branches whose PR already merged.	unproven	#93	
+fm-startup-network	bin:fm-startup-network.sh	Runs every network check a session start owes off the blocking path, so one dead host cannot stall the whole digest.	unproven	#93	
+fm-tool-update-check	bin:fm-tool-update-check.sh	Reports which watched tools have an update available or installed but not yet in effect.	unproven	#93	
+fm-vendor-auth-probe	bin:fm-vendor-auth-probe.sh	Probes whether a named vendor CLI's authentication actually works, as one bounded fact.	unproven	#93	
+fm-install-actionlint	bin:fm-install-actionlint.sh	Installs CI's pinned, checksum-verified actionlint build.	unproven	#93	
+fm-install-herdr	bin:fm-install-herdr.sh	Installs CI's pinned, checksum-verified Herdr build.	unproven	#93	
+fm-install-shellcheck	bin:fm-install-shellcheck.sh	Installs CI's pinned, checksum-verified ShellCheck build.	unproven	#93	
+fm-install-treehouse	bin:fm-install-treehouse.sh	Installs CI's pinned, checksum-verified Treehouse build.	unproven	#93	
+fm-afk-launch	bin:fm-afk-launch.sh	Launches, tracks, and tears down the away-mode daemon's own terminal per backend.	unproven	#94	
+fm-afk-return	bin:fm-afk-return.sh	Stops away mode when the captain returns and holds a catch-up gate until every blocker clears.	unproven	#94	
+fm-afk-start	bin:fm-afk-start.sh	Enters away mode and starts the sub-supervisor daemon if one is not already running.	unproven	#94	
+fm-operational-input	bin:fm-operational-input.sh	Reads and writes the marker that tells firstmate an incoming message is daemon-internal, not the captain.	unproven	#94	
+fm-bearings-board	bin:fm-bearings-board.sh	Builds and arms the interactive /bearings fleet board the captain can click through.	unproven	#95	
+fm-bearings-snapshot	bin:fm-bearings-snapshot.sh	Projects the fleet snapshot down to the compact fields a where-did-I-leave-off read needs.	unproven	#95	
+fm-fleet-view	bin:fm-fleet-view.sh	Renders the structured fleet snapshot as a human-readable status report.	unproven	#95	
+fm-fleet-snapshot	bin:fm-fleet-snapshot.sh	Reads a complete, read-only structured snapshot of the whole fleet's state.	unproven	#95	
+fm-home-summary-refresh	bin:fm-home-summary-refresh.sh	Publishes this home's structured summary so a parent or the captain can read its state without asking.	unproven	#95	
+fm-stow-cascade	bin:fm-stow-cascade.sh	Enumerates every registered secondmate so /stow can cascade memory curation across the fleet.	unproven	#95	
+fm-harness	bin:fm-harness.sh	Detects which agent harness, and which model or effort, a crewmate or secondmate should launch on.	unproven	#96	
+fm-lint	bin:fm-lint.sh	Runs firstmate's pinned ShellCheck and lint rules over the repository.	unproven	#98	
+fm-test-run	bin:fm-test-run.sh	Runs firstmate's own behavior-test suites and enforces complete regression coverage.	unproven	#98	
+fm-doc-audience-check	bin:fm-doc-audience-check.sh	Validates that every tracked prose file is classified in the documentation-audience inventory.	unproven	#98	
+fm-repo-invariants	bin:fm-repo-invariants.sh	Checks that repository spellings each belong to their one designated owner.	unproven	#98	
+fm-lint-workflows	bin:fm-lint-workflows.sh	Lints every GitHub Actions workflow file with pinned actionlint.	unproven	#98	
+fm-test-isolation-proof	bin:fm-test-isolation-proof.sh	Proves the portable test suite's concurrency claims with bounded concurrent runs.	unproven	#98	
+fm-herdr-ci-cleanup	bin:fm-herdr-ci-cleanup.sh	Cleans up CI-owned Herdr lab sessions left behind after a real-Herdr CI run.	unproven	#98	
+fm-herdr-lab	bin:fm-herdr-lab.sh	Provisions and operates an isolated Herdr lab session without touching the live default session.	unproven	#98	
+fm-check-register	bin:fm-check-register.sh	Binds a custom watcher check to its current bytes so a tampered check is refused.	unproven	#98	
+fm-ensure-agents-md	bin:fm-ensure-agents-md.sh	Ensures a project worktree has an AGENTS.md, or the canonical CLAUDE.md pointer to one.	unproven	#98	
+fm-cd-pretool-check	bin:fm-cd-pretool-check.sh	Denies a stray cd into a project clone from the primary firstmate shell before it runs.	unproven	#98	
+fm-arm-pretool-check	bin:fm-arm-pretool-check.sh	Verifies the primary session armed the watcher or ran a checkpoint through a genuine harness call.	unproven	#98	
+fm-subagent-pretool-check	bin:fm-subagent-pretool-check.sh	Denies a primary session delegating work through a harness's own subagent tool instead of a tracked spawn.	unproven	#98	
+fm-startup-memory-budget	bin:fm-startup-memory-budget.sh	Reads and reports this home's configured startup-memory budget.	unproven	#98	
+backend-cmux	bin:backends/cmux.sh	Drives the experimental cmux session backend, an alternative to Herdr.	blocked-here	#97	
+backend-orca	bin:backends/orca.sh	Drives the Orca terminal session backend.	blocked-here	#97	
+backend-tmux	bin:backends/tmux.sh	Drives the tmux session backend, upstream's reference backend, unavailable on this Windows port.	blocked-here	#97	
+backend-zellij	bin:backends/zellij.sh	Drives the experimental zellij session backend.	blocked-here	#97	
+fm-x-dismiss	bin:fm-x-dismiss.sh	Dismisses a pending Relay mention without replying, so it stops being re-offered.	blocked-here	#97	
+fm-x-followup	bin:fm-x-followup.sh	Posts a Relay completion follow-up for a linked task, up to three within a week.	blocked-here	#97	
+fm-x-link	bin:fm-x-link.sh	Links a spawned task to the Relay mention that triggered it.	blocked-here	#97	
+fm-x-poll	bin:fm-x-poll.sh	Polls the Relay connector for a pending mention.	blocked-here	#97	
+fm-x-reply	bin:fm-x-reply.sh	Posts firstmate's composed answer back to Relay for a pending mention.	blocked-here	#97	
+fm-public-followup	bin:fm-public-followup.sh	Reconciles and delivers a public commitment made through the Relay connector after a restart.	blocked-here	#97	
+fm-public-followup-emit	bin:fm-public-followup-emit.sh	Emits one structured work result for work bound to a public Relay commitment.	blocked-here	#97	
+fm-procevent-remote-reply	bin:fm-procevent-remote-reply.sh	Adapts the process-event runner to a remote secondmate's reply channel.	blocked-here	#97	
+fm-kimi-turnend-hook	bin:fm-kimi-turnend-hook.sh	Runs the turn-end supervision check as a Kimi stop hook.	blocked-here	#97	
+fm-remote-delta-read	bin:fm-remote-delta-read.sh	Reads new lines from a remote secondmate's append-only log without disturbing it.	blocked-here	#97	
+fm-remote-doctor	bin:fm-remote-doctor.sh	Checks, and optionally repairs, one remote account's readiness to host a secondmate.	blocked-here	#97	
+fm-remote-entrypoint	bin:fm-remote-entrypoint.sh	Is the fixed remote entrypoint a secondmate's host runs a firstmate command through.	blocked-here	#97	
+fm-remote-file	bin:fm-remote-file.sh	Transfers a file to or from a remote secondmate host, confined to its home.	blocked-here	#97	
+fm-remote-home-provision	bin:fm-remote-home-provision.sh	Provisions the FM_HOME a remote secondmate's entrypoint selected.	blocked-here	#97	
+fm-remote-home-seed	bin:fm-remote-home-seed.sh	Registers and provisions a whole secondmate home on an SSH-reachable host.	blocked-here	#97	
+fm-remote-inherit	bin:fm-remote-inherit.sh	Applies one primary-authoritative inherited config item inside a remote secondmate home.	blocked-here	#97	
+fm-remote-inherit-push	bin:fm-remote-inherit-push.sh	Pushes the declared inherited-config allowlist out to one remote secondmate.	blocked-here	#97	
+fm-remote-job-reap-orphans	bin:fm-remote-job-reap-orphans.sh	Reaps remote job workers whose code root no longer exists.	blocked-here	#97	
+fm-remote-job-worker	bin:fm-remote-job-worker.sh	Runs the long-lived per-account worker that services remote secondmate commands.	blocked-here	#97	
+fm-remote-secondmate-control	bin:fm-remote-secondmate-control.sh	Controls a remote secondmate's lifecycle, launch and state, from the host side.	blocked-here	#97	
+fm-on	bin:fm-on.sh	Executes one tracked firstmate command inside a remote secondmate's home over SSH.	blocked-here	#97	
