@@ -26,26 +26,17 @@ VERIFY_NAME=$(basename "${BASH_SOURCE[1]:-verification}" .verify.sh)
 VERIFY_FAILURES=0
 VERIFY_TMP=
 
-VERIFY_RECORD_FD=
-VERIFY_RECORD_PID=
-
-# verify_record_stop: end the screen recording cleanly. The recorder is asked
-# to quit through its input rather than killed, because a killed recorder
-# leaves an empty file: it only writes the container out when it finishes.
-verify_record_stop() {
-  [ -n "$VERIFY_RECORD_FD" ] || return 0
-  { printf 'q' 1>&"$VERIFY_RECORD_FD"; } 2>/dev/null || true
-  exec {VERIFY_RECORD_FD}>&- 2>/dev/null || true
-  VERIFY_RECORD_FD=
-  local waited=0
-  while kill -0 "$VERIFY_RECORD_PID" 2>/dev/null && [ "$waited" -lt 15 ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-}
+# Hooks run from verify_done (before the verdict) and from the exit trap, so a
+# library that opens something a script must not skip closing registers it
+# here instead of trusting every script to remember.
+VERIFY_DONE_HOOKS=
+VERIFY_CLEANUP_HOOKS=
+verify_at_done() { VERIFY_DONE_HOOKS="$VERIFY_DONE_HOOKS $1"; }
+verify_at_cleanup() { VERIFY_CLEANUP_HOOKS="$VERIFY_CLEANUP_HOOKS $1"; }
 
 verify_cleanup() {
-  verify_record_stop
+  local hook
+  for hook in $VERIFY_CLEANUP_HOOKS; do "$hook"; done
   [ -z "$VERIFY_TMP" ] || rm -rf -- "$VERIFY_TMP"
 }
 trap verify_cleanup EXIT
@@ -73,60 +64,23 @@ mkdir -p "$VERIFY_ARTIFACT_RUN" 2>/dev/null || true
 VERIFY_TRANSCRIPT="$VERIFY_ARTIFACT_RUN/transcript.txt"
 : > "$VERIFY_TRANSCRIPT" 2>/dev/null || VERIFY_TRANSCRIPT=/dev/null
 {
-  printf '# %s
-' "$VERIFY_NAME"
-  printf '# run %s
-' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf '# code %s
-
-' "$(git -C "$VERIFY_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  printf '# %s\n' "$VERIFY_NAME"
+  printf '# run %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '# code %s\n\n' "$(git -C "$VERIFY_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 } >> "$VERIFY_TRANSCRIPT"
-
-# Screen recording, opt-in with VERIFY_RECORD=1. It captures the whole desktop
-# for as long as the script runs and keeps drive.mkv beside the transcript, so a
-# drive that opens panes can be watched afterwards. It shows whatever is on
-# screen: a script that only reads and writes records gives a video of nothing
-# in particular, and says nothing a transcript does not. Windows only, because
-# the capture device (gdigrab) is; elsewhere the request is noted and skipped.
-verify_record_start() {
-  local out
-  [ "${VERIFY_RECORD:-}" = 1 ] || return 0
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*) ;;
-    *) printf '     video not recorded: no capture device for this platform\n' >> "$VERIFY_TRANSCRIPT"; return 0 ;;
-  esac
-  if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v cygpath >/dev/null 2>&1; then
-    printf '     video not recorded: ffmpeg is not installed\n' >> "$VERIFY_TRANSCRIPT"
-    return 0
-  fi
-  out=$(cygpath -w "$VERIFY_ARTIFACT_RUN/drive.mkv")
-  rm -f "$VERIFY_ARTIFACT_RUN/drive.mkv"
-  exec {VERIFY_RECORD_FD}> >(ffmpeg -hide_banner -loglevel error -f gdigrab -framerate 4 \
-    -draw_mouse 0 -i desktop -t 1800 -vf 'scale=1280:-2' -c:v libx264 -preset ultrafast \
-    -crf 32 -pix_fmt yuv420p "$out" >/dev/null 2>&1)
-  VERIFY_RECORD_PID=$!
-  printf 'kept drive.mkv\n' >> "$VERIFY_TRANSCRIPT"
-}
-verify_record_start
 
 # verify_keep <label> <file>: keep a copy of evidence beside the transcript.
 verify_keep() {
   [ -e "$2" ] || return 0
   cp -f "$2" "$VERIFY_ARTIFACT_RUN/$1" 2>/dev/null || true
-  printf 'kept %s
-' "$1" >> "$VERIFY_TRANSCRIPT"
+  printf 'kept %s\n' "$1" >> "$VERIFY_TRANSCRIPT"
 }
 
 # verify_note <text>: context for the transcript, neither pass nor failure.
-verify_note() { printf '     %s
-' "$*" >> "$VERIFY_TRANSCRIPT"; }
+verify_note() { printf '     %s\n' "$*" >> "$VERIFY_TRANSCRIPT"; }
 
-ok()   { printf 'ok - %s
-' "$1"; printf 'ok   %s
-' "$1" >> "$VERIFY_TRANSCRIPT"; }
-bad()  { printf 'not ok - %s
-' "$1"; printf 'FAIL %s
-' "$1" >> "$VERIFY_TRANSCRIPT"; VERIFY_FAILURES=$((VERIFY_FAILURES + 1)); }
+ok()   { printf 'ok - %s\n' "$1"; printf 'ok   %s\n' "$1" >> "$VERIFY_TRANSCRIPT"; }
+bad()  { printf 'not ok - %s\n' "$1"; printf 'FAIL %s\n' "$1" >> "$VERIFY_TRANSCRIPT"; VERIFY_FAILURES=$((VERIFY_FAILURES + 1)); }
 
 # verify_that <description> <command...>: run it, report, keep going.
 verify_that() {
@@ -135,15 +89,16 @@ verify_that() {
 }
 
 verify_done() {
+  local hook
+  for hook in $VERIFY_DONE_HOOKS; do "$hook"; done
+  VERIFY_DONE_HOOKS=
   if [ "$VERIFY_FAILURES" -eq 0 ]; then
     printf '# %s: all checks passed\n' "$VERIFY_NAME"
-    printf '# evidence: %s
-' "$VERIFY_ARTIFACT_RUN"
+    printf '# evidence: %s\n' "$VERIFY_ARTIFACT_RUN"
     exit 0
   fi
   printf '# %s: %d check(s) failed\n' "$VERIFY_NAME" "$VERIFY_FAILURES"
-  printf '# evidence: %s
-' "$VERIFY_ARTIFACT_RUN"
+  printf '# evidence: %s\n' "$VERIFY_ARTIFACT_RUN"
   exit 1
 }
 
