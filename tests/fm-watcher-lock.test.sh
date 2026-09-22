@@ -11,7 +11,7 @@ set -u
 WATCH="$ROOT/bin/fm-watch.sh"
 WATCH_ARM="$ROOT/bin/fm-watch-arm.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
-LIB="$ROOT/bin/fm-wake-lib.sh"
+LIB=${FM_TEST_WAKE_LIB:-"$ROOT/bin/fm-wake-lib.sh"}
 
 # An arm only reports its typed failure after wait_for_healthy_successor has
 # spent the whole confirmation budget, so cases that wait for that failure must
@@ -228,6 +228,111 @@ test_lock_single_winner_under_concurrency() {
   wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
   [ "$wins" -eq 1 ] || fail "expected exactly one lock winner under concurrency, got $wins"
   pass "concurrent fm_lock_try_acquire yields exactly one winner"
+}
+
+test_lock_losing_publish_leaves_no_owner_debris() {
+  local dir state lockdir gate fakebin real_ln pids pid wins left
+  dir=$(make_case lock-publish-race)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  gate="$dir/gate"
+  fakebin="$dir/fakebin"
+  real_ln=$(command -v ln)
+  mkdir -p "$gate" "$fakebin"
+  cat > "$fakebin/ln" <<'EOF'
+#!/usr/bin/env bash
+set -u
+
+wait_for_path() {
+  local path=$1 i=0
+  while [ ! -e "$path" ] && [ ! -L "$path" ] && [ "$i" -lt 2000 ]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
+  [ -e "$path" ] || [ -L "$path" ]
+}
+
+wait_for_absence() {
+  local path=$1 i=0
+  while { [ -e "$path" ] || [ -L "$path" ]; } && [ "$i" -lt 2000 ]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
+  [ ! -e "$path" ] && [ ! -L "$path" ]
+}
+
+if mkdir "$FM_TEST_GATE/first" 2>/dev/null; then
+  : > "$FM_TEST_GATE/first-ready"
+  wait_for_path "$FM_TEST_GATE/second-ready" || exit 90
+  "$FM_TEST_REAL_LN" "$@" || exit $?
+  : > "$FM_TEST_GATE/published"
+  wait_for_path "$FM_TEST_GATE/loser-attempted" || exit 91
+  exit 0
+fi
+
+: > "$FM_TEST_GATE/second-ready"
+wait_for_path "$FM_TEST_GATE/published" || exit 92
+"$FM_TEST_REAL_LN" "$@"
+rc=$?
+printf '%s\n' "$rc" > "$FM_TEST_GATE/loser-ln-status"
+: > "$FM_TEST_GATE/loser-attempted"
+if [ "$rc" -eq 0 ]; then
+  wait_for_absence "$FM_TEST_LOCK" || exit 93
+fi
+exit "$rc"
+EOF
+  chmod +x "$fakebin/ln"
+
+  pids=
+  for name in one two; do
+    PATH="$fakebin:$PATH" \
+      FM_TEST_GATE="$gate" \
+      FM_TEST_LOCK="$lockdir" \
+      FM_TEST_REAL_LN="$real_ln" \
+      FM_STATE_OVERRIDE="$state" \
+      bash -c '
+        . "$1"
+        if fm_lock_try_create "$2"; then
+          printf "win\n" > "$3/$4"
+          fm_lock_release "$2"
+        else
+          printf "lose\n" > "$3/$4"
+        fi
+      ' _ "$LIB" "$lockdir" "$gate" "$name" &
+    pids="$pids $!"
+  done
+  for pid in $pids; do
+    wait "$pid" || fail "a gated lock contender did not finish"
+  done
+
+  wins=$(grep -l '^win$' "$gate"/one "$gate"/two 2>/dev/null | wc -l | tr -d ' ')
+  [ "$wins" -eq 1 ] || fail "the gated publication race produced $wins winners"
+  [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ] || fail "the publication race left the public lock behind"
+  left=$(find "$state" -maxdepth 1 -name '.contend.lock.owner.*' -printf '%f ' 2>/dev/null)
+  [ -z "$left" ] || fail "the losing publication left owner debris: $left"
+  pass "a losing publication leaves no owner directory behind"
+}
+
+test_lock_takeover_removes_a_contender_deposit() {
+  local dir state lockdir dead left
+  dir=$(make_case lock-takeover-deposit)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  dead=$(dead_pid)
+  mkdir "$lockdir"
+  printf '%s\n' "$dead" > "$lockdir/pid"
+  ln -s "$lockdir.owner.gone" "$lockdir/.contend.lock.owner.gone"
+
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2" || exit 21
+    fm_lock_release "$2"
+  ' _ "$LIB" "$lockdir" || fail "takeover could not replace a dead lock containing a contender deposit"
+
+  [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ] || fail "takeover left the public lock behind"
+  left=$(find "$state" -maxdepth 1 -name '.contend.lock.owner.*' -printf '%f ' 2>/dev/null)
+  [ -z "$left" ] || fail "takeover left owner debris: $left"
+  pass "takeover removes a contender deposit from a dead lock"
 }
 
 test_lock_steals_dead_pid_lock() {
@@ -1835,6 +1940,9 @@ test_msys_pid_identity_uses_proc() {
   pass "MSYS process identity uses compatible /proc fields"
 }
 
+test_lock_takeover_removes_a_contender_deposit
+test_lock_losing_publish_leaves_no_owner_debris
+[ "${FM_TEST_LOCK_RACE_ONLY:-0}" != 1 ] || exit 0
 test_singleton_start
 test_pid_identity_is_locale_invariant
 test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
