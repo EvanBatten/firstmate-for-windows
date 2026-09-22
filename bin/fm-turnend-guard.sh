@@ -64,7 +64,8 @@
 #      home's slowest measured time-to-claim (state/.claude-autoarm-claim-ms,
 #      written by bin/fm-claude-stop-autoarm.sh) widens it, and
 #      FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS (default 15000ms) bounds that
-#      widening - the loop below owns why;
+#      widening, and a home that has never claimed gets that bound once,
+#      because its first claim is the slow one - the loop below owns why;
 #   3. only when neither materializes is the auto-arm genuinely absent: re-block
 #      with the repair banner, bounded to FM_CLAUDE_TURNEND_BLOCK_BUDGET
 #      (default 3) consecutive blocks per session - safely below Claude Code's
@@ -439,6 +440,15 @@ if [ "$CLAIM_MS" -gt 0 ]; then
   MEASURED_MS=$((CLAIM_MS * 2))
   [ "$MEASURED_MS" -le "$SYNC_WAIT_MAX_MS" ] || MEASURED_MS=$SYNC_WAIT_MAX_MS
   [ "$MEASURED_MS" -le "$WINDOW_MS" ] || WINDOW_MS=$MEASURED_MS
+fi
+# A home that has never claimed has no measurement to size the window from,
+# and its first claim is the slow one: 12650 ms in a fresh Git Bash home
+# (issue #86), against an 800 ms floor. Blocking that first Stop is not one
+# forced continuation, because the primary then polls its workers for the
+# rest of the session instead of ending a turn again. So a never-claimed home
+# gets the whole bound once; the loop still exits the moment the claim lands.
+if [ "$CLAIM_MS" -eq 0 ] && [ ! -e "$STATE/.claude-autoarm-claim-ms" ] && [ ! -e "$STATE/.claude-autoarm-epoch" ] && [ "$SYNC_WAIT_MAX_MS" -gt "$WINDOW_MS" ]; then
+  WINDOW_MS=$SYNC_WAIT_MAX_MS
 fi
 DEADLINE_MS=$(( $(fm_timing_now_ms) + WINDOW_MS ))
 while [ "$(fm_timing_now_ms)" -lt "$DEADLINE_MS" ]; do
