@@ -1,9 +1,9 @@
 ---
 name: verify-firstmate
 description: >-
-  Measure which firstmate behaviors are proven, and say which are not, by driving the real bin/ scripts against a throwaway home, weighing the result against a tracked inventory of every claim the product makes, and keeping the evidence.
+  Measure which firstmate behaviors are proven, and say which are not, by running real firstmate sessions and driving the real bin/ scripts against throwaway homes, weighing the result against a tracked inventory of every claim the product makes, and keeping the evidence.
   Use before reporting a change to firstmate's own scripts as done, when checking that an installation or a platform works, and when something feels wrong and you need to know which feature is at fault.
-  Firstmate's surface is its command-line scripts and the durable records they keep, so this skill drives scripts and reads records; it does not drive a browser.
+  Firstmate's surface is its command-line scripts and the durable records they keep, so this skill runs sessions, drives scripts and reads records; it does not drive a browser.
 user-invocable: true
 metadata:
   internal: true
@@ -21,9 +21,8 @@ Two files own the detail, and this skill points at them instead of repeating the
 [`features/README.md`](features/README.md) is the feature map: what each feature is from the captain's side, how to drive it, and what end state proves it.
 Read the feature file before you drive its feature.
 
-Two surfaces are not driven here.
-A worker pane in a runtime backend is touched by one feature only, `herdr-lab-pane`, and only through the guarded lab helper described under Cleanup.
-A whole session with a real model worker spends tokens and opens a tab the captain will see, so exactly one feature starts one, `real-session`, and only when `VERIFY_REAL_SESSION=1` is set.
+A drive never starts a model.
+A session always does, and only when `VERIFY_REAL_SESSION=1` is set, because it spends tokens and opens tabs in the Herdr session you are looking at; see Sessions below.
 
 ## Launch
 
@@ -120,6 +119,37 @@ A proof meets these standards.
 - It reads the side effect from the durable record, such as a file under `state/` or `data/`, a backlog item, or a git ref, as well as from what the command printed.
 - It fakes only a boundary the product already isolates, such as a project repository or a worker endpoint, and says so.
 - It reports the evidence path and the summary line, and names every skip as a skip.
+
+
+## Sessions
+
+A drive runs `bin/` scripts itself against a throwaway home, so it plays firstmate.
+A session is firstmate: the code under test is cloned into a fresh home under the temp directory, a real `claude` primary starts there in a Herdr workspace of its own with the toolchain a captain has on its PATH, the script types captain messages into its pane, and every claim is read from `state/`, `data/`, Herdr's tab list and the project's git refs.
+What the agent prints is kept as evidence and is never a claim.
+Only a session can make an inventory row `proven`.
+
+A session script sources `tests/verification/session-lib.sh` after `lib.sh`.
+It skips unless `VERIFY_REAL_SESSION=1` is set, because it spends model tokens and opens tabs in the Herdr session you are looking at, and a skip counts as unproven.
+`VERIFY_SESSION_MODEL` picks the primary's model, `opus` by default, so a run does not spend your default model's quota; workers use whatever firstmate resolves for them.
+The clone gets the primary checkout's `.tools/` directory, or `VERIFY_TOOLS_DIR`, and `VERIFY_PANE_PATH_EXTRA` adds PATH entries for the pane.
+
+Every session ends with a health check of the home it used, run from `verify_done` so no script can skip it: no lock takeover chain, no lock owner left behind, an empty acknowledged notification queue, no captain note still waiting, no task record left, a watcher beacon that stayed fresh whenever work was in flight and the primary was idle, and no tab labelled for one of its tasks still open.
+A script whose claims pass but whose home is damaged fails.
+The close then exits the primary, stops only this home's watcher, closes only the tabs and workspaces the session made, removes only the treehouse pools its project created, and archives `state/` and `data/`.
+
+A session keeps more evidence than a drive:
+
+```
+<feature>/session.txt          workspace, pane, model and the PATH the pane adopted
+<feature>/captain.log          every message typed into the primary, with its time
+<feature>/panes/<pane>-<time>.txt   the primary's pane and every worker's pane, kept whenever it changed
+<feature>/records/state-<time>.txt  state/ listing, every task record, the queue, the backlog and the registry, kept whenever they changed
+<feature>/ticks.tsv            one line per ten seconds: task records, watcher beacon age, what the primary was doing
+<feature>/task-ids.txt         every task id the home ever recorded
+<feature>/home-records.tar     state/ and data/ as the session left them
+```
+
+The home lives under the temp directory on purpose: on this machine that path has two spellings, which is the condition that exposed #82.
 
 ## Cleanup
 
