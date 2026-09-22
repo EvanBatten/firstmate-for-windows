@@ -285,6 +285,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/verify-firstmate/features/steer-worker.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/features/supervision-wakes.md",
       "audience": "agent-runtime"
     },

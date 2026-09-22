@@ -247,6 +247,13 @@ session_start() {  # <workspace label>
 captain_says() {  # <text>
   printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >> "$SESSION_CAPTAIN_LOG"
   verify_note "captain: $*"
+  # A primary parked on a question takes a menu choice, not text; a captain
+  # who wants to say something else dismisses the question first.
+  if [ "$(session_agent_status)" = blocked ]; then
+    session_snapshot dismissed-question
+    session_herdr pane send-keys "$SESSION_PANE" esc >/dev/null 2>&1
+    sleep 2
+  fi
   session_herdr pane send-text "$SESSION_PANE" "$*" >/dev/null 2>&1 || { bad "the captain's message could not be typed into the pane"; return 1; }
   sleep 1
   session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
