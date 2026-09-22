@@ -1790,7 +1790,7 @@ test_hook_claude_mode_window_is_a_wall_clock_deadline() {
   : > "$dir/state/task1.meta"
   assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
   late_claim_publish "$dir" 8
-  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 run_hook_claude "$dir" false); status=$?
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=3000 run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
   expect_code 2 "$status" "a 3000 ms window must expire on the clock, not after 30 polls of whatever the host charges"
   assert_contains "$out" "TURN WOULD END BLIND" "the expired window must still carry the blind-turn banner"
@@ -1813,20 +1813,38 @@ test_hook_claude_mode_recorded_claim_widens_the_window() {
   pass "fm-turnend-guard --claude: a recorded time-to-claim widens the window to twice it"
 }
 
-# The negative control for the case above: the same 4 s claim against a home
-# with no measurement recorded is still missed, so what honored it there was the
-# record and not a guard that now waits for any late claim. Unlike the rest of
-# this block, this case is expected to pass before the change as well as after.
-test_hook_claude_mode_default_window_ignores_a_late_claim() {
+# A home that has never claimed has no measurement and a slow first claim, so
+# its first turn end waits the whole bound: a 4 s claim against a 100 ms floor
+# is honored (#86). The control below is the same 4 s claim in a home that has
+# claimed before but holds a malformed record, which keeps the floor.
+test_hook_claude_mode_never_claimed_home_waits_the_bound() {
   local dir out status
-  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-default-window")
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-never-claimed")
   : > "$dir/state/task1.meta"
+  assert_absent "$dir/state/.claude-autoarm-epoch" "this case must start with no claim ledger"
   late_claim_publish "$dir" 4
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
-  expect_code 2 "$status" "with no measurement recorded the window must stay FM_CLAUDE_AUTOARM_SYNC_WAIT_MS"
-  assert_contains "$out" "TURN WOULD END BLIND" "the default window must still carry the blind-turn banner"
-  pass "fm-turnend-guard --claude: with no recorded time-to-claim the window is exactly FM_CLAUDE_AUTOARM_SYNC_WAIT_MS"
+  expect_code 0 "$status" "a home that has never claimed must wait the bound for its first claim instead of forcing a continuation"
+  [ -z "$out" ] || fail "the honored first claim produced output: $out"
+  pass "fm-turnend-guard --claude: a home that has never claimed waits the whole bound on its first turn end"
+}
+
+test_hook_claude_mode_malformed_record_keeps_the_floor() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-malformed-record")
+  : > "$dir/state/task1.meta"
+  printf 'epoch=3 owner_pid=999 outcome=rewake updated_at=1
+' > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
+  printf 'not-a-number
+' > "$dir/state/.claude-autoarm-claim-ms"
+  late_claim_publish "$dir" 4
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 2 "$status" "a home that has claimed before with a malformed record must keep FM_CLAUDE_AUTOARM_SYNC_WAIT_MS"
+  assert_contains "$out" "TURN WOULD END BLIND" "the floor window must still carry the blind-turn banner"
+  pass "fm-turnend-guard --claude: a malformed time-to-claim record keeps the window at the floor"
 }
 
 test_hook_claude_mode_caps_the_widened_window() {
@@ -2063,7 +2081,8 @@ test_hook_claude_mode_allow_resets_budget
 test_hook_claude_mode_waits_for_late_claim
 test_hook_claude_mode_window_is_a_wall_clock_deadline
 test_hook_claude_mode_recorded_claim_widens_the_window
-test_hook_claude_mode_default_window_ignores_a_late_claim
+test_hook_claude_mode_never_claimed_home_waits_the_bound
+test_hook_claude_mode_malformed_record_keeps_the_floor
 test_hook_claude_mode_caps_the_widened_window
 test_hook_claude_mode_malformed_cap_falls_back_to_the_default
 test_hook_claude_mode_malformed_claim_record_keeps_the_default_window
