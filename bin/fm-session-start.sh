@@ -29,8 +29,10 @@
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
 #   2. bootstrap      - home-local stale Herdr projection cleanup runs only
-#                       when this session actually holds the lock. Detect-only
-#                       diagnostics always run. Bootstrap's six MUTATING sweeps
+#                       when this session actually holds the lock AND this home
+#                       has at least one state/*.herdr-presentation journal.
+#                       An empty throwaway skips that subprocess entirely.
+#                       Detect-only diagnostics always run. Bootstrap's six MUTATING sweeps
 #                       (same-home backlog reconciliation,
 #                       secondmate convergence, secondmate liveness, pending remote
 #                       handoff retry, X-mode artifact writes, fleet sync) also run only when
@@ -360,6 +362,33 @@ SUBRULE='-----------------------------------------------------------------------
 section() { printf '\n%s\n%s\n%s\n' "$RULE" "$1" "$RULE"; }
 subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
 
+# session_start_has_regular_suffix <dir> <suffix>
+# True when <dir> holds at least one regular, non-symlink file whose name
+# ends with <suffix>. Used to skip empty-home subprocesses without sourcing
+# the backends those scripts would load.
+session_start_has_regular_suffix() {
+  local dir=$1 suffix=$2 f
+  [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+  for f in "$dir"/*"$suffix"; do
+    [ -f "$f" ] && [ ! -L "$f" ] && return 0
+  done
+  return 1
+}
+
+# Launch home-summary publication off the helm-taking path. Stdio goes to
+# /dev/null so the worker cannot hold the digest pipe open; nohup plus its
+# own process group keep a slow refresh from dying with the digest bound
+# or stranding session initialization. Best-effort: a launch failure is
+# ignored the same way a failed refresh already was.
+session_start_launch_home_summary() {
+  local monitor_was_on=0
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m 2>/dev/null || true
+  nohup "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort \
+    >/dev/null 2>&1 </dev/null &
+  [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+}
+
 # print_file_or_absent <path> <label>: full contents under a labeled
 # subsection, or an explicit ABSENT marker. Absence is semantically
 # meaningful for every one of these files (captain.md absent = firstmate
@@ -658,11 +687,13 @@ if [ "$READ_ONLY" -eq 0 ]; then
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
   fi
   fm_trace_context_session_start "$CONFIG" "$STATE/.trace-context-effective"
-  # A full locked start publishes this home's current structured summary.
-  # Publication is side-band and best-effort, so it can never change the
-  # session-start result. A context re-emit is not another session start.
+# A full locked start launches this home's structured summary publication.
+# Publication is side-band and best-effort: it is detached into its own
+# process group (same independence as the network stage below) so a slow
+# or hung fleet-snapshot cannot hold the helm-taking digest or the
+# harness stdout pipe. A context re-emit is not another session start.
   if [ "$REEMIT" -eq 0 ]; then
-    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+    session_start_launch_home_summary
   fi
   # Every network call this session start owes is launched HERE, detached and
   # bounded, so it runs concurrently with the whole digest below instead of in
@@ -692,7 +723,9 @@ elif [ "$REEMIT" -eq 1 ]; then
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
   BOOT_OUT=$(
-    "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
+    if session_start_has_regular_suffix "$STATE" ".herdr-presentation"; then
+      "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
+    fi
     FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
       "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
   )
@@ -707,6 +740,8 @@ fi
 # The existing locked session-start path runs the same local inactive-outcome
 # reconciliation as the watcher poll before it presents the resulting durable
 # wake, without adding a daemon or external-network call.
+# An empty home with no state/*.meta files skips that scan: there are no
+# children to visit, and the script's library load is Windows-class cost.
 # Presented records are this turn's first work queue and remain durable until
 # post-handling acknowledgement. The drain's separate OPEN DECISIONS section
 # remains actionable even when that queue is empty (AGENTS.md sections 3 and 8).
@@ -725,8 +760,11 @@ if [ "$READ_ONLY" -eq 1 ]; then
   GUARD_OUT=$(FM_GUARD_READ_ONLY=1 "$SCRIPT_DIR/fm-guard.sh" 2>&1)
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
-  INACTIVE_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-inactive-reconcile.sh" scan --startup 2>&1) || INACTIVE_OUT=
+  INACTIVE_OUT=
+  if session_start_has_regular_suffix "$STATE" ".meta"; then
+    INACTIVE_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+      "$SCRIPT_DIR/fm-inactive-reconcile.sh" scan --startup 2>&1) || INACTIVE_OUT=
+  fi
   if [ -n "$INACTIVE_OUT" ]; then
     printf 'inactive outcome reconciliation: %s\n' "$INACTIVE_OUT"
   fi

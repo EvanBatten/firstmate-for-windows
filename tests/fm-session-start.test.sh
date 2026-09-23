@@ -29,6 +29,9 @@
 #     surfaces exactly once (inline or as a wake, never both), a read-only
 #     session declares the checks it skipped, and the tasks-axi compatibility
 #     verdict is paid for once per session start
+#   - empty-home helm-take: a slow home-summary cannot hold the digest, and
+#     herdr cleanup / inactive-reconcile are skipped when this home has no
+#     journals / task metas
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -507,18 +510,22 @@ SH
 # Drop every harness env marker from bin/fm-harness.sh detect_own so the
 # surrounding interactive shell cannot leak past the suite's fake ps harness.
 # Markers today: CLAUDECODE (claude), PI_CODING_AGENT plus FM_PI_HARNESS
-# (Pi family), GROK_AGENT (grok).
+# (Pi family), GROK_AGENT (grok), CURSOR_AGENT and CURSOR_INVOKED_AS (cursor).
+# Cursor is checked before every other marker, so a leaked CURSOR_AGENT=1 from
+# this test process would otherwise make every case detect as cursor.
 # codex and opencode have no env markers (ancestry only). Without this, a local
-# claude/pi/grok session fails cases that pin a different fake harness while CI
-# (no ambient markers) still passes.
+# claude/pi/grok/cursor session fails cases that pin a different fake harness
+# while CI (no ambient markers) still passes.
 run_session_start() {
   local home=$1 root=$2 path=$3 pi_harness=${4:-}
   if [ -n "$pi_harness" ]; then
-    env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
+    env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+      PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   else
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   fi
@@ -527,7 +534,8 @@ run_session_start() {
 run_pi_session_start() {  # <home> <root> <path> [fm-session-start args...]
   local home=$1 root=$2 path=$3
   shift 3
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+  env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -537,6 +545,7 @@ run_named_harness_session_start() {  # <harness> <home> <root> <path> [fm-sessio
   local harness=$1 home=$2 root=$3 path=$4
   shift 4
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_FAKE_HARNESS="$harness" FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -658,6 +667,34 @@ network_stage_report() {
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-startup-network.sh" report
 }
 
+# wait_for_home_summary <home> [seconds]
+# Publication is launched detached, so tests that need the ledger wait here
+# instead of assuming session-start blocked on it.
+wait_for_home_summary() {
+  local home=$1 limit=${2:-15} waited=0
+  while [ ! -f "$home/state/home-summary.json" ] && [ "$waited" -lt "$limit" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  [ -f "$home/state/home-summary.json" ]
+}
+
+# copy_session_start_bin <work>: a writable bin/ whose session-start script
+# is the real one and whose siblings start as links, so a test can replace
+# one child without editing the tracked tree.
+copy_session_start_bin() {
+  local work=$1 parent f
+  mkdir -p "$work"
+  parent=$(dirname "$work")
+  [ -e "$parent/docs" ] || ln -s "$ROOT/docs" "$parent/docs"
+  for f in "$ROOT"/bin/*; do
+    ln -s "$f" "$work/$(basename "$f")"
+  done
+  rm -f "$work/fm-session-start.sh"
+  cp "$ROOT/bin/fm-session-start.sh" "$work/fm-session-start.sh"
+  chmod +x "$work/fm-session-start.sh"
+}
+
 hash_file_for_test() {
   local digest
   digest=$(fm_test_sha256 "$1") || return 1
@@ -711,12 +748,14 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
+  wait_for_home_summary "$home" \
+    || fail "a locked session start did not publish the home summary ledger"
   jq -e --arg home "$home" '
     .schema == "fm-secondmate-home-summary.v1"
     and .home == $home
     and (.generated_epoch | type) == "number"
   ' "$home/state/home-summary.json" >/dev/null \
-    || fail "a locked session start did not publish the home summary ledger"
+    || fail "a locked session start published a malformed home summary ledger"
   assert_contains "$out" "data/projects.md" "digest did not label the projects.md section"
   assert_contains "$out" "- demo [no-mistakes] - a demo project (added 2026-07-01)" "digest did not print projects.md content"
 
@@ -1962,7 +2001,7 @@ SH
   chmod +x "$nest"
 
   # shellcheck disable=SC2016 # $$ must expand in the launched shell, not here.
-  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     bash -c 'export FM_FAKE_HARNESS_PID=$$; exec "$1" 8 "$2"' _ "$nest" "$SESSION_START")
 
@@ -1998,7 +2037,7 @@ EOF
 
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
-    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
@@ -2220,7 +2259,7 @@ EOF
   git -C "$root" checkout -q -B fm/reemit-tangle
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
-    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   # A re-emit skips the sweeps because it ALREADY ran them, not because it lacks
@@ -2235,7 +2274,7 @@ EOF
   holder_pid=$!
   printf '%s\n' "$holder_pid" > "$home/state/.lock"
   readonly_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
-    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
@@ -2246,6 +2285,132 @@ EOF
     "a lock-refused --reemit still claimed repair ownership"
 
   pass "--reemit re-verifies lock ownership and keeps repair ownership with whoever holds it"
+}
+
+# --- empty-home helm-take: side-band work must not hold the digest ----------
+
+test_empty_home_session_start_does_not_wait_for_home_summary() {
+  local rec root home fakebin work start elapsed
+  rec=$(new_world empty-home-no-wait-summary)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  work="${root%/root}/bin-copy"
+  copy_session_start_bin "$work"
+  rm -f "$work/fm-home-summary-refresh.sh"
+  cat > "$work/fm-home-summary-refresh.sh" <<'SH'
+#!/usr/bin/env bash
+sleep 8
+exit 0
+SH
+  chmod +x "$work/fm-home-summary-refresh.sh"
+
+  start=$(date +%s)
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    "$work/fm-session-start.sh" >/dev/null \
+    || fail "an empty-home session start with a slow home-summary failed"
+  elapsed=$(( $(date +%s) - start ))
+  [ -f "$home/state/.session-start-complete" ] \
+    || fail "an empty-home session start did not write its completion record"
+  [ "$elapsed" -lt 4 ] \
+    || fail "an empty-home session start waited on a slow home-summary: ${elapsed}s"
+
+  pass "an empty-home session start finishes without waiting for home-summary publication"
+}
+
+test_empty_home_session_start_skips_herdr_cleanup_without_journals() {
+  local rec root home fakebin work start elapsed trace
+  rec=$(new_world empty-home-skip-cleanup)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  work="${root%/root}/bin-copy"
+  copy_session_start_bin "$work"
+  trace="$work/cleanup.trace"
+  rm -f "$work/fm-herdr-session-cleanup.sh"
+  cat > "$work/fm-herdr-session-cleanup.sh" <<SH
+#!/usr/bin/env bash
+printf 'ran\n' >> "$trace"
+sleep 8
+exit 0
+SH
+  chmod +x "$work/fm-herdr-session-cleanup.sh"
+
+  start=$(date +%s)
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    "$work/fm-session-start.sh" >/dev/null \
+    || fail "an empty-home session start with a slow cleanup stub failed"
+  elapsed=$(( $(date +%s) - start ))
+  [ ! -e "$trace" ] \
+    || fail "an empty home with no projection journals still ran herdr cleanup"
+  [ "$elapsed" -lt 4 ] \
+    || fail "an empty-home session start waited on herdr cleanup: ${elapsed}s"
+
+  : > "$home/state/task-1.herdr-presentation"
+  start=$(date +%s)
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    "$work/fm-session-start.sh" >/dev/null \
+    || fail "a session start with a projection journal failed"
+  elapsed=$(( $(date +%s) - start ))
+  [ -s "$trace" ] \
+    || fail "a home with a projection journal did not run herdr cleanup"
+  [ "$elapsed" -ge 7 ] \
+    || fail "a journaled home did not actually run the cleanup stub: ${elapsed}s"
+
+  pass "session start skips herdr cleanup when this home has no projection journals"
+}
+
+test_empty_home_session_start_skips_inactive_reconcile_without_metas() {
+  local rec root home fakebin work start elapsed trace
+  rec=$(new_world empty-home-skip-inactive)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  work="${root%/root}/bin-copy"
+  copy_session_start_bin "$work"
+  trace="$work/inactive.trace"
+  rm -f "$work/fm-inactive-reconcile.sh"
+  cat > "$work/fm-inactive-reconcile.sh" <<SH
+#!/usr/bin/env bash
+printf 'ran\n' >> "$trace"
+sleep 8
+exit 0
+SH
+  chmod +x "$work/fm-inactive-reconcile.sh"
+
+  start=$(date +%s)
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    "$work/fm-session-start.sh" >/dev/null \
+    || fail "an empty-home session start with a slow inactive-reconcile stub failed"
+  elapsed=$(( $(date +%s) - start ))
+  [ ! -e "$trace" ] \
+    || fail "an empty home with no task metas still ran inactive-reconcile"
+  [ "$elapsed" -lt 4 ] \
+    || fail "an empty-home session start waited on inactive-reconcile: ${elapsed}s"
+
+  printf 'id=task-1\n' > "$home/state/task-1.meta"
+  start=$(date +%s)
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    "$work/fm-session-start.sh" >/dev/null \
+    || fail "a session start with a task meta failed"
+  elapsed=$(( $(date +%s) - start ))
+  [ -s "$trace" ] \
+    || fail "a home with a task meta did not run inactive-reconcile"
+  [ "$elapsed" -ge 7 ] \
+    || fail "a home with a task meta did not actually run the inactive-reconcile stub: ${elapsed}s"
+
+  pass "session start skips inactive-reconcile when this home has no task metas"
 }
 
 # --- fleet-state digest: no in-flight tasks ----------------------------------
@@ -2511,5 +2676,8 @@ test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
 test_agents_baseline_requires_sha256_and_successful_completion
 test_reemit_keeps_repair_ownership_with_the_lock_holder
+test_empty_home_session_start_does_not_wait_for_home_summary
+test_empty_home_session_start_skips_herdr_cleanup_without_journals
+test_empty_home_session_start_skips_inactive_reconcile_without_metas
 
 echo "# fm-session-start.test.sh: all assertions passed"

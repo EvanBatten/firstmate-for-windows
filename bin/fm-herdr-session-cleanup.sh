@@ -21,12 +21,31 @@
 # The script never closes a workspace. It removes only the matching journal,
 # and only after the exact pane is confirmed gone. Every error warns and returns
 # success so session startup continues conservatively.
+#
+# EMPTY HOME: when this home has no state/*.herdr-presentation journals, the
+# script exits 0 before sourcing the Herdr backend or walking process tables.
+# A throwaway or verify home pays one glob, not a Windows-class backend load.
+# Sourced callers (FM_HERDR_SESSION_CLEANUP_SOURCE_ONLY=1) still load the
+# functions so tests can drive one-candidate cases.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+
+if [ "${FM_HERDR_SESSION_CLEANUP_SOURCE_ONLY:-0}" != 1 ]; then
+  herdr_cleanup_found=0
+  for journal in "$STATE"/*.herdr-presentation; do
+    if [ -f "$journal" ] && [ ! -L "$journal" ]; then
+      herdr_cleanup_found=1
+      break
+    fi
+  done
+  if [ "$herdr_cleanup_found" -eq 0 ]; then
+    exit 0
+  fi
+fi
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
