@@ -105,7 +105,6 @@ async function run(trace) {
     const deps = {
       liveness: () => session.liveness(),
       signals: session.signals,
-      answerBlocked: () => session.handleBlockedQuestion(),
       fetchHerdr: (kind, snap, ids) => session.fetchHerdr(kind, snap, ids),
       gitAhead,
       seeds: session.seeds,
