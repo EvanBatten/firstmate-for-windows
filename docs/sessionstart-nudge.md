@@ -47,6 +47,7 @@ This deliberately inverts the previous nudge matcher, which fired on `startup|re
 Compaction is covered where a tracked adapter delivers that source because a compacted session has lost exactly the digest it needs, and resume is excluded from the run because it restores that digest instead of losing it.
 
 Current harness ownership of the lock and its matching `state/.session-start-complete` record together are the idempotency interlock for the whole scheme.
+A second unflagged `bin/fm-session-start.sh` against that same live lock and completion record prints a short already-complete notice and exits rather than repeating the full digest; `bin/fm-session-start.sh --reemit` remains the path that reprints context after a clear or compact.
 The full digest clears that completion record after acquiring the lock and republishes the lock owner's pid only after every stage completes, so `clear` or `compact` cannot skip startup sweeps after a truncated run.
 `bin/fm-lock.sh` already treats a lock this session's own harness holds as its own, so a proven `clear` or `compact` re-emit re-verifies ownership and proceeds, while a lock another live session took meanwhile still produces the ordinary read-only digest.
 On a run-tier harness whose ancestry resolves a harness the nudge cannot also fire: `resume`, `reload`, and `fork` are the only sources routed to it there, and on those its own ancestry check stays silent whenever this process already holds the lock.
@@ -94,7 +95,7 @@ A lock another session holds and a truncated digest therefore surface as digest 
 | Cursor | Run | `.cursor/hooks.json` registers `sessionStart`, anchored through `$CURSOR_PROJECT_DIR` with a 180s timeout, invoking `bin/fm-sessionstart-cursor.sh` and then `; exit 0`, the same forked shape as the Claude entry. | Cursor's payload has no `source` field, so the registration supplies `--source` itself, and the adapter returns the digest as `additional_context`. Project hooks load only when the workspace is launched with `--trust`. |
 | Cursor compaction | Uncovered | None. | Cursor's `preCompact` response can return only `user_message` and is absent from Cursor's `additional_context` step set, so it cannot inject a re-emit digest. Delivering one needs its own design and is deliberately deferred to a follow-up; a Cursor primary does not re-emit its digest after a compaction. |
 
-Cursor's `sessionStart` fires at every session open with no source distinction, including a resumed session, so a resume re-runs the full digest; that is redundant and idempotent rather than a lost helm.
+Cursor's `sessionStart` fires at every session open with no source distinction, including a resumed session; when this lock already holds a matching completion record the adapter receives the already-complete notice instead of a second full digest.
 Cursor's compaction surface is uncovered in the same sense as Codex's interactive TUI above: Firstmate registers nothing for `preCompact`, so a compacted Cursor session keeps whatever context survived rather than receiving a fresh digest.
 
 Pi is the only adapter that injects a message rather than hook stdout, so whatever it injects must carry operational provenance or the Ahoy skill would have to guess whether it was captain-authored.

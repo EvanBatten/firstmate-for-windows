@@ -91,6 +91,7 @@ An actual protected command with a heredoc still has a redirection and is denied
 
 An allowed watcher program is one linear outer command list with zero or more approved setup nodes followed by exactly one direct protected node.
 `bin/fm-watch-arm.sh` and `bin/fm-watch-checkpoint.sh` are the only blessed final nodes, including their expanded-path forms; a `bin/fm-watch.sh` final node is never blessed and denies with `watcher-direct`.
+The primary cd-guard still denies a persistent top-level `cd`, so the recommended invocation is the bare blessed arm or checkpoint, never `cd <dir> && bin/fm-watch-arm.sh`.
 
 Approved setup nodes are:
 

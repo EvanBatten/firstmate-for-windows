@@ -104,6 +104,9 @@ matrix_case B24 deny 'command builtin cd projects/foo'
 matrix_case B25 deny 'builtin command cd projects/foo'
 matrix_case B26 deny 'command -p cd projects/foo'
 matrix_case B27 deny 'command -- cd projects/foo'
+matrix_case B28 deny 'cd /tmp/fm-verify-home && bin/fm-session-start.sh'
+matrix_case B29 deny 'cd projects/foo && bin/fm-session-start.sh'
+matrix_case B30 deny 'cd /tmp/fm-verify-home && bin/fm-watch-arm.sh'
 
 # ALLOW: not a persistent top-level cwd change (scoped, data, or non-cd).
 matrix_case A01 allow 'git -C projects/foo status'
