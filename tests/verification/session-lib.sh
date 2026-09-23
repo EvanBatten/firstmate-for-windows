@@ -90,6 +90,7 @@ session_clone() {
   fi
   [ -L "$SESSION_HOME/.claude/skills" ] && [ -d "$SESSION_HOME/.claude/skills" ] ||
     bad "the clone's harness skill link does not resolve, so the primary would have no skills"
+  "$VERIFY_ROOT/bin/fm-verify-home.sh" seed --home "$SESSION_HOME" >/dev/null
 }
 
 session_open() {  # <workspace label>
@@ -142,18 +143,25 @@ session_at_shell_prompt() {
   session_pane_text "$SESSION_PANE" 6 | grep -q '^\$ *$'
 }
 
+session_classify() {  # [text]
+  printf '%s' "${1:-}" | "$VERIFY_ROOT/bin/fm-verify-home.sh" classify
+}
+
 session_launch() {
-  local deadline text
+  local deadline text class
   session_herdr pane run "$SESSION_PANE" "cd $SESSION_HOME && claude --dangerously-skip-permissions --model $SESSION_MODEL" >/dev/null 2>&1
   deadline=$(( $(date +%s) + 180 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     text=$(session_pane_text "$SESSION_PANE" 60)
-    case "$text" in
-      *'Yes, I trust this folder'*)
+    class=$(session_classify "$text")
+    case "$class" in
+      ask-user|blocked)
+        session_snapshot "$class"
+        bad "the primary parked on a $class prompt. Its pane shows: $(session_last_lines)"
+        verify_done ;;
+      trust-yes)
         session_snapshot trust-prompt
         printf '%s\n' "$text" | grep -q '❯ *No' && session_herdr pane send-keys "$SESSION_PANE" Down >/dev/null 2>&1
-        # Enter confirms whatever the cursor is on, so wait until the pane
-        # shows it on the accept option.
         if session_herdr pane wait-output --regex '❯ *Yes' --timeout 20000 "$SESSION_PANE" >/dev/null 2>&1; then
           session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
         else
@@ -161,6 +169,8 @@ session_launch() {
           bad "the trust prompt's cursor never moved to the accept option, so nothing was confirmed"
           verify_done
         fi ;;
+    esac
+    case "$text" in
       *'bypass permissions on'*)
         ok "a real firstmate primary is running in its own Herdr tab, past its trust prompt"
         session_snapshot ready
@@ -277,6 +287,12 @@ session_wait() {
       bad "$claim: the primary stopped to ask the captain a question. Its pane shows: $(session_last_lines)"
       return 1
     fi
+    case "$(session_classify "$(session_pane_text "$SESSION_PANE" 60)")" in
+      ask-user|blocked)
+        session_snapshot classified-blocked
+        bad "$claim: the primary parked on a blocked prompt. Its pane shows: $(session_last_lines)"
+        return 1 ;;
+    esac
     sleep 5
   done
   session_snapshot timeout
@@ -370,21 +386,42 @@ session_destroy_pools() {
   done
 }
 
+# /exit while a shell is still running raises Claude's "Background work is
+# running" dialog. Option 1 is "Exit and stop tasks", and Enter accepts it.
+session_exit_to_prompt() {
+  local deadline text class confirmed=0
+  session_herdr pane send-text "$SESSION_PANE" '/exit' >/dev/null 2>&1
+  sleep 1
+  session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
+  deadline=$(( $(date +%s) + 90 ))
+  until session_at_shell_prompt; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    text=$(session_pane_text "$SESSION_PANE" 40)
+    class=$(session_classify "$text")
+    case "$class" in
+      ask-user|blocked)
+        session_snapshot "$class"
+        return 1 ;;
+      background-work-enter)
+        if [ "$confirmed" -eq 0 ]; then
+          session_snapshot exit-dialog
+          session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
+          confirmed=1
+        fi ;;
+    esac
+    sleep 3
+  done
+  return 0
+}
+
 session_close() {
-  local deadline tab label ws
+  local tab label ws
   [ "$SESSION_CLOSED" = 0 ] && [ -n "$SESSION_PANE" ] || return 0
   SESSION_CLOSED=1
   [ -z "$SESSION_OBSERVER_PID" ] || kill "$SESSION_OBSERVER_PID" 2>/dev/null || true
   session_snapshot final
   if ! session_at_shell_prompt; then
-    session_herdr pane send-text "$SESSION_PANE" '/exit' >/dev/null 2>&1
-    sleep 1
-    session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
-    deadline=$(( $(date +%s) + 90 ))
-    until session_at_shell_prompt; do
-      [ "$(date +%s)" -lt "$deadline" ] || { verify_note "the primary did not exit on /exit within 90s"; break; }
-      sleep 3
-    done
+    session_exit_to_prompt || verify_note "the primary did not exit on /exit within 90s"
   fi
   session_stop_watcher
   # Only tabs labelled for this home's tasks, and only a workspace that did
@@ -441,16 +478,8 @@ project_seed() {
 # again. Exits the primary, starts claude again in the same pane, and waits
 # for it to be ready; the home, its records and any worker are untouched.
 session_relaunch() {
-  local deadline
   session_snapshot before-relaunch
-  session_herdr pane send-text "$SESSION_PANE" '/exit' >/dev/null 2>&1
-  sleep 1
-  session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
-  deadline=$(( $(date +%s) + 90 ))
-  until session_at_shell_prompt; do
-    [ "$(date +%s)" -lt "$deadline" ] || { bad "the primary did not exit on /exit within 90 s, so no restart could happen"; return 1; }
-    sleep 3
-  done
+  session_exit_to_prompt || { bad "the primary did not exit on /exit within 90 s, so no restart could happen"; return 1; }
   ok "the primary exited on the captain's /exit"
   session_launch
 }

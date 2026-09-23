@@ -274,7 +274,7 @@ family_for_basename() {
     fm-backlog-atomicity.test.sh|\
     fm-bootstrap.test.sh|fm-bootstrap-network-parallel.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
     fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
-    fm-tangle-guard.test.sh|fm-update.test.sh)
+    fm-tangle-guard.test.sh|fm-update.test.sh|fm-verify-home.test.sh)
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
@@ -639,7 +639,8 @@ tests/fm-tool-update-check.test.sh 12846
 tests/fm-trace-context-lib.test.sh 194
 tests/fm-trace-context-spawn.test.sh 35325
 tests/fm-turnend-guard.test.sh 131704
-tests/fm-update.test.sh 5280
+tests/fm-update.test.sh 8000
+tests/fm-verify-home.test.sh 3000
 tests/fm-vendor-auth-probe.test.sh 43243
 tests/fm-wake-daemon-lifecycle-e2e.test.sh 6219
 tests/fm-wake-drain-open-decisions-cursor.test.sh 17357

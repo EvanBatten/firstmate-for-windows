@@ -52,6 +52,7 @@ verify_home() {
   VERIFY_HOME="$VERIFY_TMP/home"
   mkdir -p "$VERIFY_HOME/data" "$VERIFY_HOME/state" "$VERIFY_HOME/config" "$VERIFY_HOME/projects"
   cp "$VERIFY_ROOT/.tasks.toml" "$VERIFY_HOME/.tasks.toml"
+  "$VERIFY_ROOT/bin/fm-verify-home.sh" seed --home "$VERIFY_HOME" >/dev/null
 }
 
 # Artifacts. A run that only prints to a terminal leaves nothing to inspect an

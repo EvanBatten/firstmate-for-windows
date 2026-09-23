@@ -233,6 +233,14 @@ The flag is per home and is not inherited by secondmate homes, because stow cade
 Only the file's presence is read, so its contents are ignored; remove it to return to the default contract on the next pass.
 The skill text owns the marker spelling, the tick order, and the reinforcement rule.
 
+## Throwaway / verify home (.fm-control-throwaway)
+
+A throwaway measurement or verification home is marked by a regular file `.fm-control-throwaway` at the home root, or by `FM_VERIFY_HOME=1` or `FM_SESSION_START_FAST=1`.
+`bin/fm-verify-home-lib.sh` owns detection and the safe auto-answers only: folder-trust Yes, `/exit` background-work Enter, prefer `--dangerously-skip-permissions`, and pre-grant land for already assigned work.
+Ask-user and needs-decision findings are never auto-answered, and tools are never auto-installed.
+A captain home without those markers is unchanged.
+The helper's header owns the class names, artifact paths, and mutation contract.
+
 ## Secondmate routes (data/secondmates.md)
 
 Persistent secondmate routes live locally in `data/secondmates.md`.
