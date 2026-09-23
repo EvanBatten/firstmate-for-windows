@@ -15,6 +15,10 @@ metadata:
 It clones the checkout into a throwaway home, opens one Herdr pane it owns, starts a real `claude` primary from that pane's own shell, types the captain lines of a trace into it, and waits for each step's claim to hold on the home's own records.
 One JSON object on stdout says what held, how long each claim took, and what the driver itself cost.
 
+The driver writes a throwaway `CLAUDE_CONFIG_DIR` inside the home with `hasCompletedOnboarding`, `bypassPermissionsModeAccepted`, project trust, and a theme settings file, then passes that directory into the pane env.
+It does not mutate `~/.claude.json`.
+`CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_CODE_OATH_TOKEN`, exported as the OAUTH name) is passed to the pane and is never written anywhere.
+
 ## Write a trace
 
 ```json
@@ -22,19 +26,22 @@ One JSON object on stdout says what held, how long each claim took, and what the
   "feature": "restart-primary",
   "project": "greeter",
   "steps": [
-    { "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter ...", "until": "projects.registered:greeter", "budgetSec": 600 },
-    { "say": "", "until": "tasks.count>=1 && backlog.inflight>=1", "budgetSec": 900 },
-    { "say": "$relaunch", "until": "tasks.count>=1 && worker.alive", "budgetSec": 600 },
-    { "say": "ahoy, I'm back ...", "until": "lock.rotated", "budgetSec": 600 },
-    { "say": "", "until": "git.ahead:greeter>=1", "budgetSec": 1200 },
-    { "say": "", "until": "home.clean && tabs.clean", "budgetSec": 600 }
+    { "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter ...", "until": "projects.registered:greeter", "budgetSec": 150 },
+    { "say": "", "until": "tasks.count>=1 && backlog.inflight>=1", "budgetSec": 180 },
+    { "say": "$relaunch", "until": "tasks.count>=1 && worker.alive", "budgetSec": 90 },
+    { "say": "ahoy, I'm back ...", "until": "lock.rotated", "budgetSec": 60 },
+    { "say": "", "until": "git.ahead:greeter>=1", "budgetSec": 420 },
+    { "say": "", "until": "home.clean && tabs.clean", "budgetSec": 120 }
   ]
 }
 ```
 
 - `say` is captain text typed into the primary; `""` waits without typing; `$relaunch` exits the primary with `/exit` and starts it again in the same pane, the home and any worker untouched.
 - `until` is one predicate or a `&&` conjunction from the closed catalog at the top of [`tools/fm-control/lib/predicates.mjs`](../../../tools/fm-control/lib/predicates.mjs); that file is the single owner of the catalog.
-- `budgetSec` is the step's deadline; without it `FM_CONTROL_UNTIL_MS` (default 1200000) applies.
+- `budgetSec` is the step's deadline; without it `FM_CONTROL_UNTIL_MS` (default 180000, three minutes) applies.
+- Early restart-primary steps that should already be past ready (register, dispatch, relaunch, lock rotate) share a planned budget near ten minutes so a miss fails in minutes, not half an hour.
+- The land step (`git.ahead`) is the only larger budget: the worker still has to implement and land the change.
+- A passing run is expected around three minutes; the budgets are miss ceilings, not the target duration.
 - `{{projectOrigin}}` is the bare origin of a throwaway project seeded with one commit before launch, named by `project` (default `greeter`); `{{home}}` is the throwaway home's path.
 - `pong`, `bypass permissions on`, and a trace whose only claims are `lock.held` are refused with exit 2 before any Herdr call: they prove the harness started, not that firstmate did anything.
 - Pane text is never a claim; a captain line that made the primary say the right thing but write nothing fails its step.
@@ -51,9 +58,9 @@ node tools/fm-control/drive.mjs run tools/fm-control/traces/restart-primary.json
 
 Requirements: a logged-in `claude` on PATH, `herdr` 0.7.4 or newer (protocol 16), `git`, Node 20 or newer, and the same PATH a captain has.
 The primary runs the model `FM_CONTROL_MODEL` (default `opus`).
-`CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_CODE_OATH_TOKEN`) is passed to the pane and is never written anywhere.
 With no `FM_CONTROL_HERDR_SESSION` and no default Herdr server running, the driver starts a throwaway server under a random `fm-control-<hex>` session and stops it at the end; with a named session it attaches and starts nothing.
 `FM_CONTROL_TRANSPORT=socket|cli|auto` picks how it speaks to Herdr: the Unix socket where Node can open it, the `herdr` binary spawned once per call where it cannot (Windows).
+Keep that CLI transport; do not replace it with a socket-only client.
 
 Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3 the environment failed (Herdr unusable, clone failed, primary never ready).
 
@@ -70,6 +77,7 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 `readyMs` is the first launch, `predicateMs` the total time spent waiting for claims, and the rest of `wallMs` is the driver: setup, typing, relaunch, and cleanup, which `overhead` breaks down.
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
 A dead primary or one parked on a question fails its step at once, never at the budget.
+Dead-primary and post-`/exit` detection use last-line shell prompts (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`) plus the pid check; waits use `fs.watch` and do not poll Herdr every second.
 
 The evidence directory keeps `result.json`, `captain.log`, a pane snapshot at every ready, dialog, relaunch and failure, the throwaway server's own log, and `home/state` plus `home/data` as the run left them.
 `FM_CONTROL_EVIDENCE` names the directory; `FM_CONTROL_KEEP=1` leaves the home and pane in place for a look.
@@ -89,4 +97,5 @@ It never writes to the checkout it clones and never merges anything; the primary
 
 ## Tests
 
-`node --test tools/fm-control/test/drive.test.mjs` runs without Herdr or Claude: refusals exit 2 with zero Herdr spawns, every predicate yields a literal boolean over fixture homes, and a scripted stand-in for the `herdr` binary drives whole traces, including the shipped `restart-primary` one.
+`node --test tools/fm-control/test/` (or `node --test tools/fm-control/test/drive.test.mjs`) runs without Herdr or Claude: refusals exit 2 with zero Herdr spawns, every predicate yields a literal boolean over fixture homes, and a scripted stand-in for the `herdr` binary drives whole traces, including the shipped `restart-primary` one.
+The suite also checks that the throwaway onboarding config dir is created without writing `~/.claude.json`, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.

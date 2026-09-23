@@ -121,7 +121,10 @@ if (args[0] === '--apply') {
     case 'workspace create': {
       const i = a.indexOf('--cwd');
       s.home = a[i + 1];
-      s.env = a.filter((x, k) => a[k - 1] === '--env').map((kv) => kv.split('=')[0]);
+      const envPairs = a.filter((x, k) => a[k - 1] === '--env');
+      s.env = envPairs.map((kv) => kv.split('=')[0]);
+      const config = envPairs.find((kv) => kv.startsWith('CLAUDE_CONFIG_DIR='));
+      if (config) s.claudeConfigDir = config.slice('CLAUDE_CONFIG_DIR='.length);
       save(s);
       out({ workspace: { workspace_id: 'ws-fake' }, root_pane: { pane_id: 'pane-fake' } });
       break;

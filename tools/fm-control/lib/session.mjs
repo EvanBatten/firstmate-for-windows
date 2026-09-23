@@ -10,18 +10,20 @@
 // Ready is a process fact plus a firstmate fact: herdr's pane.process_info
 // lists a claude foreground process, and either state/.lock exists in the
 // home under a new identity or the prompt is up (see awaitReady). Liveness
-// afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's own first-run dialogs (folder trust,
-// bypass-permissions acceptance) are answered when they appear; the folder
-// trust is also pre-recorded in ~/.claude.json the way claude itself records
-// it, so a launch normally shows no dialog at all.
+// afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
+// first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
+// (onboarding, bypass-permissions, folder trust, theme) and passing it into
+// the pane env. ~/.claude.json is never mutated. Dialog handlers remain as a
+// fallback. A dead primary is the pid going away or the pane returning to a
+// shell prompt (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`).
 //
 // Environment:
 //   FM_CONTROL_MODEL        primary model (default opus)
-//   FM_CONTROL_READY_MS     ready budget per launch (default 180000)
-//   FM_CONTROL_UNTIL_MS     default step budget when a step has no budgetSec (default 1200000)
+//   FM_CONTROL_READY_MS     ready budget per launch (default 120000)
+//   FM_CONTROL_UNTIL_MS     default step budget when a step has no budgetSec (default 180000)
 //   FM_CONTROL_EVIDENCE     evidence directory (default <tmp>/fm-control-artifacts/<feature>-<utc>)
 //   FM_CONTROL_KEEP         1 keeps the throwaway home and pane after the run
-//   FM_CONTROL_PRETRUST     0 skips pre-recording folder trust in ~/.claude.json
+//   FM_CONTROL_PRETRUST     0 skips writing the throwaway CLAUDE_CONFIG_DIR
 //   FM_CONTROL_ROOT         checkout to clone as the home (default: the repo holding this file)
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
@@ -30,8 +32,31 @@ import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { Herdr, HerdrError, sleep } from './herdr.mjs';
+import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
 import { recordedPaneIds } from './predicates.mjs';
+
+// Isolated Claude config for one throwaway home. Never writes ~/.claude.json.
+export function prepareClaudeConfig(home) {
+  const config = join(home, '.fm-control-claude');
+  mkdirSync(config, { recursive: true });
+  writeFileSync(
+    join(config, '.claude.json'),
+    `${JSON.stringify({
+      hasCompletedOnboarding: true,
+      bypassPermissionsModeAccepted: true,
+      projects: {
+        [home]: { hasTrustDialogAccepted: true },
+      },
+    })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(config, 'settings.json'),
+    `${JSON.stringify({ theme: 'dark' })}\n`,
+    { mode: 0o600 },
+  );
+  return config;
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = resolve(HERE, '..', '..', '..');
@@ -42,7 +67,10 @@ export class Session {
     this.env = env;
     this.log = log;
     this.model = env.FM_CONTROL_MODEL || 'opus';
-    this.readyMs = Number.parseInt(env.FM_CONTROL_READY_MS || '180000', 10);
+    this.readyMs = Number.parseInt(env.FM_CONTROL_READY_MS || '120000', 10);
+    if (!this.env.CLAUDE_CODE_OAUTH_TOKEN && this.env.CLAUDE_CODE_OATH_TOKEN) {
+      this.env = { ...this.env, CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OATH_TOKEN };
+    }
     this.root = env.FM_CONTROL_ROOT || DEFAULT_ROOT;
     this.scratch = null;
     this.home = null;
@@ -57,7 +85,8 @@ export class Session {
     this.seenTaskIds = new Set();
     this.taskTmps = new Set();
     this.baselineWorkspaces = new Set();
-    this.signals = { blocked: null, status: null };
+    this.signals = { blocked: null, status: null, shellDead: null };
+    this.claudeConfigDir = null;
     this.statusPoll = null;
     this.counters = { gitSpawns: 0, setupSpawns: 0, cleanupSpawns: 0 };
     this.captainLog = [];
@@ -76,7 +105,7 @@ export class Session {
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
-    this.preTrust();
+    if (this.env.FM_CONTROL_PRETRUST !== '0') this.claudeConfigDir = prepareClaudeConfig(this.home);
     this.herdr = await Herdr.attach(this.env, { log: this.log });
     try {
       const list = await this.herdr.call('workspace.list');
@@ -87,6 +116,7 @@ export class Session {
     // TMUX is blanked so a herdr server that happens to run under tmux still
     // yields a pane where firstmate auto-detects herdr, not tmux.
     const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '' };
+    if (this.claudeConfigDir) paneEnv.CLAUDE_CONFIG_DIR = this.claudeConfigDir;
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
     const created = await this.herdr.call('workspace.create', { cwd: this.home, label: `fm-control-${this.trace.feature}`, focus: false, env: paneEnv });
@@ -197,33 +227,28 @@ export class Session {
     this.projectName = name;
   }
 
-  // Record folder trust for the throwaway home in ~/.claude.json exactly the
-  // way claude records it after "Yes, I trust this folder". Only that one
-  // project entry is written; every other key is left as found.
-  preTrust() {
-    if (this.env.FM_CONTROL_PRETRUST === '0') return;
-    const file = join(homedir(), '.claude.json');
-    let cfg = {};
-    try { cfg = JSON.parse(readFileSync(file, 'utf8')); } catch { if (existsSync(file)) return; }
-    if (typeof cfg !== 'object' || cfg === null) return;
-    cfg.projects = cfg.projects ?? {};
-    cfg.projects[this.home] = { ...(cfg.projects[this.home] ?? {}), hasTrustDialogAccepted: true };
-    try { writeFileSync(file, JSON.stringify(cfg, null, 2)); } catch { /* the dialog handler covers it */ }
-  }
-
   // ---- launch and ready ---------------------------------------------------
 
   launchLine() {
     const flags = `--dangerously-skip-permissions --model ${this.model}`;
     const home = this.home;
-    if (this.shell === 'pwsh') return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}`;
-    if (this.shell === 'cmd') return `set "PATH=%FM_PANE_PATH%" && cd /d "${home}" && claude ${flags}`;
-    return `export PATH="$FM_PANE_PATH"; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
+    const cfg = this.claudeConfigDir;
+    if (this.shell === 'pwsh') {
+      const cfgSet = cfg ? `; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'` : '';
+      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }${cfgSet}; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}`;
+    }
+    if (this.shell === 'cmd') {
+      const cfgSet = cfg ? `set "CLAUDE_CONFIG_DIR=${cfg}" && ` : '';
+      return `set "PATH=%FM_PANE_PATH%" && ${cfgSet}cd /d "${home}" && claude ${flags}`;
+    }
+    const cfgSet = cfg ? `export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; ` : '';
+    return `export PATH="$FM_PANE_PATH"; ${cfgSet}cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
   }
 
   async launch() {
     const t0 = Date.now();
     this.primaryPid = null;
+    this.signals.shellDead = null;
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: this.launchLine(), keys: ['enter'] });
     await this.awaitReady();
     return Date.now() - t0;
@@ -264,7 +289,7 @@ export class Session {
     }
     if (/Select login method/.test(text)) {
       this.snapshot('login-prompt', text);
-      throw new HerdrError('claude opened its first-run login dialog in the pane; complete `claude` onboarding once on this machine (or set hasCompletedOnboarding in ~/.claude.json) before driving a session');
+      throw new HerdrError('claude opened its first-run login dialog in the pane; the throwaway CLAUDE_CONFIG_DIR did not skip onboarding (or CLAUDE_CODE_OAUTH_TOKEN is missing)');
     }
     if (/Light mode \(ANSI colors only\)/.test(text)) {
       this.snapshot('theme-prompt', text);
@@ -290,6 +315,10 @@ export class Session {
       const text = await this.paneText();
       if (await this.answerDialog(text)) { await sleep(400); continue; }
       const prompted = /bypass permissions on/.test(text);
+      if (atShellPrompt(text) && (sawClaude || /claude --dangerously/.test(text))) {
+        this.snapshot('exited-before-ready', text);
+        throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
+      }
       // The process list is asked for only when it can decide something: a
       // ready candidate, or every third tick to notice an exit. On the cli
       // transport each ask is a process, so this halves the ready cost.
@@ -320,6 +349,7 @@ export class Session {
   // ---- liveness and status ------------------------------------------------
 
   async liveness() {
+    if (this.signals.shellDead) return { alive: false, reason: this.signals.shellDead };
     if (this.primaryPid) {
       try { process.kill(this.primaryPid, 0); return { alive: true, reason: `pid ${this.primaryPid}` }; } catch { return { alive: false, reason: `pid ${this.primaryPid} is gone` }; }
     }
@@ -336,6 +366,13 @@ export class Session {
     const apply = (status) => {
       this.signals.status = status;
       this.signals.blocked = status === 'blocked' ? 'herdr reports the primary blocked on a question' : null;
+      // Rare, event-driven dead-primary check: unknown status plus a shell
+      // prompt. Not a 1 s pane-read loop.
+      if (status === 'unknown' && this.paneId) {
+        this.paneText().then((text) => {
+          if (atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
+        }).catch(() => {});
+      }
     };
     const handle = this.herdr.subscribe([{ type: 'pane.agent_status_changed', pane_id: this.paneId }], (msg) => {
       if (msg.data?.pane_id === this.paneId && msg.data?.agent_status) apply(msg.data.agent_status);
@@ -385,6 +422,8 @@ export class Session {
   // "Background work is running" dialog when a shell it started is still
   // alive; its first option, Exit and stop tasks, is what Enter accepts.
   async exitToPrompt(budgetMs = 90_000) {
+    const already = await this.paneText().catch(() => '');
+    if (atShellPrompt(already)) return true;
     const deadline = Date.now() + budgetMs;
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: '/exit', keys: ['enter'] });
     let confirmed = false;
@@ -395,6 +434,7 @@ export class Session {
       if (Date.now() - lastRead >= 1500) {
         lastRead = Date.now();
         const text = await this.paneText().catch(() => '');
+        if (atShellPrompt(text)) return true;
         if (!confirmed && /Background work is running/.test(text)) {
           this.snapshot('exit-dialog', text);
           await this.keys('enter');
@@ -412,6 +452,7 @@ export class Session {
   async relaunch() {
     const t0 = Date.now();
     this.lockBaseline = this.lockText();
+    this.signals.shellDead = null;
     this.snapshot('before-relaunch', await this.paneText().catch(() => ''));
     const exited = await this.exitToPrompt();
     if (!exited) throw new HerdrError('the primary did not exit on /exit within 90 s, so no restart could happen');
@@ -552,6 +593,9 @@ export class Session {
   archive() {
     for (const d of ['state', 'data']) {
       try { cpSync(join(this.home, d), join(this.evidenceDir, 'home', d), { recursive: true, dereference: false, force: true, errorOnExist: false }); } catch { /* absent */ }
+    }
+    if (this.claudeConfigDir) {
+      try { cpSync(this.claudeConfigDir, join(this.evidenceDir, 'claude-config'), { recursive: true }); } catch { /* absent */ }
     }
   }
 

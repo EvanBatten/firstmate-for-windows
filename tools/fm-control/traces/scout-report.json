@@ -5,32 +5,32 @@
     {
       "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then investigate, without changing anything in the project: which subcommands a friendly greeter CLI called greet.sh should have, and what each should print. I want a short written report I can read, not a change. use the opus model. when the report is in, tell me its findings and wait.",
       "until": "projects.registered:greeter",
-      "budgetSec": 600
+      "budgetSec": 150
     },
     {
       "say": "",
       "until": "tasks.kind:scout && backlog.inflight>=1",
-      "budgetSec": 900
+      "budgetSec": 180
     },
     {
       "say": "",
       "until": "report.exists && report.mentions:greet",
-      "budgetSec": 1200
+      "budgetSec": 420
     },
     {
       "say": "good. now implement the first two subcommands your report recommends, one commit on its own branch, verify it by running it, and land it on main; you have my approval. use the same worker rather than starting a second one. tell me when it is landed.",
       "until": "tasks.kind:ship",
-      "budgetSec": 900
+      "budgetSec": 180
     },
     {
       "say": "",
       "until": "git.ahead:greeter>=1",
-      "budgetSec": 1200
+      "budgetSec": 420
     },
     {
       "say": "",
       "until": "home.clean && tabs.clean",
-      "budgetSec": 600
+      "budgetSec": 120
     }
   ]
 }

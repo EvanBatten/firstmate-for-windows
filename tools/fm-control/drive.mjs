@@ -64,7 +64,7 @@ async function main(argv) {
 
 async function run(trace) {
   const env = process.env;
-  const defaultBudgetMs = Number.parseInt(env.FM_CONTROL_UNTIL_MS || '1200000', 10);
+  const defaultBudgetMs = Number.parseInt(env.FM_CONTROL_UNTIL_MS || '180000', 10);
   const session = new Session({ trace, env, log });
   const result = {
     feature: trace.feature,

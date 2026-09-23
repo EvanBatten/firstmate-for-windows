@@ -35,6 +35,20 @@ export class HerdrError extends Error {
 
 const CLI_SOURCE = { recent_unwrapped: 'recent-unwrapped', recent: 'recent', visible: 'visible', detection: 'detection' };
 
+// Git Bash prints a lone `$`. Linux bash prints `firstmate $`.
+// Windows pwsh prints `PS C:\path>` and cmd prints `C:\path>`.
+export function atShellPrompt(text) {
+  const t = String(text || '').replace(/\r/g, '').replace(/\s+$/g, '');
+  if (!t) return false;
+  const last = t.split('\n').pop() || '';
+  return (
+    last === '$' ||
+    / \$ *$/.test(last) ||
+    /^PS .*> *$/.test(last) ||
+    /^[A-Za-z]:\\[^>]*> *$/.test(last)
+  );
+}
+
 export class Herdr {
   constructor({ bin, session, socketPath, transport, ownServer, log }) {
     this.bin = bin;

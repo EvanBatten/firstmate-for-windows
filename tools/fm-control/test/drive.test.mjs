@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
-import { cliArgv } from '../lib/herdr.mjs';
+import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
+import { prepareClaudeConfig } from '../lib/session.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DRIVE = join(HERE, '..', 'drive.mjs');
@@ -316,12 +317,19 @@ describe('fake-herdr end to end', () => {
     assert.equal(state.launches, 2, 'one launch plus one relaunch');
     assert.equal(state.exits, 2, 'one /exit for the relaunch, one at close');
     assert.ok(state.env.includes('FM_PANE_PATH'));
+    assert.ok(state.env.includes('CLAUDE_CONFIG_DIR'));
     assert.ok(!texts.some((t) => /OAUTH|OATH/.test(t)), 'no token text was ever typed');
     assert.ok(existsSync(join(env.FM_CONTROL_EVIDENCE, 'result.json')));
     assert.ok(existsSync(join(env.FM_CONTROL_EVIDENCE, 'captain.log')));
     assert.ok(existsSync(join(env.FM_CONTROL_EVIDENCE, 'home', 'data', 'projects.md')), 'the home was archived');
-    const userCfg = JSON.parse(readFileSync(join(env.HOME, '.claude.json'), 'utf8'));
-    assert.equal(Object.values(userCfg.projects)[0].hasTrustDialogAccepted, true, 'folder trust was pre-recorded in the test HOME, not the real one');
+    assert.ok(!existsSync(join(env.HOME, '.claude.json')), 'the throwaway config does not mutate ~/.claude.json');
+    assert.ok(state.claudeConfigDir, 'the pane received CLAUDE_CONFIG_DIR');
+    const isolated = JSON.parse(readFileSync(join(env.FM_CONTROL_EVIDENCE, 'claude-config', '.claude.json'), 'utf8'));
+    assert.equal(isolated.hasCompletedOnboarding, true);
+    assert.equal(isolated.bypassPermissionsModeAccepted, true);
+    assert.equal(Object.values(isolated.projects)[0].hasTrustDialogAccepted, true);
+    const theme = JSON.parse(readFileSync(join(env.FM_CONTROL_EVIDENCE, 'claude-config', 'settings.json'), 'utf8'));
+    assert.equal(theme.theme, 'dark');
     const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n');
     assert.equal(calls.length, j.overhead.herdrSpawns, 'the driver counted every herdr process it started');
   });
@@ -403,6 +411,41 @@ describe('cli transport argv mapping', () => {
     assert.deepEqual(cliArgv('pane.send_input', { pane_id: 'p', keys: ['down'] }), ['pane', 'send-keys', 'p', 'down']);
     assert.deepEqual(cliArgv('pane.read', { pane_id: 'p', source: 'recent_unwrapped' }), ['pane', 'read', 'p', '--source', 'recent-unwrapped']);
     assert.throws(() => cliArgv('nope.method', {}));
+  });
+});
+
+describe('grafted onboarding config and shell prompts', () => {
+  test("B's throwaway CLAUDE_CONFIG_DIR is created and does not write ~/.claude.json", () => {
+    const home = tmp('claude-home');
+    const userHome = tmp('user-home');
+    const prevHome = process.env.HOME;
+    process.env.HOME = userHome;
+    try {
+      const dir = prepareClaudeConfig(home);
+      assert.equal(dir, join(home, '.fm-control-claude'));
+      const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
+      assert.equal(cfg.hasCompletedOnboarding, true);
+      assert.equal(cfg.bypassPermissionsModeAccepted, true);
+      assert.equal(cfg.projects[home].hasTrustDialogAccepted, true);
+      const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
+      assert.equal(settings.theme, 'dark');
+      assert.ok(!existsSync(join(userHome, '.claude.json')));
+    } finally {
+      process.env.HOME = prevHome;
+    }
+  });
+
+  test("C's prompt patterns match Git Bash, Linux cwd, and Windows shells", () => {
+    assert.equal(atShellPrompt('$'), true);
+    assert.equal(atShellPrompt('$ '), true);
+    assert.equal(atShellPrompt('firstmate $'), true);
+    assert.equal(atShellPrompt('claude --resume abc\nfirstmate $'), true);
+    assert.equal(atShellPrompt('PS C:\\Users\\me\\firstmate>'), true);
+    assert.equal(atShellPrompt('C:\\Users\\me\\firstmate>'), true);
+    assert.equal(atShellPrompt('bypass permissions on'), false);
+    assert.equal(atShellPrompt('Welcome to Claude\n'), false);
+    assert.equal(atShellPrompt(''), false);
+    assert.equal(atShellPrompt('> '), false, 'a lone agent composer glyph is not a shell prompt');
   });
 });
 

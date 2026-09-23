@@ -2,11 +2,13 @@
 //
 // waitUntil resolves as soon as the parsed `until` holds on a fresh home
 // snapshot, when the budget elapses, or when the primary is found dead or
-// parked on a question. It never sleeps in a fixed poll loop: fs.watch on the
-// home wakes it (debounced so one multi-file write is one snapshot), a 1 s
-// safety tick re-reads the cheap fs facts in case a watch event was lost, and
-// liveness is checked every 500 ms from the pid herdr reported, which is a
-// kill(pid, 0) and not a herdr call.
+// parked on a question. It never sleeps in a fixed poll loop and never reads
+// the pane every second: fs.watch on the home wakes it (debounced so one
+// multi-file write is one snapshot), a 1 s safety tick re-reads the cheap fs
+// facts in case a watch event was lost, and liveness is checked every 500 ms
+// from the pid herdr reported, which is a kill(pid, 0) and not a herdr call.
+// A dead-primary pane-prompt check is event-driven from the session's 10 s
+// status query, not this loop.
 
 import { watch } from 'node:fs';
 import { spawn } from 'node:child_process';
