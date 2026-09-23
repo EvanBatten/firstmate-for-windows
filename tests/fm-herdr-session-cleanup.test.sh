@@ -321,17 +321,29 @@ FM_HOME="$INTEGRATION_ROOT/home" FM_HERDR_CLEANUP_TRACE="$TRACE" \
 [ ! -e "$TRACE" ] || fail "standalone bootstrap ran lock-owned stale projection cleanup"
 pass "standalone bootstrap cannot run lock-owned stale projection cleanup"
 
+: > "$INTEGRATION_ROOT/home/state/task.herdr-presentation"
 cat > "$INTEGRATION_ROOT/bin/fm-lock.sh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' 'lock acquired'
 SH
 chmod +x "$INTEGRATION_ROOT/bin/fm-lock.sh"
-FM_HOME="$INTEGRATION_ROOT/home" FM_ROOT_OVERRIDE="$INTEGRATION_ROOT" \
+env -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE \
+  FM_HOME="$INTEGRATION_ROOT/home" FM_ROOT_OVERRIDE="$INTEGRATION_ROOT" \
   FM_HERDR_CLEANUP_TRACE="$TRACE" \
   "$INTEGRATION_ROOT/bin/fm-session-start.sh" >/dev/null 2>&1 \
   || fail "lock-owning session start failed"
 [ "$(cat "$TRACE")" = "$INTEGRATION_ROOT/home" ] \
   || fail "lock-owning session start did not run cleanup for its exact home"
+
+: > "$TRACE"
+rm -f "$INTEGRATION_ROOT/home/state/task.herdr-presentation"
+env -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE \
+  FM_HOME="$INTEGRATION_ROOT/home" FM_ROOT_OVERRIDE="$INTEGRATION_ROOT" \
+  FM_HERDR_CLEANUP_TRACE="$TRACE" \
+  "$INTEGRATION_ROOT/bin/fm-session-start.sh" >/dev/null 2>&1 \
+  || fail "lock-owning empty-home session start failed"
+[ ! -s "$TRACE" ] \
+  || fail "a lock-owning empty home still ran herdr cleanup"
 
 : > "$TRACE"
 cat > "$INTEGRATION_ROOT/bin/fm-lock.sh" <<'SH'
@@ -340,11 +352,45 @@ printf '%s\n' 'error: another live firstmate session holds the lock' >&2
 exit 1
 SH
 chmod +x "$INTEGRATION_ROOT/bin/fm-lock.sh"
-FM_HOME="$INTEGRATION_ROOT/home" FM_ROOT_OVERRIDE="$INTEGRATION_ROOT" \
+env -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE \
+  FM_HOME="$INTEGRATION_ROOT/home" FM_ROOT_OVERRIDE="$INTEGRATION_ROOT" \
   FM_HERDR_CLEANUP_TRACE="$TRACE" \
   "$INTEGRATION_ROOT/bin/fm-session-start.sh" >/dev/null 2>&1 \
   || fail "read-only session start failed"
 [ ! -s "$TRACE" ] || fail "read-only session start ran stale projection cleanup"
 pass "session start runs cleanup only after acquiring its home lock"
+
+NOJOURNAL="$TMP_ROOT/nojournal"
+mkdir -p "$NOJOURNAL/bin/backends" "$NOJOURNAL/home/state"
+for f in "$ROOT"/bin/*; do
+  base=$(basename "$f")
+  if [ "$base" = backends ]; then
+    continue
+  fi
+  ln -s "$f" "$NOJOURNAL/bin/$base"
+done
+for f in "$ROOT"/bin/backends/*; do
+  ln -s "$f" "$NOJOURNAL/bin/backends/$(basename "$f")"
+done
+rm -f "$NOJOURNAL/bin/fm-herdr-session-cleanup.sh" "$NOJOURNAL/bin/backends/herdr.sh"
+cp "$ROOT/bin/fm-herdr-session-cleanup.sh" "$NOJOURNAL/bin/fm-herdr-session-cleanup.sh"
+chmod +x "$NOJOURNAL/bin/fm-herdr-session-cleanup.sh"
+HERDR_SOURCED="$NOJOURNAL/herdr.sourced"
+cat > "$NOJOURNAL/bin/backends/herdr.sh" <<SH
+# sourced Herdr backend fixture: a journal-less cleanup must never load this.
+printf 'sourced\n' > "$HERDR_SOURCED"
+sleep 20
+SH
+start=$(date +%s)
+env -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE \
+  FM_HOME="$NOJOURNAL/home" FM_ROOT_OVERRIDE="$NOJOURNAL" \
+  "$NOJOURNAL/bin/fm-herdr-session-cleanup.sh" \
+  || fail "journal-less herdr cleanup exited non-zero"
+elapsed=$(( $(date +%s) - start ))
+[ ! -e "$HERDR_SOURCED" ] \
+  || fail "journal-less herdr cleanup still sourced the Herdr backend"
+[ "$elapsed" -lt 4 ] \
+  || fail "journal-less herdr cleanup waited on the Herdr backend: ${elapsed}s"
+pass "journal-less herdr cleanup exits before sourcing the Herdr backend"
 
 printf 'all fm-herdr-session-cleanup tests passed\n'
