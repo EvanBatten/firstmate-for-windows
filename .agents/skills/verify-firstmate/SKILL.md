@@ -130,6 +130,7 @@ Only a session can make an inventory row `proven`.
 
 A session script sources `tests/verification/session-lib.sh` after `lib.sh`.
 It skips unless `VERIFY_REAL_SESSION=1` is set, because it spends model tokens and opens tabs in the Herdr session you are looking at, and a skip counts as unproven.
+When the feature has a trace under `tools/fm-control/traces/`, load `control-firstmate` and prefer `node tools/fm-control/drive.mjs run` of that trace: one command is the proof, and the bash session helper is the compatibility path.
 `VERIFY_SESSION_MODEL` picks the primary's model, `opus` by default, so a run does not spend your default model's quota; workers use whatever firstmate resolves for them.
 The clone gets the primary checkout's `.tools/` directory, or `VERIFY_TOOLS_DIR`, and `VERIFY_PANE_PATH_EXTRA` adds PATH entries for the pane.
 

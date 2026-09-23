@@ -1,0 +1,6 @@
+{
+  "feature": "unknown",
+  "steps": [
+    { "say": "ahoy", "until": "pane-looks-ready" }
+  ]
+}

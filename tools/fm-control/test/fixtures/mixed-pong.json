@@ -1,0 +1,7 @@
+{
+  "feature": "mixed-banner",
+  "steps": [
+    { "say": "ahoy", "until": "pong" },
+    { "say": "", "until": "dispatched" }
+  ]
+}
