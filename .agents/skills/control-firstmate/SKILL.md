@@ -77,6 +77,7 @@ What the primary prints is evidence, not a claim.
 ## Run
 
 The driver clones this checkout into a throwaway home, starts one Herdr workspace, launches `claude` in that pane's own shell (no Git Bash login hop), types each `say`, and waits on `fs.watch` plus a short deadline tick.
+The clone directory is the home; the pane does not get a separate `FM_HOME`.
 A dead primary fails the current step at once.
 The process closes only the workspace and session it created.
 

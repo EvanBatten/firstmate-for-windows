@@ -23,12 +23,14 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function paneEnv(home) {
+function paneEnv() {
   const env = {};
   for (const key of ["HOME", "USER", "TERM", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
-  if (home) env.FM_HOME = home;
+  // The clone is the home (cwd). A separate FM_HOME makes some herdr
+  // builds keep sessions under that path, and a primary /exit then
+  // looks like it took the worker with it.
   const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const oath = process.env.CLAUDE_CODE_OATH_TOKEN;
   if (oauth) env.CLAUDE_CODE_OAUTH_TOKEN = oauth;
@@ -188,7 +190,7 @@ export class Session {
     const created = await this.herdr.workspaceCreate({
       cwd: this.home,
       label: `fm-control-${this.feature}`,
-      env: paneEnv(this.home),
+      env: paneEnv(),
     });
     this.workspaceId = created.workspaceId;
     this.paneId = created.paneId;
