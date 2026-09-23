@@ -43,11 +43,15 @@ fm_default_branch() {
 # out in a primary checkout does.
 fm_primary_tangle_branch() {
   local root=$1 cur default
-  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
-  cur=$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  # symbolic-ref fails on a non-repo and on detached HEAD, so the extra
+  # rev-parse --is-inside-work-tree spawn is not needed.
+  cur=$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
   [ -n "$cur" ] || return 1
-  default=$(fm_default_branch "$root") || return 1
+  default=$(git -C "$root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  default=${default#origin/}
+  if [ -z "$default" ]; then
+    default=$(fm_default_branch "$root") || return 1
+  fi
   [ "$cur" = "$default" ] && return 1
   printf '%s\n' "$cur"
-  return 0
 }

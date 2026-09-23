@@ -902,7 +902,25 @@ GH_AXI_MIN=0.1.29
 LAVISH_AXI_MIN=0.1.46
 
 treehouse_supports_lease() {
-  treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
+  local help
+  help=$(treehouse get --help 2>&1) || return 1
+  [[ $help =~ (^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$) ]]
+}
+
+# Memoize command -v. A miss walks the whole PATH, which on Git Bash includes
+# the Windows interop directories and is the expensive case to repeat.
+_FM_HAVE_CMD_HITS=' '
+_fm_have_cmd() {
+  case "$_FM_HAVE_CMD_HITS" in
+    *" $1=1 "*) return 0 ;;
+    *" $1=0 "*) return 1 ;;
+  esac
+  if command -v "$1" >/dev/null 2>&1; then
+    _FM_HAVE_CMD_HITS="$_FM_HAVE_CMD_HITS$1=1 "
+    return 0
+  fi
+  _FM_HAVE_CMD_HITS="$_FM_HAVE_CMD_HITS$1=0 "
+  return 1
 }
 
 # Shared semantic-version floor for the tool gates below. A version string that
@@ -912,9 +930,9 @@ treehouse_supports_lease() {
 tool_version_at_least() {  # <tool> <min-version>
   local tool=$1 min=$2 output parts major minor patch extra
   local min_major min_minor min_patch min_extra
-  command -v "$tool" >/dev/null 2>&1 || return 1
+  _fm_have_cmd "$tool" || return 1
   output=$("$tool" --version 2>/dev/null) || return 1
-  parts=$(printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1)
+  parts=$(fm_version_triple "$output") || return 1
   IFS=' ' read -r major minor patch extra <<< "$parts"
   [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
   IFS='.' read -r min_major min_minor min_patch min_extra <<< "$min"
@@ -1034,7 +1052,7 @@ x_mode_setup() {
 
   missing=0
   for tool in curl jq; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
+    if ! _fm_have_cmd "$tool"; then
       echo "MISSING: $tool (install: $(install_cmd "$tool"))"
       missing=1
     fi
@@ -1089,15 +1107,11 @@ crew_dispatch_validate() {
   local file err
   file="$CONFIG/crew-dispatch.json"
   [ -f "$file" ] || return 0
-  if ! command -v jq >/dev/null 2>&1; then
+  if ! _fm_have_cmd jq; then
     echo "MISSING: jq (install: $(install_cmd jq))"
     return 0
   fi
-  if ! jq -e . "$file" >/dev/null 2>&1; then
-    echo "CREW_DISPATCH: invalid config/crew-dispatch.json - malformed JSON"
-    return 0
-  fi
-  err=$(jq -r '
+  if ! err=$(jq -r '
     def verified($h): ["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","muse"] | index($h);
     def effort_ok($h; $e):
       if $e == null then true
@@ -1157,7 +1171,10 @@ crew_dispatch_validate() {
         else empty
         end
     end
-  ' "$file" 2>/dev/null || true)
+  ' "$file" 2>/dev/null); then
+    echo "CREW_DISPATCH: invalid config/crew-dispatch.json - malformed JSON"
+    return 0
+  fi
   if [ -n "$err" ]; then
     echo "CREW_DISPATCH: invalid config/crew-dispatch.json - $err"
     return 0
@@ -1387,28 +1404,28 @@ detect_local_tools() {
       || missing_tool_diagnostic "$t"
   done
   for t in $COMMON_TOOLS; do
-    command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
+    _fm_have_cmd "$t" || missing_tool_diagnostic "$t"
   done
   # The treehouse lease-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.
   if fm_backend_list_contains "$TOOLS" treehouse \
-    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
+    && _fm_have_cmd treehouse && ! treehouse_supports_lease; then
     echo "MISSING: treehouse (install: $(install_cmd treehouse))"
   fi
-  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
+  if _fm_have_cmd no-mistakes && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
     echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
   fi
-  if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
+  if _fm_have_cmd gh-axi && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
     echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
   fi
-  if command -v lavish-axi >/dev/null 2>&1 && ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
+  if _fm_have_cmd lavish-axi && ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
     echo "MISSING: lavish-axi (install: $(install_cmd lavish-axi))"
   fi
-  if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
+  if _fm_have_cmd quota-axi && ! fm_quota_axi_compatible; then
     echo "MISSING: quota-axi (install: $(install_cmd quota-axi))"
   fi
-  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
+  if _fm_have_cmd tasks-axi && ! fm_tasks_axi_compatible; then
     echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
   fi
 }
@@ -1510,13 +1527,21 @@ detect_home_summary_publication() {
 # The stamp variable is named for the library rather than `start` on purpose:
 # fleet_sync and others assign plain names like `start` without `local`, and
 # bash's dynamic scoping would let them overwrite a stamp held by a caller.
-local_phase && detect_local_tools
+if local_phase; then
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  detect_local_tools
+  fm_timing_record phase detect-tools "$__fm_timing_stamp"
+fi
 if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
-local_phase && detect_local_config
+if local_phase; then
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  detect_local_config
+  fm_timing_record phase detect-config "$__fm_timing_stamp"
+fi
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
@@ -1557,7 +1582,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     fi
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
-  local_phase && x_mode_setup
+  if local_phase; then
+    __fm_timing_stamp=$(fm_timing_now_ms)
+    x_mode_setup
+    fm_timing_record phase x-mode "$__fm_timing_stamp"
+  fi
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"

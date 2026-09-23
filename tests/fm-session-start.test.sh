@@ -29,6 +29,8 @@
 #     surfaces exactly once (inline or as a wake, never both), a read-only
 #     session declares the checks it skipped, and the tasks-axi compatibility
 #     verdict is paid for once per session start
+#   - FM_SESSION_START_PROFILE=1 writes coarse step timings to a local file
+#     without changing the digest, and keeps deferred network phases off that file
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2511,5 +2513,43 @@ test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
 test_agents_baseline_requires_sha256_and_successful_completion
 test_reemit_keeps_repair_ownership_with_the_lock_holder
+
+test_session_start_profile_writes_blocking_steps_only() {
+  local rec root home fakebin out log
+  rec=$(new_world profile-steps)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n' > "$home/data/backlog.md"
+
+  out=$(FM_SESSION_START_PROFILE=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  log="$home/state/.session-start-profile"
+
+  [ -s "$log" ] || fail "FM_SESSION_START_PROFILE=1 did not write $log"
+  assert_not_contains "$out" "TIMINGS -" "profile records leaked into the digest"
+  grep -q $'v1\tstage\tsetup\t' "$log" || fail "profile missing setup: $(cat "$log")"
+  grep -q $'v1\tstage\tlock\t' "$log" || fail "profile missing lock: $(cat "$log")"
+  grep -q $'v1\tstage\tbootstrap\t' "$log" || fail "profile missing bootstrap: $(cat "$log")"
+  grep -q $'v1\tstage\twake-queue\t' "$log" || fail "profile missing wake-queue: $(cat "$log")"
+  grep -q $'v1\tstage\tfleet-state\t' "$log" || fail "profile missing fleet-state: $(cat "$log")"
+  grep -q $'v1\tstage\tnetwork-checks\t' "$log" || fail "profile missing network-checks: $(cat "$log")"
+  grep -q $'v1\tstage\ttotal\t' "$log" || fail "profile missing total: $(cat "$log")"
+  if grep -q $'v1\tphase\tgh-auth\t' "$log"; then
+    fail "deferred gh-auth landed on the blocking profile: $(cat "$log")"
+  fi
+  if grep -q $'v1\tphase\tfleet-sync\t' "$log"; then
+    fail "deferred fleet-sync landed on the blocking profile: $(cat "$log")"
+  fi
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  # A second unprofiled run must not require or rewrite the file as a digest input.
+  assert_contains "$out" "SESSION START" "unprofiled rerun did not complete"
+  pass "session start: FM_SESSION_START_PROFILE=1 records blocking steps and leaves network phases off the file"
+}
+
+test_session_start_profile_writes_blocking_steps_only
 
 echo "# fm-session-start.test.sh: all assertions passed"

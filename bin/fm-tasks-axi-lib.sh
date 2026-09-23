@@ -43,13 +43,32 @@ case "$FM_TASKS_AXI_COMPATIBLE_MEMO" in
   *) FM_TASKS_AXI_COMPATIBLE_MEMO= ;;
 esac
 
+# First input line that contains a major.minor.patch triple, last triple on
+# that line. Same answer as the old sed-greedy | head -1 pipeline, without
+# two extra processes on every probe.
+fm_version_triple() {
+  local output=$1 line rest triple
+  local ver_re='([0-9]+)\.([0-9]+)\.([0-9]+)'
+  [ -n "$output" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    rest=$line
+    triple=
+    while [[ $rest =~ $ver_re ]]; do
+      triple="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
+      rest=${rest#*"${BASH_REMATCH[0]}"}
+    done
+    if [ -n "$triple" ]; then
+      printf '%s\n' "$triple"
+      return 0
+    fi
+  done <<< "$output"
+  return 1
+}
+
 fm_tasks_axi_version_parts() {
   local output
-  command -v tasks-axi >/dev/null 2>&1 || return 1
   output=$(tasks-axi --version 2>/dev/null) || return 1
-  printf '%s\n' "$output" |
-    sed -n 's/.*\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2 \3/p' |
-    head -1
+  fm_version_triple "$output"
 }
 
 fm_tasks_axi_compatible() {
@@ -87,16 +106,20 @@ fm_tasks_axi_compatible_probe() {
 
 fm_tasks_axi_update_has_archive_body() {
   local output
-  command -v tasks-axi >/dev/null 2>&1 || return 1
   output=$(tasks-axi update --help 2>&1) || return 1
-  printf '%s\n' "$output" | grep -F -- '--archive-body' >/dev/null
+  case "$output" in
+    *--archive-body*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 fm_tasks_axi_mv_has_multi_id() {
   local output
-  command -v tasks-axi >/dev/null 2>&1 || return 1
   output=$(tasks-axi mv --help 2>&1) || return 1
-  printf '%s\n' "$output" | grep -F -- '[<id>...]' >/dev/null
+  case "$output" in
+    *'[<id>...]'*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 fm_backlog_backend_value() {

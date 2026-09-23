@@ -27,18 +27,28 @@
 # process group before signaling its negative pid.
 set -u
 
-fm_timeout_mechanism() {
+fm_timeout_resolve() {
   if [ "${FM_TIMEOUT_MECHANISM_OVERRIDE:-}" = bash ]; then
-    printf 'bash\n'
-  elif command -v timeout >/dev/null 2>&1; then
-    printf 'timeout\n'
-  elif command -v gtimeout >/dev/null 2>&1; then
-    printf 'gtimeout\n'
-  elif command -v perl >/dev/null 2>&1; then
-    printf 'perl\n'
-  else
-    printf 'bash\n'
+    FM_TIMEOUT_MECHANISM_MEMO=bash
+    return 0
   fi
+  case "${FM_TIMEOUT_MECHANISM_MEMO:-}" in
+    timeout|gtimeout|perl|bash) return 0 ;;
+  esac
+  if command -v timeout >/dev/null 2>&1; then
+    FM_TIMEOUT_MECHANISM_MEMO=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    FM_TIMEOUT_MECHANISM_MEMO=gtimeout
+  elif command -v perl >/dev/null 2>&1; then
+    FM_TIMEOUT_MECHANISM_MEMO=perl
+  else
+    FM_TIMEOUT_MECHANISM_MEMO=bash
+  fi
+}
+
+fm_timeout_mechanism() {
+  fm_timeout_resolve
+  printf '%s\n' "$FM_TIMEOUT_MECHANISM_MEMO"
 }
 
 fm_run_bash_timeout() {
@@ -128,7 +138,8 @@ fm_run_external_timeout() {
 fm_run_timed() {  # <seconds> <command...>
   local seconds=$1
   shift
-  case "$(fm_timeout_mechanism)" in
+  fm_timeout_resolve
+  case "$FM_TIMEOUT_MECHANISM_MEMO" in
     timeout) fm_run_external_timeout timeout "$seconds" "$@" ;;
     gtimeout) fm_run_external_timeout gtimeout "$seconds" "$@" ;;
     perl)
