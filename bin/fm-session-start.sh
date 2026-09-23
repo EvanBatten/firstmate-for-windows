@@ -167,7 +167,8 @@
 # local is not the same as bounded: tool version probes, the backlog listing,
 # and the per-task endpoint reads are all unbounded subprocesses. So the whole
 # digest still runs as ONE bounded child of this script
-# (FM_SESSION_START_TIMEOUT, default 120s). The deferred network stage
+# (FM_SESSION_START_TIMEOUT, default 120s; 20s when FM_SESSION_START_COMPACT=1
+# and the caller did not set a bound). The deferred network stage
 # deliberately sits OUTSIDE that bound,
 # in its own process group under its own aggregate deadline, so a truncated
 # digest neither waits for it nor orphans it unbounded. The
@@ -213,6 +214,18 @@
 #             current AGENTS.md to print before the bulky digest. The baseline
 #             remains immutable so every later drifted compaction refreshes
 #             again, while an equal baseline emits no instruction refresh.
+#
+#   FM_SESSION_START_COMPACT=1
+#             Set only by bin/fm-sessionstart-run.sh for a hook-launched
+#             digest. The hook still takes the lock, drains queued wakes,
+#             prints every digest section, and records completion. It skips
+#             home-summary publication, Herdr projection cleanup, bootstrap
+#             detect and mutating sweeps, deferred network start, and live
+#             endpoint probes: those stages are not required for a restart
+#             to take the lock and carry on, and they are what blocked the
+#             first captain turn behind the SessionStart seat. An agent that
+#             runs this script directly, and every portable test of this
+#             script, leaves the variable unset and keeps the full digest.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -269,11 +282,20 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
-  SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
+  SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-}
   # A non-positive or non-numeric budget is not a budget (`timeout 0` disables
   # the deadline outright), so an unusable value falls back to the default
-  # rather than silently removing the bound.
-  case "$SESSION_START_BUDGET" in ''|*[!0-9]*|0) SESSION_START_BUDGET=120 ;; esac
+  # rather than silently removing the bound. The hook compact path uses a
+  # 20s default so SessionStart cannot sit in front of the first turn.
+  case "$SESSION_START_BUDGET" in
+    ''|*[!0-9]*|0)
+      if [ "${FM_SESSION_START_COMPACT:-}" = 1 ]; then
+        SESSION_START_BUDGET=20
+      else
+        SESSION_START_BUDGET=120
+      fi
+      ;;
+  esac
   SESSION_START_STAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-stage.XXXXXX" 2>/dev/null) || SESSION_START_STAGE_FILE=
   if [ -z "$SESSION_START_STAGE_FILE" ]; then
     # Without a breadcrumb the bound still holds; only the banner's precision
@@ -331,6 +353,9 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
 fi
 
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
+
+SESSION_START_COMPACT=0
+[ "${FM_SESSION_START_COMPACT:-}" = 1 ] && SESSION_START_COMPACT=1
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
@@ -667,7 +692,7 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # A full locked start publishes this home's current structured summary.
   # Publication is side-band and best-effort, so it can never change the
   # session-start result. A context re-emit is not another session start.
-  if [ "$REEMIT" -eq 0 ]; then
+  if [ "$REEMIT" -eq 0 ] && [ "$SESSION_START_COMPACT" -eq 0 ]; then
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
   fi
   # Every network call this session start owes is launched HERE, detached and
@@ -678,10 +703,15 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # read-only GitHub-auth probe is owed. A read-only session starts nothing at
   # all: it holds no mutation authority for the sweeps, and it must not spawn,
   # steer, or merge anyway, so it has no action left for an auth verdict to gate.
-  NETWORK_STAGE_LOCKED=1
-  [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
-  "$SCRIPT_DIR/fm-startup-network.sh" start \
-    --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
+  # Hook compact startup skips the launch: restart-primary does not need GitHub
+  # auth or fleet sync before the captain can speak, and starting the worker
+  # still walks lock ancestry on the blocking path.
+  if [ "$SESSION_START_COMPACT" -eq 0 ]; then
+    NETWORK_STAGE_LOCKED=1
+    [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
+    "$SCRIPT_DIR/fm-startup-network.sh" start \
+      --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- 2. bootstrap --------------------------------------------------------
@@ -690,7 +720,9 @@ fi
 # re-block this digest and race the worker's sweeps against themselves.
 stage bootstrap
 subsection "BOOTSTRAP"
-if [ "$READ_ONLY" -eq 1 ]; then
+if [ "$SESSION_START_COMPACT" -eq 1 ]; then
+  BOOT_OUT='(hook compact startup - bootstrap detect, mutating sweeps, and Herdr projection cleanup deferred)'
+elif [ "$READ_ONLY" -eq 1 ]; then
   BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 elif [ "$REEMIT" -eq 1 ]; then
@@ -834,7 +866,9 @@ for meta in "$STATE"/*.meta; do
 
   window=$(fm_meta_get "$meta" window)
   target=$(fm_backend_target_of_meta "$meta")
-  if [ -n "$window" ]; then
+  if [ "$SESSION_START_COMPACT" -eq 1 ]; then
+    printf 'endpoint: (not probed in hook compact startup)\n'
+  elif [ -n "$window" ]; then
     backend=$(fm_backend_of_meta "$meta")
     if fm_backend_target_exists "$backend" "${target:-$window}" "fm-$id"; then
       printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
@@ -901,7 +935,11 @@ fi
 # printed, and whatever it has not is named as not yet confirmed.
 stage network-checks
 section "NETWORK CHECKS"
-if [ "$READ_ONLY" -eq 1 ]; then
+if [ "$SESSION_START_COMPACT" -eq 1 ]; then
+  printf 'skipped (hook compact startup) - GitHub authentication, project clone refresh,\n'
+  printf 'secondmate liveness and convergence, and pending handoff delivery were not started.\n'
+  printf 'Register a local project without waiting on network checks.\n'
+elif [ "$READ_ONLY" -eq 1 ]; then
   printf 'skipped (read-only session) - GitHub authentication, project clone refresh,\n'
   printf 'secondmate liveness and convergence, and pending handoff delivery were not run.\n'
   printf 'They need the fleet lock, and this session must not spawn, steer, or merge, so it\n'
