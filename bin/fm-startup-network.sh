@@ -568,7 +568,11 @@ print_state() {
 
 cmd_harvest() {  # <pid>
   local pid=$1 generation state claim_record claim_generation claim_pid
-  fm_lock_acquire_wait "$PUBLISH_LOCK"
+  if ! fm_lock_try_acquire "$PUBLISH_LOCK"; then
+    printf 'IN PROGRESS - the deferred network checks have not finished yet.\n'
+    printf 'Register a local project without waiting on network checks.\n'
+    return 0
+  fi
   generation=$(status_get generation)
   # Another session's live claim is left alone; the worker reaps a dead one.
   if [ -f "$CLAIM_FILE" ]; then

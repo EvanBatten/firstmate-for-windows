@@ -755,18 +755,14 @@ fm_lock_points_to_owner() {
 }
 
 fm_lock_discard_owner() {
-  local ownerdir=$1
+  local ownerdir=$1 child
   [ -n "$ownerdir" ] || return 0
+  [ -d "$ownerdir" ] && [ ! -L "$ownerdir" ] || return 0
   fm_lock_clean_known_files "$ownerdir"
-  rmdir "$ownerdir" 2>/dev/null || true
-}
-
-fm_lock_remove_stray_owner_link() {
-  local lockdir=$1 ownerdir=$2 stray
-  stray="$lockdir/$(basename "$ownerdir")"
-  if [ -L "$stray" ] && fm_lock_points_to_owner "$stray" "$ownerdir"; then
-    rm -f "$stray" 2>/dev/null || true
-  fi
+  for child in "$ownerdir"/* "$ownerdir"/.[!.]* "$ownerdir"/..?*; do
+    [ -L "$child" ] && rm -f "$child" 2>/dev/null
+  done
+  rmdir "$ownerdir" 2>/dev/null
 }
 
 fm_lock_claim_blocked_by_steal() {
@@ -816,7 +812,7 @@ fm_lock_try_create() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  if ln -s "$ownerdir" "$lockdir" 2>/dev/null && fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
+  if ln -sn "$ownerdir" "$lockdir" 2>/dev/null && fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
     if fm_lock_claim "$lockdir" "$ownerdir" "$allowed_steal_owner"; then
       FM_LOCK_OWNER_DIR=$ownerdir
       return 0
@@ -824,10 +820,8 @@ fm_lock_try_create() {
     if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
       rm -f "$lockdir" 2>/dev/null || true
     fi
-  else
-    fm_lock_remove_stray_owner_link "$lockdir" "$ownerdir"
   fi
-  fm_lock_discard_owner "$ownerdir"
+  fm_lock_discard_owner "$ownerdir" || true
   return 1
 }
 
@@ -839,8 +833,7 @@ fm_lock_remove_path() {
     [ -n "$ownerdir" ] && fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  fm_lock_clean_known_files "$lockdir"
-  rmdir "$lockdir" 2>/dev/null
+  fm_lock_discard_owner "$lockdir"
 }
 
 fm_lock_mid_acquire_is_fresh() {
@@ -1327,8 +1320,7 @@ fm_lock_release() {
   fi
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
   [ "$pid" = "$current" ] || return 0
-  fm_lock_clean_known_files "$lockdir"
-  rmdir "$lockdir" 2>/dev/null || true
+  fm_lock_discard_owner "$lockdir" || true
 }
 
 fm_meta_lock_path() {

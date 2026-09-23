@@ -2462,6 +2462,82 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+test_digest_truncated_in_network_checks_does_not_order_a_rerun_before_local_registration() {
+  local rec root home fakebin work out status=0 bare seed mode f
+  rec=$(new_world network-truncation-register)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  work="${root%/root}/bin-copy"
+  mkdir -p "$work"
+  for f in "$ROOT"/bin/*; do
+    ln -s "$f" "$work/$(basename "$f")"
+  done
+  rm -f "$work/fm-session-start.sh" "$work/fm-startup-network.sh" \
+    "$work/fm-lock.sh" "$work/fm-bootstrap.sh" "$work/fm-herdr-session-cleanup.sh" \
+    "$work/fm-home-summary-refresh.sh" "$work/fm-inactive-reconcile.sh" \
+    "$work/fm-wake-drain.sh" "$work/fm-supervision-instructions.sh" "$work/fm-harness.sh"
+  cp "$ROOT/bin/fm-session-start.sh" "$work/fm-session-start.sh"
+  chmod +x "$work/fm-session-start.sh"
+  cat > "$work/fm-lock.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'lock acquired: harness pid 1\n'
+SH
+  cat > "$work/fm-harness.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'claude\n'
+SH
+  printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in harvest) sleep 120 ;; esac' 'exit 0' \
+    > "$work/fm-startup-network.sh"
+  for f in fm-bootstrap.sh fm-herdr-session-cleanup.sh fm-home-summary-refresh.sh \
+    fm-inactive-reconcile.sh fm-wake-drain.sh fm-supervision-instructions.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$work/$f"
+  done
+  chmod +x "$work"/*.sh
+
+  out=$(FM_SESSION_START_TIMEOUT=90 \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+      "$work/fm-session-start.sh") || status=$?
+
+  expect_code 0 "$status" "a digest truncated during network checks must still exit 0"
+  assert_contains "$out" 'stopped during the "network-checks" stage' \
+    "the digest did not stop during network checks"
+  assert_not_contains "$out" "Rerun bin/fm-session-start.sh now" \
+    "a digest truncated during network checks ordered a rerun before local registration"
+  assert_contains "$out" "Register a local project without waiting on network checks." \
+    "a digest truncated during network checks did not release local registration"
+
+  bare="${root%/root}/demo.git"
+  seed="${root%/root}/demo-seed"
+  git init -q --bare -b main "$bare"
+  git clone -q "$bare" "$seed"
+  git -C "$seed" config user.email verify@example.invalid
+  git -C "$seed" config user.name verification
+  printf 'hello\n' > "$seed/README.md"
+  git -C "$seed" add README.md
+  git -C "$seed" commit -qm "start demo"
+  git -C "$seed" push -q origin main
+  mkdir -p "$home/projects" "$home/data"
+  git_bin=$(command -v git)
+  git_dir=$(dirname "$git_bin")
+  if [ -x "$git_dir/gh" ] || [ -x "$git_dir/gh.exe" ]; then
+    fail "git and gh share $git_dir, so this registration cannot hide gh"
+  fi
+  env PATH="$git_dir:/usr/bin:/bin" "$git_bin" clone -q "$bare" "$home/projects/demo"
+  if env PATH="$git_dir:/usr/bin:/bin" command -v gh >/dev/null 2>&1; then
+    fail "the local registration path could see gh"
+  fi
+  printf '%s\n' '- demo [local-only] - local bare repo (added 2026-09-22)' >> "$home/data/projects.md"
+  mode=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-project-mode.sh" --raw demo 2>/dev/null)
+  [ "$mode" = "local-only off" ] || fail "the local bare repo did not register as local-only: $mode"
+  [ -d "$home/projects/demo/.git" ] || fail "the local bare repo was not cloned into the home"
+  pass "a digest truncated in network checks lets a local bare repo register without GitHub auth"
+}
+
+test_digest_truncated_in_network_checks_does_not_order_a_rerun_before_local_registration
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path

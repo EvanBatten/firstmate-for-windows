@@ -22,7 +22,7 @@ WAIT=${VERIFY_SESSION_WAIT:-1200}
 project_seed greeter
 session_start "fm-verify-restart"
 
-captain_says "ahoy! add my project from $PROJECT_ORIGIN as a local-only project called greeter. then ship one change: add greet.sh with three subcommands, hello, bye and version, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. once the worker is dispatched, end your turn and let your monitoring wake you. when it is done, verify the result by running it and land it on main; you have my approval. tell me when it is landed."
+captain_says "ahoy! add my project from $PROJECT_ORIGIN as a local-only project called greeter. then ship one change: add greet.sh with three subcommands, hello, bye and version, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. once the worker is dispatched, leave that worker running in its own tab. do not background a wait. when it is done, verify the result by running it and land it on main; you have my approval. tell me when it is landed."
 
 registered() { grep -q '^- greeter ' "$SESSION_HOME/data/projects.md" && [ -d "$SESSION_HOME/projects/greeter/.git" ]; }
 session_wait "the project is registered and cloned into the home" 600 registered
@@ -32,8 +32,6 @@ ID=$(session_task_ids | head -1)
 PANE=$(session_meta "$ID" herdr_pane_id)
 verify_keep "$ID.meta" "$SESSION_HOME/state/$ID.meta"
 
-yielded() { awk -F'\t' 'NR>1 && $2>0 && ($4=="idle" || $4=="done") {f=1} END{exit !f}' "$SESSION_TICKS"; }
-session_wait "the primary ends its turn while the worker is in flight" 600 yielded
 OLD_LOCK=$(cat "$SESSION_HOME/state/.lock" 2>/dev/null)
 verify_note "session lock before the restart: $OLD_LOCK"
 
