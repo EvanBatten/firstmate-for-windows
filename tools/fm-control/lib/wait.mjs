@@ -18,6 +18,62 @@ export const DEBOUNCE_MS = 40;
 export const SAFETY_TICK_MS = 1000;
 export const LIVENESS_TICK_MS = 500;
 export const HERDR_FACT_MIN_INTERVAL_MS = 3000;
+// Home-file waits (ready/operable) use a short fs-only safety tick. This is
+// not a pane-read interval: pane text is a rare herdr call the session owns.
+export const HOME_WATCH_SAFETY_MS = 250;
+
+// Watch <home> until check() is true or budgetMs elapses.
+// Wakes from fs.watch (debounced) plus a cheap fs-only safety tick so a
+// missed event still notices state/.lock. check() decides when a herdr
+// call is worth it. Resolves true when check() succeeds, false on timeout.
+// Rejects if check() throws.
+export function watchHome({ home, budgetMs, safetyMs = HOME_WATCH_SAFETY_MS, check }) {
+  const started = Date.now();
+  const deadline = started + budgetMs;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let checking = false;
+    let dirty = false;
+    let watcher = null;
+    const timers = [];
+    const finish = (err, ok) => {
+      if (settled) return;
+      settled = true;
+      for (const t of timers) clearTimeout(t);
+      clearInterval(safety);
+      watcher?.close();
+      if (err) reject(err);
+      else resolve(ok);
+    };
+    const run = async () => {
+      if (settled) return;
+      if (checking) { dirty = true; return; }
+      checking = true;
+      try {
+        if (await check()) finish(null, true);
+      } catch (err) {
+        finish(err);
+      } finally {
+        checking = false;
+        if (dirty && !settled) { dirty = false; setTimeout(run, 0); }
+      }
+    };
+    let debounce = null;
+    const wake = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => { debounce = null; run(); }, DEBOUNCE_MS);
+    };
+    try {
+      watcher = watch(home, { recursive: true, persistent: false }, wake);
+      watcher.on('error', () => {});
+    } catch {
+      watcher = null;
+    }
+    const safety = setInterval(run, safetyMs);
+    timers.push(setTimeout(() => finish(null, false), Math.max(0, deadline - Date.now())));
+    run();
+  });
+}
 
 // deps:
 //   liveness()            -> { alive: boolean, reason: string }   (sync or async)

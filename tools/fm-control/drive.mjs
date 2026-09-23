@@ -18,7 +18,8 @@
 //     evidence, error? }
 // predicateMs is the time spent waiting for claims; readyMs the implicit splash launch;
 // operableMs the wait for lock / session-start-complete before the first say (also folded
-// into readyMs so the first feature budget does not start during splash). The rest of
+// into readyMs so the first feature budget does not start during splash). closeMs is
+// bounded after a pass (workspace close is not a 13-60 s /exit wait). The rest of
 // wallMs is the driver's own setup, typing, relaunch and cleanup.
 // The trace grammar, predicate catalog and environment knobs are documented in lib/trace.mjs,
 // lib/predicates.mjs, lib/herdr.mjs and lib/session.mjs.
@@ -81,10 +82,14 @@ async function run(trace) {
   };
   let exitCode = 1;
   let closing = null;
-  const finish = async () => {
-    if (!closing) closing = session.close().catch((err) => { log(`cleanup problem: ${err.message}`); return 0; });
+  let closeStartedAt = null;
+  const startClose = (boundMs) => {
+    if (closing) return closing;
+    closeStartedAt = Date.now();
+    closing = session.close({ boundMs }).catch((err) => { log(`cleanup problem: ${err.message}`); return 0; });
     return closing;
   };
+  const finish = async () => startClose(session.closeFailBoundMs);
   const onSignal = async (sig) => {
     log(`received ${sig}; closing what this run created`);
     result.error = `interrupted by ${sig}`;
@@ -161,12 +166,13 @@ async function run(trace) {
     }
     result.pass = allOk && result.steps.length === steps.length && result.steps.at(-1).ok;
     exitCode = result.pass ? 0 : 1;
+    if (result.pass) startClose(session.closeBoundMs);
   } catch (err) {
     result.error = err.message;
     exitCode = err instanceof HerdrError || err instanceof TraceError ? err.exitCode : 3;
     log(`run failed: ${err.message}`);
   } finally {
-    const closeStart = Date.now();
+    const closeStart = closeStartedAt ?? Date.now();
     await finish();
     result.overhead.closeMs = Date.now() - closeStart;
     const h = session.herdr?.counters ?? { calls: 0, spawns: 0 };

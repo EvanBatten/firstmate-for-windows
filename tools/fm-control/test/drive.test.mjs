@@ -15,7 +15,7 @@ import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predica
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy } from '../lib/session.mjs';
-import { waitUntil } from '../lib/wait.mjs';
+import { waitUntil, watchHome } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DRIVE = join(HERE, '..', 'drive.mjs');
@@ -429,6 +429,34 @@ describe('fake-herdr end to end', () => {
     assert.ok(firstSay, 'the first captain say was typed');
     assert.ok(state.lockAt, 'the fake recorded when the lock appeared');
     assert.ok(firstSay.t >= state.lockAt, `say ${firstSay.t} was after lock ${state.lockAt}`);
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const paneReads = calls.filter((a) => a.includes('pane') && a.includes('read')).length;
+    assert.ok(paneReads <= 4, `delayed-lock wait should not pane-read every second (${paneReads} reads)`);
+  });
+
+  test('a longer lock delay does not add pane-read polls', () => {
+    const { dir, env } = fakeEnv({
+      FM_CONTROL_ROOT: root,
+      FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
+      FAKE_HERDR_LOCK_DELAY_MS: '2800',
+      FAKE_HERDR_PANE_UNTIL_LOCK: 'bypass permissions on\nRunning Bash: bin/fm-session-start.sh\n',
+      FM_CONTROL_OPERABLE_MS: '10000',
+      FM_CONTROL_PANE_POLL_MS: '5000',
+      FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run'),
+    });
+    const trace = {
+      feature: 'e2e-operable-idle',
+      steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.pass, true);
+    assert.ok(r.json.operableMs >= 2500, `operable wait ${r.json.operableMs} ms`);
+    const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const paneReads = calls.filter((a) => a.includes('pane') && a.includes('read')).length;
+    assert.ok(paneReads <= 4, `2.8 s lock wait stayed on fs events, not 1 s pane polls (${paneReads} reads)`);
+    assert.ok(r.json.overhead.closeMs < 3000, `closeMs ${r.json.overhead.closeMs} stayed off a long /exit wait`);
+    assert.ok(r.json.overhead.herdrCalls <= 14, `herdrCalls ${r.json.overhead.herdrCalls} stayed bounded`);
   });
 
   test('a persistent-cd session-start denial does not send Escape', () => {
@@ -540,6 +568,26 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.equal(isCredentialFileName('.credentials.json'), true);
     const theme = JSON.parse(readFileSync(join(evidence, 'settings.json'), 'utf8'));
     assert.equal(theme.theme, 'dark');
+  });
+
+  test('watchHome resolves from a lock-file write without a pane-read interval', async () => {
+    const home = tmp('watch-home');
+    mkdirSync(join(home, 'state'), { recursive: true });
+    let checks = 0;
+    const started = Date.now();
+    setTimeout(() => writeFileSync(join(home, 'state', '.lock'), '1\n'), 200);
+    const ok = await watchHome({
+      home,
+      budgetMs: 2000,
+      safetyMs: 5000,
+      check: async () => {
+        checks += 1;
+        return existsSync(join(home, 'state', '.lock'));
+      },
+    });
+    assert.equal(ok, true);
+    assert.ok(Date.now() - started < 700, `fs event woke the wait (${Date.now() - started} ms)`);
+    assert.ok(checks >= 2, 'check ran before and after the write');
   });
 
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {

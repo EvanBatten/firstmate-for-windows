@@ -13,8 +13,13 @@
 // implicit ready (splash / bypass banner). An operable home is a later
 // firstmate fact: state/.lock or state/.session-start-complete, the digest
 // marker fm-session-start.sh writes when the helm is actually taken.
-// The first captain say waits for that (see sayWhenOperable). Liveness
-// afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
+// Both waits watch the home on the filesystem and read the pane only on
+// the first look, when a lock appears, or on a rare status interval; they
+// do not poll pane.read every second. The first captain say waits for the
+// helm (see sayWhenOperable). Liveness afterwards is kill(pid, 0) on that
+// pid, which costs no herdr call. After a pass, close fires /exit and
+// bounds workspace.close so cleanup is not a 13-60 s critical-path wait.
+// Claude's
 // first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
 // (onboarding, bypass-permissions, folder trust, theme) and passing it into
 // the pane env. Host claude.ai login is inherited into that dir: the
@@ -29,6 +34,9 @@
 //   FM_CONTROL_MODEL        primary model (default opus)
 //   FM_CONTROL_READY_MS     implicit-ready budget per launch (default 120000)
 //   FM_CONTROL_OPERABLE_MS  wait for lock/digest-complete before the first say (default 240000)
+//   FM_CONTROL_PANE_POLL_MS rare pane.read while waiting on home files (default 5000)
+//   FM_CONTROL_CLOSE_MS     bound for workspace close after a pass (default 4000)
+//   FM_CONTROL_CLOSE_FAIL_MS bound for workspace close after a failed run (default 15000)
 //   FM_CONTROL_UNTIL_MS     default step budget when a step has no budgetSec (default 180000)
 //   FM_CONTROL_EVIDENCE     evidence directory (default <tmp>/fm-control-artifacts/<feature>-<utc>)
 //   FM_CONTROL_KEEP         1 keeps the throwaway home and pane after the run
@@ -43,6 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
 import { recordedPaneIds } from './predicates.mjs';
+import { watchHome } from './wait.mjs';
 
 // Isolated Claude config for one throwaway home. Never writes the host
 // ~/.claude.json. CLAUDE_CONFIG_DIR redirects Claude's whole state, including
@@ -178,6 +187,9 @@ export class Session {
     this.model = env.FM_CONTROL_MODEL || 'opus';
     this.readyMs = Number.parseInt(env.FM_CONTROL_READY_MS || '120000', 10);
     this.operableBudgetMs = Number.parseInt(env.FM_CONTROL_OPERABLE_MS || '240000', 10);
+    this.paneRareMs = Number.parseInt(env.FM_CONTROL_PANE_POLL_MS || '5000', 10);
+    this.closeBoundMs = Number.parseInt(env.FM_CONTROL_CLOSE_MS || '4000', 10);
+    this.closeFailBoundMs = Number.parseInt(env.FM_CONTROL_CLOSE_FAIL_MS || '15000', 10);
     if (!this.env.CLAUDE_CODE_OAUTH_TOKEN && this.env.CLAUDE_CODE_OATH_TOKEN) {
       this.env = { ...this.env, CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OATH_TOKEN };
     }
@@ -420,42 +432,50 @@ export class Session {
   // Implicit ready: claude in the foreground plus lock-under-new-identity or
   // the bypass footer. This can fire on the splash before session-start has
   // taken the helm; sayWhenOperable waits for that separately.
+  // Home files wake the wait. pane.read runs on the first look, when a lock
+  // appears, or every paneRareMs for dialogs — not once a second.
   async awaitReady() {
-    const deadline = Date.now() + this.readyMs;
     let sawClaude = false;
-    let tick = 0;
-    while (Date.now() < deadline) {
-      const lock = this.lockText();
-      const lockFresh = lock !== null && lock !== this.lockBaseline;
-      const text = await this.paneText();
-      if (await this.answerDialog(text)) { await sleep(400); continue; }
-      const prompted = /bypass permissions on/.test(text);
-      if (atShellPrompt(text) && (sawClaude || /claude --dangerously/.test(text))) {
-        this.snapshot('exited-before-ready', text);
-        throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
-      }
-      // The process list is asked for only when it can decide something: a
-      // ready candidate, or every third tick to notice an exit. On the cli
-      // transport each ask is a process, so this halves the ready cost.
-      if (lockFresh || prompted || tick % 3 === 0) {
-        const fg = await this.foreground();
-        const claude = fg.find((p) => /claude/i.test(p.name || '') || /claude/i.test(p.argv?.[0] || ''));
-        if (claude) {
-          sawClaude = true;
-          if (lockFresh || prompted) {
-            this.primaryPid = claude.pid;
-            this.lockAtReady = lock;
-            this.snapshot('ready', text);
-            return;
+    let lastPaneAt = 0;
+    let lastText = '';
+    const ready = await watchHome({
+      home: this.home,
+      budgetMs: this.readyMs,
+      check: async () => {
+        const lock = this.lockText();
+        const lockFresh = lock !== null && lock !== this.lockBaseline;
+        const now = Date.now();
+        const needPane = lastPaneAt === 0 || lockFresh || (now - lastPaneAt >= this.paneRareMs);
+        if (needPane) {
+          lastPaneAt = now;
+          lastText = await this.paneText();
+          if (await this.answerDialog(lastText)) return false;
+          if (atShellPrompt(lastText) && (sawClaude || /claude --dangerously/.test(lastText))) {
+            this.snapshot('exited-before-ready', lastText);
+            throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(lastText)}`);
           }
-        } else if (sawClaude || /claude --dangerously/.test(text)) {
-          this.snapshot('exited-before-ready', text);
-          throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
         }
-      }
-      tick += 1;
-      await sleep(1000);
-    }
+        const prompted = /bypass permissions on/.test(lastText);
+        if (lockFresh || prompted || (needPane && !sawClaude)) {
+          const fg = await this.foreground();
+          const claude = fg.find((p) => /claude/i.test(p.name || '') || /claude/i.test(p.argv?.[0] || ''));
+          if (claude) {
+            sawClaude = true;
+            if (lockFresh || prompted) {
+              this.primaryPid = claude.pid;
+              this.lockAtReady = lock;
+              this.snapshot('ready', lastText);
+              return true;
+            }
+          } else if (sawClaude || /claude --dangerously/.test(lastText)) {
+            this.snapshot('exited-before-ready', lastText);
+            throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(lastText)}`);
+          }
+        }
+        return false;
+      },
+    });
+    if (ready) return;
     const text = await this.paneText().catch(() => '');
     this.snapshot('not-ready', text);
     throw new HerdrError(`the primary did not become ready within ${Math.round(this.readyMs / 1000)} s. Its pane shows: ${lastLines(text)}`);
@@ -472,7 +492,6 @@ export class Session {
   // (including a persistent-cd denial), leave it alone and wait.
   async sayWhenOperable(text) {
     const t0 = Date.now();
-    const deadline = t0 + this.operableBudgetMs;
     let sayMs = 0;
     let said = false;
     const send = async () => {
@@ -480,26 +499,35 @@ export class Session {
       sayMs = await this.say(text);
       said = true;
     };
-
-    while (Date.now() < deadline) {
-      if (this.homeOperable()) {
-        if (!said) await send();
-        return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
-      }
-      const pane = await this.paneText().catch(() => '');
-      if (await this.answerDialog(pane)) { await sleep(400); continue; }
-      if (atShellPrompt(pane) && (this.primaryPid || /claude --dangerously/.test(pane))) {
-        this.snapshot('exited-before-operable', pane);
-        throw new HerdrError(`the primary exited before the home was operable. Its pane shows: ${lastLines(pane)}`);
-      }
-      if (isSessionStartBusy(pane)) {
-        await sleep(1000);
-        continue;
-      }
-      await send();
-      await sleep(1000);
-    }
     if (this.homeOperable()) {
+      await send();
+      return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
+    }
+    let lastPaneAt = 0;
+    let lastPane = '';
+    const ok = await watchHome({
+      home: this.home,
+      budgetMs: this.operableBudgetMs,
+      check: async () => {
+        if (this.homeOperable()) {
+          await send();
+          return true;
+        }
+        const now = Date.now();
+        if (lastPaneAt === 0 || now - lastPaneAt >= this.paneRareMs) {
+          lastPaneAt = now;
+          lastPane = await this.paneText().catch(() => '');
+          if (await this.answerDialog(lastPane)) return false;
+          if (atShellPrompt(lastPane) && (this.primaryPid || /claude --dangerously/.test(lastPane))) {
+            this.snapshot('exited-before-operable', lastPane);
+            throw new HerdrError(`the primary exited before the home was operable. Its pane shows: ${lastLines(lastPane)}`);
+          }
+          if (!isSessionStartBusy(lastPane)) await send();
+        }
+        return false;
+      },
+    });
+    if (ok || this.homeOperable()) {
       if (!said) await send();
       return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
     }
@@ -690,10 +718,15 @@ export class Session {
 
   // ---- close --------------------------------------------------------------
 
-  async close() {
+  // After a pass, /exit is fire-and-forget and workspace.close is bounded so
+  // a slow herdr close is not a 13-60 s wait on the result path. relaunch
+  // still uses the full exitToPrompt wait. boundMs defaults to closeBoundMs.
+  async close({ boundMs } = {}) {
     if (this.closed) return 0;
     this.closed = true;
     const t0 = Date.now();
+    const budget = boundMs ?? this.closeBoundMs;
+    const remaining = () => Math.max(50, t0 + budget - Date.now());
     if (this.statusPoll) clearInterval(this.statusPoll);
     if (!this.herdr) { this.archive(); this.removeScratch(); return Date.now() - t0; }
     const keep = this.env.FM_CONTROL_KEEP === '1';
@@ -701,14 +734,18 @@ export class Session {
     if (!keep) {
       try {
         if ((await this.liveness()).alive) {
-          const exited = await this.exitToPrompt(60_000);
-          if (!exited) this.log('the primary did not exit on /exit within 60 s; closing its workspace anyway');
+          await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: '/exit', keys: ['enter'] }).catch(() => {});
         }
       } catch { /* closing the workspace ends it regardless */ }
       this.stopWatcher();
-      await this.closeTaskWorkspaces();
-      try { await this.herdr.call('workspace.close', { workspace_id: this.workspaceId }); } catch { /* already gone */ }
-      await this.destroyPools();
+      const work = (async () => {
+        await this.closeTaskWorkspaces();
+        try {
+          await this.herdr.call('workspace.close', { workspace_id: this.workspaceId }, { timeoutMs: remaining() });
+        } catch { /* already gone or bound elapsed */ }
+        await this.destroyPools();
+      })();
+      await Promise.race([work, sleep(remaining())]);
     }
     this.archive();
     if (!keep) { this.removeScratch(); this.removeTaskTmps(); }
