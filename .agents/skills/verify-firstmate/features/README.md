@@ -16,6 +16,10 @@ Read this index before driving anything, then use the matching feature file as t
 ## Driving conventions
 
 - Drive a feature with `.agents/skills/verify-firstmate/verify.sh run <feature>`, where `<feature>` is the file name below without `.md`.
+- Name every feature you want in that one `run`.
+  The invocation pays the doctor once, and a separate invocation repeats it.
+- A session feature's waits are ceilings in its script.
+  The run ends when the records match, and a missing Herdr session skips instead of waiting those ceilings out.
 - Treat every command as literal, and keep quoted text and flags unchanged.
 - One feature per script and one home per script, so order never matters and a failure in one says nothing about another.
 - The scripts call `bin/` by absolute path from the worktree under test, exactly as the agent does.

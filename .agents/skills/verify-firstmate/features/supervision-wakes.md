@@ -24,16 +24,15 @@ Every claim is read from the home's records and the observer's ticks.
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- The same preconditions as [Ship three changes in parallel](./ship-three-parallel.md): inside Herdr, `claude` signed in, the toolchain beside the primary checkout, `VERIFY_REAL_SESSION=1`.
+- The same preconditions as [Ship three changes in parallel](./ship-three-parallel.md).
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run supervision-wakes`.
-  It takes ten to twenty minutes.
 - **Ask.** The script types one message: add the project, ship one change with the opus model, end the turn once the worker is dispatched, land it when done.
 - **Dispatch.** One `state/<id>.meta` record appears.
 - **Yield.** A tick in `ticks.tsv` shows a task record and the primary `idle` or `done`.
 - **Arm.** `state/.watch.lock/pid` names a live process and `state/.last-watcher-beat` is under 300 s old; `state/.turnend-claude-blocks` does not exist.
 - **Done and wake.** The status record gains `done:`; a later tick shows the primary `working` again, and a `records/` snapshot shows a `signal` line naming the task in `.wake-queue`.
-- **Fresh throughout.** No tick has an idle primary, work in flight, and a stale or missing beacon.
+- **Fresh throughout.** The beacon claim fails after three consecutive ticks that show an idle primary, work in flight, and a stale or missing beacon.
 - **Land.** `projects/greeter` has `main` one commit ahead and `greet.sh` prints `hello from the crew` from a fresh clone.
 - **Clean up and health.** No task record, no tab, and the health check every session gets, including an empty acknowledged queue.
 - **Proof.** Read `supervision-wakes/transcript.txt`, `ticks.tsv`, `state-armed.txt`, the `records/` snapshots and the `panes/` snapshots.

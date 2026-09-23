@@ -25,6 +25,9 @@ Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
 - No real agent is launched: the script shadows the harness with a stub that refuses to run, so a recovery that gets moving fails at the launch for an obviously different reason.
+- Herdr must classify the fixture's missing pane as `pane_not_found`.
+  Without that, the endpoint reads `unreadable` and relaunch refuses before the launch.
+  That refusal is not the deadlock below.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run vanished-endpoint-recovery`.
   The run ends with `verification: 1 passed, 0 failed, 0 skipped`.

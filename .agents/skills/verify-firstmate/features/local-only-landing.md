@@ -1,7 +1,8 @@
 # Local-only landing
 
 Some projects never open a pull request: the worker stops with a finished local branch, and the captain approves landing it.
-Firstmate lands that branch on the project's own main by fast-forward and by nothing else, because any other merge would rewrite history in a repository firstmate does not own.
+Firstmate lands `fm/<task-id>` onto the project's default branch by fast-forward and by nothing else, because any other merge would rewrite history in a repository firstmate does not own.
+The default branch is `origin/HEAD` when that ref exists, otherwise `main`, otherwise `master`.
 
 ## Sub-features
 
@@ -21,7 +22,9 @@ Firstmate lands that branch on the project's own main by fast-forward and by not
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- The script builds its own project repository under the throwaway home's `projects/`, a work branch `fm/demo` in a separate worktree, and the task's durable record naming both; nothing outside the throwaway home is a project here.
+- The script builds its own project repository under the throwaway home's `projects/`, a work branch `fm/demo` in a separate worktree, and a task record with `mode=local-only`.
+  The landed branch is `fm/demo` because the task id is `demo`.
+  Nothing outside the throwaway home is a project here.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run local-only-landing`.
   The run ends with `verification: 1 passed, 0 failed, 0 skipped`.

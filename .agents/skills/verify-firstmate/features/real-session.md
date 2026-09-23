@@ -27,13 +27,14 @@ It is the only feature here that starts a real model worker.
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- You are inside a Herdr session, because the worker's tab opens in the workspace you are in.
+- `HERDR_ENV=1`, because the worker's tab opens in that Herdr workspace.
+  Without it the script skips and says it is not inside a Herdr session.
 - `herdr`, `jq`, `treehouse`, `claude`, `tasks-axi`, and `timeout` are installed, and `claude` is signed in.
 - You accept that it spends model tokens and opens a tab the captain will see.
   Without `VERIFY_REAL_SESSION=1` the script skips and says so.
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run real-session`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`, and takes several minutes.
+  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
 - **File and instruct.** The script builds a project with its own local `origin`, files a work item, and fills the instructions with a small task: add `greet.sh`.
 - **Spawn.** The script runs `bin/fm-spawn.sh <task> <project> --mode local-only --yolo off --harness claude`.
   It succeeds, the recorded isolated copy is a linked worktree that is not the project's own checkout, and `herdr tab list` shows a tab labelled `fm-<task>`.

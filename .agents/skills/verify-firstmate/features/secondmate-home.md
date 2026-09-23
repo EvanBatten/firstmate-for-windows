@@ -40,8 +40,8 @@ Preconditions:
 
 ## Gotchas
 
-- On Windows a clone made without symbolic-link support writes `.claude/skills` as a small text file holding the link target.
-  The home looks fine and the mate has no skills; the failure line says so in those words.
+- The seed clones with `core.symlinks=true`.
+  A platform that cannot make the link fails the clone and rolls the home back, instead of leaving `.claude/skills` as a text file.
 - The mate home is cloned from the commit under test, so uncommitted changes to tracked files are not in the mate.
   Commit a provisioning change before treating this feature as proof of it.
 - The leased-worktree entry point, `-` as the home, and the remote path are not driven here.
