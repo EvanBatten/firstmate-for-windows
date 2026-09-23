@@ -181,6 +181,18 @@ export type HerdrIds = {
 
 export type HerdrJson = unknown;
 
+export type HerdrCliResult = {
+  stdout: string;
+  stderr: string;
+  json: HerdrJson | null;
+};
+
+export type WorkspaceCreateResult = {
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+};
+
 export declare function loadTrace(path: string): Trace;
 export declare function assertRunnableTrace(trace: Trace): void;
 
@@ -199,8 +211,28 @@ export declare function waitUntil(
 
 export declare function herdr(
   args: string[],
-  opts?: { timeoutMs?: number },
-): Promise<{ stdout: string; stderr: string; json: HerdrJson }>;
+  opts?: { timeoutMs?: number; parseJson?: boolean },
+): Promise<HerdrCliResult>;
+
+export declare function workspaceCreate(opts: {
+  cwd: string;
+  label: string;
+  env?: Record<string, string>;
+}): Promise<WorkspaceCreateResult>;
+export declare function workspaceFocus(workspaceId: string): Promise<void>;
+export declare function workspaceClose(workspaceId: string): Promise<void>;
+export declare function paneRun(paneId: string, text: string): Promise<void>;
+export declare function paneRead(
+  paneId: string,
+  opts?: { source?: "recent-unwrapped" | "recent" | "visible" | "detection"; lines?: number },
+): Promise<string>;
+export declare function paneGet(paneId: string): Promise<HerdrJson>;
+export declare function paneSendKeys(paneId: string, keys: string[]): Promise<void>;
+export declare function paneWaitOutput(
+  paneId: string,
+  opts: { regex?: string; match?: string; timeoutMs: number },
+): Promise<void>;
+export declare function tabClose(tabId: string): Promise<void>;
 
 export declare function sessionOpen(home: string): Promise<HerdrIds>;
 export declare function sessionReady(ids: HerdrIds, budgetMs: number): Promise<void>;
@@ -225,8 +257,12 @@ It returns on the first true evaluation.
 It does not sleep for five seconds between tries.
 
 `herdr` spawns `herdr.exe` with `shell: false`.
-It parses JSON with `JSON.parse`.
 It never starts bash or pwsh.
+It never invokes bare `herdr` with no subcommand, because that launches the TUI.
+Most herdr CLI verbs print JSON, and those go through `JSON.parse`.
+`pane read` is the exception: the official CLI prints UTF-8 terminal text directly, so `parseJson` is false and `json` is `null`.
+`pane wait-output` failure prints JSON on stderr and exits 1.
+Those typed helpers above are the only herdr verbs v1 calls.
 
 ## Module map
 
@@ -241,7 +277,7 @@ tools/fm-control/
   snapshot.mjs     snapshotHome
   predicates.mjs   name -> pure (HomeSnapshot) => boolean
   wait.mjs         fs.watch on the home, debounce, waitUntil
-  herdr.mjs        spawn herdr.exe, --session, JSON.parse
+  herdr.mjs        spawn herdr.exe, --session, JSON or pane-read text
   session.mjs      clone/open/ready/say; Git Bash login once
   result.mjs       DriveResult clocking
 ```
@@ -260,23 +296,31 @@ Call graph for `run`:
 
 ## Herdr CLI this process speaks
 
+The contract is the public herdr CLI, not the socket API.
+This design used the published CLI reference rather than a local `herdr --version` or `herdr api schema --json`.
+
 The Node process calls `herdr.exe` directly.
-Every call includes `--session <name>`.
+Every call includes the global `--session <name>` flag.
 `--cwd` is converted to a Windows path in Node.
 Every other argument is passed verbatim so a leading `/` stays a slash command.
 
-| Verb | When |
-| --- | --- |
-| `status --json` | once at start, refuse if the client is missing |
-| `workspace create --cwd --label --no-focus --env ...` | session open |
-| `workspace focus <id>` | before a `say` |
-| `workspace close <id>` | session close |
-| `pane run <pane> <text>` | Git Bash login once; primary launch once; each `say` |
-| `pane read --source recent-unwrapped --lines N` | implicit ready; dead-primary check |
-| `pane get <pane>` | optional dead-primary check |
-| `pane send-keys <pane> <key>` | trust-prompt accept; exit-dialog Enter |
-| `pane wait-output --regex --timeout` | only for implicit ready, never for a feature `until` |
-| `tab list` / `tab close` | session close of tabs this run created |
+`workspace create` returns JSON with `.result.workspace.workspace_id`, `.result.tab.tab_id`, and `.result.root_pane.pane_id`.
+`pane run` honors bracketed-paste and submits text plus Enter atomically.
+That is the only submit used for Git Bash login, primary launch, and each `say`.
+Do not compose `send-text` plus `send-keys enter` for those submits.
+
+| Verb | When | stdout |
+| --- | --- | --- |
+| `status --json` | once at start, refuse if the client is missing | JSON |
+| `workspace create --cwd --label --no-focus --env ...` | session open | JSON ids |
+| `workspace focus <id>` | before a `say` | JSON |
+| `workspace close <id>` | session close | JSON |
+| `pane run <pane> <text>` | Git Bash login once; primary launch once; each `say` | JSON |
+| `pane read --source recent-unwrapped --lines N` | implicit ready; dead-primary check | UTF-8 text |
+| `pane get <pane>` | optional dead-primary check | JSON |
+| `pane send-keys <pane> <key>` | trust-prompt accept; exit-dialog Enter | JSON |
+| `pane wait-output <pane> --regex --timeout` | only for implicit ready, never for a feature `until` | match or JSON error on stderr |
+| `tab close <id>` | session close of tabs this run created | JSON |
 
 Git Bash login happens once, at workspace create, the same way `tests/verification/session-lib.sh` does it today: `--env SHELL=<git-bash>` plus one `pane run` of `& '...\\bash.exe' --login`.
 Later `pane run` calls type into that already-running pane.
@@ -375,6 +419,7 @@ Windows is the host.
 - Do not spawn `bash.exe`, `git-bash.exe`, or `pwsh.exe` for a herdr call, a snapshot, or a predicate.
 - Do not spawn `jq`.
 - Do not wrap `herdr.exe` in `bash -lc` or `pwsh -NoProfile -Command`.
+- Do not call `agent start`, `agent prompt`, or `agent wait`.
 - Do not set `MSYS2_ARG_CONV_EXCL` on a Node-spawned `herdr.exe`; that conversion is an MSYS bash problem this process does not have.
 - Convert only `--cwd` to a Windows path.
 - Never log, echo, or write `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_CODE_OATH_TOKEN`.
@@ -397,11 +442,16 @@ This design is the Windows replacement for its hot path, not a rewrite of those 
 ## Rejections
 
 - **Socket reducer.** Do not open the herdr control socket.
-  Do not subscribe to `events.subscribe`.
+  Do not call `events.subscribe`, `events.wait`, `session.snapshot`, or `herdr api snapshot`.
   Do not reuse `bin/backends/herdr-eventwait.py`.
   Do not fold pane events into a local reducer that then invents predicates.
   The process speaks the herdr CLI.
 - **Pane-owner that hides herdr.** Do not invent a private pane protocol, a fake multiplexer, or an API that wraps pane ids so callers never see herdr verbs.
+  Do not use `terminal session control` or `terminal session observe`.
+  Do not use `agent start`, `agent prompt`, or `agent wait` in v1.
+  Those agent verbs wait on herdr's occupant state and would make feature completion a pane-owner job.
+  Captain text stays `pane run`.
+  Feature `until` stays a home-directory predicate.
   Workspace, pane, and tab ids stay herdr ids.
 - **Per-call bash or pwsh.** No `bash -lc herdr ...` and no `pwsh -Command herdr ...`.
 - **`jq` child.** Parse JSON in process.
