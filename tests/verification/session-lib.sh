@@ -50,8 +50,32 @@ session_require() {
 }
 
 # Every herdr call from here: no MSYS path conversion (a literal /exit must
-# arrive as /exit), and bounded.
-session_herdr() { MSYS2_ARG_CONV_EXCL='*' timeout 30 herdr "$@"; }
+# arrive as /exit), and bounded. Ordinary mutations keep a 30s cap.
+# Reads, status, and wait-output use a tighter wrapper so a hung pane
+# cannot sit out a scenario budget after the predicate is already true.
+session_herdr_until() {  # <seconds> <herdr args...>
+  local secs=$1
+  shift
+  MSYS2_ARG_CONV_EXCL='*' timeout "$secs" herdr "$@"
+}
+session_herdr() { session_herdr_until 30 "$@"; }
+
+# herdr's --timeout is milliseconds. The process wrapper is two seconds
+# longer so herdr can report its own timeout instead of dying at 30s.
+session_wait_output() {  # <pane> <regex> <timeout_ms>
+  local pane=$1 regex=$2 ms=$3 secs=$((ms / 1000 + 2))
+  [ "$secs" -ge 3 ] || secs=3
+  session_herdr_until "$secs" pane wait-output "$pane" --regex "$regex" --timeout "$ms"
+}
+
+# agent wait returns as soon as the current status matches. --until keeps
+# blocked from counting as settled when we only want idle/done.
+session_agent_wait() {  # <timeout_ms> [--until STATUS]...
+  local ms=$1 secs=$(( ${1:-0} / 1000 + 2 ))
+  shift
+  [ "$secs" -ge 3 ] || secs=3
+  session_herdr_until "$secs" agent wait "$SESSION_PANE" --timeout "$ms" "$@"
+}
 
 session_pane_path() {
   local p="$SESSION_HOME/.tools/node_modules/.bin" d
@@ -119,7 +143,7 @@ session_open() {  # <workspace label>
   deadline=$(( $(date +%s) + 90 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if session_at_shell_prompt; then prompted=1; break; fi
-    sleep 2
+    sleep 0.2
   done
   if [ "$prompted" -eq 1 ]; then
     ok "the session's pane runs Git Bash with the captain's toolchain on PATH"
@@ -134,7 +158,7 @@ session_open() {  # <workspace label>
 }
 
 session_pane_text() {  # [pane] [lines]
-  session_herdr pane read "${1:-$SESSION_PANE}" --source recent-unwrapped --lines "${2:-120}" 2>/dev/null
+  session_herdr_until 5 pane read "${1:-$SESSION_PANE}" --source recent-unwrapped --lines "${2:-120}" 2>/dev/null
 }
 
 session_snapshot() {  # <label>: keep the firstmate pane as it is now
@@ -143,7 +167,7 @@ session_snapshot() {  # <label>: keep the firstmate pane as it is now
 }
 
 session_agent_status() {  # [pane]
-  session_herdr pane get "${1:-$SESSION_PANE}" 2>/dev/null | jq -r '.result.pane.agent_status // "unknown"'
+  session_herdr_until 3 pane get "${1:-$SESSION_PANE}" 2>/dev/null | jq -r '.result.pane.agent_status // "unknown"'
 }
 
 session_at_shell_prompt() {
@@ -162,7 +186,7 @@ session_launch() {
         printf '%s\n' "$text" | grep -q '❯ *No' && session_herdr pane send-keys "$SESSION_PANE" Down >/dev/null 2>&1
         # Enter confirms whatever the cursor is on, so wait until the pane
         # shows it on the accept option.
-        if session_herdr pane wait-output --regex '❯ *Yes' --timeout 20000 "$SESSION_PANE" >/dev/null 2>&1; then
+        if session_wait_output "$SESSION_PANE" '❯ *Yes' 20000 >/dev/null 2>&1; then
           session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
         else
           session_snapshot trust-prompt-stuck
@@ -179,7 +203,7 @@ session_launch() {
       bad "the primary exited before it was ready. Its pane shows: $(session_last_lines)"
       verify_done
     fi
-    sleep 3
+    session_wait_output "$SESSION_PANE" 'bypass permissions on|Yes, I trust this folder' 3000 >/dev/null 2>&1 || true
   done
   session_snapshot not-ready
   bad "the primary did not become ready within 180s. Its pane shows: $(session_last_lines)"
@@ -260,36 +284,78 @@ captain_says() {  # <text>
   if [ "$(session_agent_status)" = blocked ]; then
     session_snapshot dismissed-question
     session_herdr pane send-keys "$SESSION_PANE" esc >/dev/null 2>&1
-    sleep 2
+    session_agent_wait 2000 --until working --until idle --until done >/dev/null 2>&1 || true
   fi
   session_herdr workspace focus "$SESSION_WS" >/dev/null 2>&1 || true
   session_herdr pane run "$SESSION_PANE" "$*" >/dev/null 2>&1 || { bad "the captain's message could not be typed into the pane"; return 1; }
-  sleep 2
+  session_agent_wait 2000 --until working >/dev/null 2>&1 || true
 }
 
 # session_wait <claim> <seconds> <command...>: poll the command until it
-# succeeds. A primary that exits while we wait fails the claim at once.
+# succeeds. Return as soon as the predicate is true. Herdr pane reads stay
+# off this loop so a hung observer tick cannot sit out the scenario budget.
+# A primary that exits or blocks is watched on a side loop and fails the
+# claim at once.
 session_wait() {
-  local claim=$1 secs=$2 deadline
+  local claim=$1 secs=$2 deadline failf health_pid=
   shift 2
   deadline=$(( $(date +%s) + secs ))
+  failf="${VERIFY_TMP:-$VERIFY_ARTIFACT_RUN}/.session-wait-fail"
+  rm -f "$failf"
+  session_wait_health_loop "$claim" "$deadline" "$failf" &
+  health_pid=$!
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    if "$@" >/dev/null 2>&1; then ok "$claim"; return 0; fi
-    if session_at_shell_prompt; then
-      session_snapshot exited
-      bad "$claim: the primary exited first. Its pane last showed: $(session_last_lines)"
+    if "$@" >/dev/null 2>&1; then
+      kill "$health_pid" 2>/dev/null || true
+      wait "$health_pid" 2>/dev/null || true
+      rm -f "$failf"
+      ok "$claim"
+      return 0
+    fi
+    if [ -s "$failf" ]; then
+      wait "$health_pid" 2>/dev/null || true
+      session_wait_report_fail "$claim" "$(cat "$failf")"
+      rm -f "$failf"
       return 1
     fi
-    if [ "$(session_agent_status)" = blocked ]; then
-      session_snapshot blocked
-      bad "$claim: the primary stopped to ask the captain a question. Its pane shows: $(session_last_lines)"
-      return 1
-    fi
-    sleep 5
+    sleep 0.2
   done
+  kill "$health_pid" 2>/dev/null || true
+  wait "$health_pid" 2>/dev/null || true
+  rm -f "$failf"
   session_snapshot timeout
   bad "$claim: not within ${secs}s. The primary's pane shows: $(session_last_lines)"
   return 1
+}
+
+session_wait_health_loop() {  # <claim> <deadline> <fail-file>
+  local _claim=$1 deadline=$2 failf=$3
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if [ "$(session_agent_status)" = blocked ]; then
+      printf '%s\n' blocked > "$failf"
+      return 0
+    fi
+    if session_herdr_until 3 pane read "$SESSION_PANE" --source recent-unwrapped --lines 6 2>/dev/null |
+       grep -q '^\$ *$'; then
+      printf '%s\n' exited > "$failf"
+      return 0
+    fi
+    sleep 5
+  done
+}
+
+session_wait_report_fail() {  # <claim> <reason>
+  case "$2" in
+    exited)
+      session_snapshot exited
+      bad "$1: the primary exited first. Its pane last showed: $(session_last_lines)" ;;
+    blocked)
+      session_snapshot blocked
+      bad "$1: the primary stopped to ask the captain a question. Its pane shows: $(session_last_lines)" ;;
+    *)
+      session_snapshot timeout
+      bad "$1: the primary stopped ($2). Its pane shows: $(session_last_lines)" ;;
+  esac
 }
 
 # Herdr reports a finished turn as done, a fresh pane as idle, and a turn
@@ -392,7 +458,7 @@ session_exit_to_prompt() {
       session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
       confirmed=1
     fi
-    sleep 3
+    sleep 0.2
   done
   return 0
 }
@@ -428,10 +494,15 @@ session_close() {
 session_finish() {
   [ "$SESSION_CLOSED" = 0 ] && [ -n "$SESSION_PANE" ] || return 0
   local deadline=$(( $(date +%s) + 300 ))
-  until session_idle; do
-    [ "$(date +%s)" -lt "$deadline" ] || { verify_note "the primary was still working 300 s after the last claim; the health check runs anyway"; break; }
-    sleep 5
-  done
+  # A short agent wait returns at once when the primary is already idle/done.
+  # A 300s wait would sit out the close if herdr itself were hung. Fall back
+  # to a short poll for the rest of the budget, or if this build has no agent wait.
+  if ! session_agent_wait 5000 --until idle --until done >/dev/null 2>&1; then
+    until session_idle; do
+      [ "$(date +%s)" -lt "$deadline" ] || { verify_note "the primary was still working 300 s after the last claim; the health check runs anyway"; break; }
+      sleep 0.2
+    done
+  fi
   session_health
   session_close
 }
