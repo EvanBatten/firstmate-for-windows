@@ -1206,7 +1206,7 @@ home_summary_refresh_detached() {
 }
 
 watcher_cleanup() {
-  local cleanup_status=0 owns_lock=0 transition=release-lock i
+  local cleanup_status=0 owns_lock=0 transition=release-lock i refresh_lock holder ownerdir lockdir
   # The detached home-summary refresh holds the refresh lock, and a stale
   # holder makes it take the steal mutex. Stopping this watcher without
   # letting that child finish leaves the steal behind, and a home then looks
@@ -1223,6 +1223,30 @@ watcher_cleanup() {
     fi
     HOME_SUMMARY_PID=
   fi
+  # A killed refresh can leave its lock owner behind when its own release does
+  # not run. Drop that lock only when the recorded holder is already dead.
+  refresh_lock="$STATE/.home-summary-refresh.lock"
+  for lockdir in "$refresh_lock" "$refresh_lock.steal"; do
+    [ -e "$lockdir" ] || [ -L "$lockdir" ] || continue
+    holder=
+    if [ -L "$lockdir" ]; then
+      ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+      holder=$(cat "${ownerdir:-$lockdir}/pid" 2>/dev/null || true)
+    else
+      holder=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fi
+    if ! fm_pid_alive "$holder"; then
+      fm_lock_remove_path "$lockdir" || true
+    fi
+  done
+  for ownerdir in "$STATE"/.home-summary-refresh.lock.owner.* "$STATE"/.home-summary-refresh.lock.steal.owner.*; do
+    [ -d "$ownerdir" ] && [ ! -L "$ownerdir" ] || continue
+    holder=$(cat "$ownerdir/pid" 2>/dev/null || true)
+    if fm_pid_alive "$holder" && { fm_lock_points_to_owner "$refresh_lock" "$ownerdir" || fm_lock_points_to_owner "$refresh_lock.steal" "$ownerdir"; }; then
+      continue
+    fi
+    fm_lock_discard_owner "$ownerdir" || true
+  done
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \

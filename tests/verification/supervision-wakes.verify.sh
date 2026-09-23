@@ -34,7 +34,9 @@ verify_keep "$ID.meta" "$SESSION_HOME/state/$ID.meta"
 
 # Ticks: ts, task records, beacon age, primary status, workers done.
 yielded() { awk -F'\t' 'NR>1 && $2>0 && ($4=="idle" || $4=="done") {f=1} END{exit !f}' "$SESSION_TICKS"; }
-session_wait "the primary ends its turn while the worker is in flight" 600 yielded
+# The task record appeared at 14:50:51 and the primary was idle at 15:01:40.
+# Stop hooks were still running at 600s, and the guard did not block.
+session_wait "the primary ends its turn while the worker is in flight" 900 yielded
 
 watcher_armed() {
   local pid
