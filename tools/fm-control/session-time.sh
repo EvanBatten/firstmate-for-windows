@@ -23,6 +23,14 @@
 #
 # Claude authentication is probed once. A missing CLI or a failed probe stops
 # immediately and does not start the session. Tokens are never invented.
+#
+# Recorded run (cloud VM, 2026-09-23):
+#   PATH="$HOME/.local/bin:$PATH" tools/fm-control/session-time.sh
+#   {"trace":"restart-primary","wallMs":125,"pass":false,"split":{"readyMs":null,"afterReadyMs":null},"predicate":"claude authentication is missing or failed"}
+#   claude auth: failed (one probe of `claude auth status` on 2.1.280:
+#   loggedIn=false, authMethod=none, exit 1). No retry. No token invented.
+#   The harness stopped before doctor and before the session script.
+#   125 ms is time to that auth stop, not a session time.
 set -eu
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
