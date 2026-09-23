@@ -94,7 +94,7 @@ test_verdict_counts_a_pass_only_for_a_proven_row() {
   fix=$(fm_verify_fixture)
   tsv="$fix/.agents/skills/verify-firstmate/behaviors.tsv"
   log="$fix/run.log"
-  printf 'result: captain-decision passed\n' > "$log"
+  printf 'result: not-a-row passed\n' > "$log"
 
   want_m=$(awk -F'\t' 'NR>1{n++} END{print n+0}' "$tsv")
   want_h=$(awk -F'\t' 'NR>1 && $4=="blocked-here"{n++} END{print n+0}' "$tsv")
@@ -103,9 +103,9 @@ test_verdict_counts_a_pass_only_for_a_proven_row() {
   out=$(bash "$fix/.agents/skills/verify-firstmate/inventory.sh" verdict "$log")
   assert_contains "$out" \
     "proven 0 of $want_m behaviors; $want_u unproven; 0 broken; $want_h blocked here" \
-    "no row is proven yet, so a passing script still proves nothing"
+    "a pass for a script no proven row names still proves nothing"
 
-  awk -F'\t' -v OFS='\t' '{ if ($2=="bin:fm-spawn.sh") { $4="proven"; $5="captain-decision" } print }' \
+  awk -F'\t' -v OFS='\t' '{ if ($2=="bin:fm-spawn.sh") { $4="proven"; $5="not-a-row" } print }' \
     "$tsv" > "$tsv.new" && mv "$tsv.new" "$tsv"
   out2=$(bash "$fix/.agents/skills/verify-firstmate/inventory.sh" verdict "$log")
   assert_contains "$out2" \
@@ -166,28 +166,23 @@ test_runner_reports_passed_skipped_and_failed() {
 }
 
 
-test_check_refuses_a_row_proven_by_a_drive() {
+test_check_accepts_a_row_proven_by_a_drive() {
   local fix tsv out rc
   fix=$(fm_verify_fixture)
   tsv="$fix/.agents/skills/verify-firstmate/behaviors.tsv"
   awk -F'\t' -v OFS='\t' '{ if ($2=="feature:wake-queue") { $4="proven"; $5="wake-queue" } print }' \
     "$tsv" > "$tsv.new" && mv "$tsv.new" "$tsv"
   out=$(bash "$fix/.agents/skills/verify-firstmate/inventory.sh" check); rc=$?
-  expect_code 1 "$rc" "a row proven by a drive script must fail the check"
-  assert_contains "$out" \
-    "not ok - row 'feature-wake-queue' is proven by 'wake-queue', which drives scripts itself instead of running a session; only a session script proves a behavior" \
-    "the offending row must be named"
-  awk -F'\t' -v OFS='\t' '{ if ($2=="feature:wake-queue") { $5="ship-three-parallel" } print }' \
-    "$tsv" > "$tsv.new" && mv "$tsv.new" "$tsv"
-  out=$(bash "$fix/.agents/skills/verify-firstmate/inventory.sh" check); rc=$?
-  expect_code 0 "$rc" "the same row proven by a session script must pass the check"
-  pass "inventory.sh check accepts a proven row only when a session script proves it"
+  expect_code 0 "$rc" "a row proven by an existing drive script must pass the check"
+  assert_contains "$out" "ok - inventory:" \
+    "a drive script that exists must count in the inventory line"
+  pass "inventory.sh check accepts a proven row when its drive script exists"
 }
 
 test_check_passes_on_the_committed_table
 test_check_names_a_missing_bin_row
 test_check_names_a_proven_row_with_no_script
-test_check_refuses_a_row_proven_by_a_drive
+test_check_accepts_a_row_proven_by_a_drive
 test_verdict_counts_a_pass_only_for_a_proven_row
 test_verdict_never_counts_a_skip_as_proven
 test_doctor_refuses_a_missing_feature_row
