@@ -15,7 +15,8 @@ metadata:
 It clones the checkout into a throwaway home, opens one Herdr pane it owns, starts a real `claude` primary from that pane's own shell, types the captain lines of a trace into it, and waits for each step's claim to hold on the home's own records.
 One JSON object on stdout says what held, how long each claim took, and what the driver itself cost.
 
-The driver writes a throwaway `CLAUDE_CONFIG_DIR` inside the home with `hasCompletedOnboarding`, `bypassPermissionsModeAccepted`, project trust, and a theme settings file, then passes that directory into the pane env.
+The driver writes a throwaway `CLAUDE_CONFIG_DIR` inside the home with `hasCompletedOnboarding`, `bypassPermissionsModeAccepted`, cost-threshold acknowledgement, project trust, project onboarding, and a theme settings file, then passes that directory into the pane env.
+It also seeds `data/captain.md` so firstmate does not park on missing-tool installs.
 It does not mutate `~/.claude.json`.
 `CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_CODE_OATH_TOKEN`, exported as the OAUTH name) is passed to the pane and is never written anywhere.
 
@@ -78,6 +79,7 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
 A dead primary fails its step at once, never at the budget.
 A parked question fails the step only when that step's claim is still false.
+A known firstmate-setup question (the closed catalog in `tools/fm-control/lib/session.mjs`) is answered once and the wait continues; any other parked question fails immediately with the pane excerpt, never at the step budget.
 Dead-primary and post-`/exit` detection use last-line shell prompts (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`) plus the pid check; waits use `fs.watch` and do not poll Herdr every second.
 
 The evidence directory keeps `result.json`, `captain.log`, a pane snapshot at every ready, dialog, relaunch and failure, the throwaway server's own log, and `home/state` plus `home/data` as the run left them.
@@ -99,4 +101,4 @@ It never writes to the checkout it clones and never merges anything; the primary
 ## Tests
 
 `node --test tools/fm-control/test/` (or `node --test tools/fm-control/test/drive.test.mjs`) runs without Herdr or Claude: refusals exit 2 with zero Herdr spawns, every predicate yields a literal boolean over fixture homes, and a scripted stand-in for the `herdr` binary drives whole traces, including the shipped `restart-primary` one.
-The suite also checks that the throwaway onboarding config dir is created without writing `~/.claude.json`, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.
+The suite also checks that the throwaway onboarding config dir is created without writing `~/.claude.json`, that `data/captain.md` is seeded, that a known tool-install question is answered from the catalog, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.

@@ -12,10 +12,13 @@
 // home under a new identity or the prompt is up (see awaitReady). Liveness
 // afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
 // first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
-// (onboarding, bypass-permissions, folder trust, theme) and passing it into
-// the pane env. ~/.claude.json is never mutated. Dialog handlers remain as a
-// fallback. A dead primary is the pid going away or the pane returning to a
-// shell prompt (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`).
+// (onboarding, bypass-permissions, folder trust, project onboarding, theme)
+// and passing it into the pane env. The throwaway home also gets a captain.md
+// that tells firstmate not to park on missing-tool installs. ~/.claude.json
+// is never mutated. Dialog handlers remain as a fallback; a later parked
+// question is answered from BLOCKED_ANSWERS or fails the step at once with
+// the pane excerpt. A dead primary is the pid going away or the pane
+// returning to a shell prompt (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`).
 //
 // Environment:
 //   FM_CONTROL_MODEL        primary model (default opus)
@@ -44,8 +47,9 @@ export function prepareClaudeConfig(home) {
     `${JSON.stringify({
       hasCompletedOnboarding: true,
       bypassPermissionsModeAccepted: true,
+      hasAcknowledgedCostThreshold: true,
       projects: {
-        [home]: { hasTrustDialogAccepted: true },
+        [home]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true },
       },
     })}\n`,
     { mode: 0o600 },
@@ -56,6 +60,36 @@ export function prepareClaudeConfig(home) {
     { mode: 0o600 },
   );
   return config;
+}
+
+// Closed catalog of parked firstmate-setup questions the driver may answer.
+// Anything else fails the step immediately with the pane excerpt.
+export const BLOCKED_ANSWERS = [
+  {
+    name: 'tool-install',
+    match: /MISSING:\s*\S+|which tools? (?:should I |to )?install|install (?:treehouse|no-mistakes|gh-axi|chrome-devtools-axi|lavish-axi|tasks-axi|quota-axi)|tools? (?:are|is) missing/i,
+    answer: 'None. Do not install any tools. Missing tools are not a blocker. Continue the work I already gave you.',
+  },
+];
+
+export function matchBlockedAnswer(text) {
+  const t = String(text || '');
+  return BLOCKED_ANSWERS.find((entry) => entry.match.test(t)) ?? null;
+}
+
+export const THROWAWAY_CAPTAIN = `# Captain
+
+This is a throwaway measurement home.
+
+Missing bootstrap tools (treehouse, no-mistakes, gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi, quota-axi) are not a blocker.
+Do not ask which tools to install.
+Do not park on a tool-install or onboarding question.
+Continue the assigned work with the tools already on PATH.
+`;
+
+export function seedThrowawayHome(home) {
+  mkdirSync(join(home, 'data'), { recursive: true });
+  writeFileSync(join(home, 'data', 'captain.md'), THROWAWAY_CAPTAIN);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,6 +120,8 @@ export class Session {
     this.taskTmps = new Set();
     this.baselineWorkspaces = new Set();
     this.signals = { blocked: null, status: null, shellDead: null };
+    this.answeredBlocked = new Set();
+    this.answeringBlocked = false;
     this.claudeConfigDir = null;
     this.statusPoll = null;
     this.counters = { gitSpawns: 0, setupSpawns: 0, cleanupSpawns: 0 };
@@ -105,6 +141,7 @@ export class Session {
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
+    seedThrowawayHome(this.home);
     if (this.env.FM_CONTROL_PRETRUST !== '0') this.claudeConfigDir = prepareClaudeConfig(this.home);
     this.herdr = await Herdr.attach(this.env, { log: this.log });
     try {
@@ -299,6 +336,36 @@ export class Session {
     return false;
   }
 
+  // A parked question: answer a known firstmate-setup prompt, or fail the
+  // step immediately with the pane excerpt. One answer per catalog name per
+  // launch; a repeat of the same question is a loop, not a second try.
+  async handleBlockedQuestion() {
+    if (this.answeringBlocked) return { handled: true, name: 'in-flight' };
+    this.answeringBlocked = true;
+    try {
+      const text = await this.paneText().catch(() => '');
+      this.snapshot('blocked-question', text);
+      if (await this.answerDialog(text)) {
+        this.signals.blocked = null;
+        return { handled: true, name: 'dialog' };
+      }
+      const hit = matchBlockedAnswer(text);
+      if (hit) {
+        if (this.answeredBlocked.has(hit.name)) {
+          return { handled: false, reason: `the primary asked the same ${hit.name} question again: ${lastLines(text)}` };
+        }
+        this.log(`answering a parked ${hit.name} question`);
+        this.answeredBlocked.add(hit.name);
+        await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: hit.answer, keys: ['enter'] });
+        this.signals.blocked = null;
+        return { handled: true, name: hit.name };
+      }
+      return { handled: false, reason: `the primary stopped to ask a question: ${lastLines(text) || this.signals.blocked}` };
+    } finally {
+      this.answeringBlocked = false;
+    }
+  }
+
   // Ready is claude running as the pane's foreground process plus one of two
   // firstmate-side facts: the home's lock exists under a new identity (the
   // SessionStart hook took the helm, which it does once state/ exists), or
@@ -364,8 +431,13 @@ export class Session {
   // the cli transport.
   watchPrimaryStatus() {
     const apply = (status) => {
+      const prev = this.signals.status;
       this.signals.status = status;
-      this.signals.blocked = status === 'blocked' ? 'herdr reports the primary blocked on a question' : null;
+      if (status === 'blocked' && prev !== 'blocked') {
+        this.signals.blocked = 'herdr reports the primary blocked on a question';
+      } else if (status !== 'blocked') {
+        this.signals.blocked = null;
+      }
       // Rare, event-driven dead-primary check: unknown status plus a shell
       // prompt. Not a 1 s pane-read loop.
       if (status === 'unknown' && this.paneId) {
@@ -457,6 +529,7 @@ export class Session {
     const exited = await this.exitToPrompt();
     if (!exited) throw new HerdrError('the primary did not exit on /exit within 90 s, so no restart could happen');
     this.signals.blocked = null;
+    this.answeredBlocked.clear();
     await this.launch();
     return Date.now() - t0;
   }

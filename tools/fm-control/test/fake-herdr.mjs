@@ -18,7 +18,9 @@
 //                      { "remove": "state/t1.meta" },
 //                      { "cloneFromSay": "projects/greeter" },   git clone the origin named "from <path> as" in the say
 //                      { "commitIn": "projects/greeter", "file": "greet.sh", "content": "..." },  one commit on main
-//                      { "killPrimary": true } ] }        the primary dies (a crash)
+//                      { "killPrimary": true },           the primary dies (a crash)
+//                      { "block": "<pane text>" },        herdr reports the primary blocked
+//                      { "unblock": true } ] }            clear a blocked status
 // Sends are recorded in $FAKE_HERDR_DIR/state.json under sends[].
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, appendFileSync, existsSync, readdirSync } from 'node:fs';
@@ -33,7 +35,7 @@ const STATE = join(DIR, 'state.json');
 const args = process.argv.slice(2);
 
 function load() {
-  try { return JSON.parse(readFileSync(STATE, 'utf8')); } catch { return { home: null, lockSeq: 0, primary: null, sends: [], launches: 0, exits: 0 }; }
+  try { return JSON.parse(readFileSync(STATE, 'utf8')); } catch { return { home: null, lockSeq: 0, primary: null, sends: [], launches: 0, exits: 0, agentStatus: 'idle', paneText: null }; }
 }
 function save(s) { writeFileSync(STATE, JSON.stringify(s, null, 2)); }
 function out(obj) { process.stdout.write(`${JSON.stringify(obj)}\n`); }
@@ -97,6 +99,16 @@ async function applyWrites(home, writes, sayText) {
       const s = load();
       killPrimary(s);
       save(s);
+    } else if (w.block !== undefined) {
+      const s = load();
+      s.agentStatus = 'blocked';
+      s.paneText = typeof w.block === 'string' ? w.block : (w.block.text ?? '');
+      save(s);
+    } else if (w.unblock) {
+      const s = load();
+      s.agentStatus = 'idle';
+      s.paneText = null;
+      save(s);
     }
   }
 }
@@ -141,10 +153,11 @@ if (args[0] === '--apply') {
       break;
     }
     case 'pane get':
-      out({ pane: { pane_id: a[2], agent_status: 'idle' } });
+      out({ pane: { pane_id: a[2], agent_status: s.agentStatus || 'idle' } });
       break;
     case 'pane read':
-      process.stdout.write(primaryAlive(s) ? '\n> \n\nbypass permissions on\n' : '\n$ \n');
+      if (s.paneText) process.stdout.write(s.paneText);
+      else process.stdout.write(primaryAlive(s) ? '\n> \n\nbypass permissions on\n' : '\n$ \n');
       break;
     case 'pane send-keys':
       s.sends.push({ keys: a.slice(3) });

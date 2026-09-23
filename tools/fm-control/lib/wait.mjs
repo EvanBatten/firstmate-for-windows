@@ -22,6 +22,8 @@ export const HERDR_FACT_MIN_INTERVAL_MS = 3000;
 // deps:
 //   liveness()            -> { alive: boolean, reason: string }   (sync or async)
 //   signals               -> { blocked: string|null }  set by the session's event stream
+//   answerBlocked()       -> { handled: boolean, reason?: string }  optional; a known
+//                           parked question is answered and the wait continues
 //   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes'
 //   gitAhead              -> shared cache { [name]: { sha, count } } this function fills
 //   seeds                 -> { [name]: sha }
@@ -112,6 +114,13 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
         onSnapshot?.(snap);
         const r = evaluateUntil(parsed, snap, ctx);
         if (r.ok) { finish({ ok: true, reason: r.reason, snap }); return; }
+        if (typeof deps.answerBlocked === 'function') {
+          const a = await deps.answerBlocked();
+          if (settled) return;
+          if (a?.handled) return;
+          finish({ ok: false, reason: a?.reason || `the primary stopped to ask a question: ${deps.signals.blocked}`, blocked: true });
+          return;
+        }
         finish({ ok: false, reason: `the primary stopped to ask a question: ${deps.signals.blocked}`, blocked: true });
         return;
       }

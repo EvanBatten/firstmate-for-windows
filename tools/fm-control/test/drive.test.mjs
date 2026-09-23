@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { prepareClaudeConfig } from '../lib/session.mjs';
+import { prepareClaudeConfig, seedThrowawayHome, matchBlockedAnswer, THROWAWAY_CAPTAIN } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -328,7 +328,11 @@ describe('fake-herdr end to end', () => {
     const isolated = JSON.parse(readFileSync(join(env.FM_CONTROL_EVIDENCE, 'claude-config', '.claude.json'), 'utf8'));
     assert.equal(isolated.hasCompletedOnboarding, true);
     assert.equal(isolated.bypassPermissionsModeAccepted, true);
+    assert.equal(isolated.hasAcknowledgedCostThreshold, true);
     assert.equal(Object.values(isolated.projects)[0].hasTrustDialogAccepted, true);
+    assert.equal(Object.values(isolated.projects)[0].hasCompletedProjectOnboarding, true);
+    const captain = readFileSync(join(env.FM_CONTROL_EVIDENCE, 'home', 'data', 'captain.md'), 'utf8');
+    assert.match(captain, /Do not ask which tools to install/);
     const theme = JSON.parse(readFileSync(join(env.FM_CONTROL_EVIDENCE, 'claude-config', 'settings.json'), 'utf8'));
     assert.equal(theme.theme, 'dark');
     const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n');
@@ -396,6 +400,44 @@ describe('fake-herdr end to end', () => {
     assert.equal(state.launches, 2);
   });
 
+  test('a known tool-install question is answered from the catalog', () => {
+    const script = join(tmp('script'), 'block.json');
+    writeFileSync(script, JSON.stringify({
+      'please register': [
+        { delayMs: 150 },
+        { block: 'MISSING: treehouse (install: curl ...)\nWhich tools should I install?' },
+      ],
+      'None. Do not install any tools': [
+        { path: 'data/projects.md', content: '- greeter local-only\n' },
+        { mkdir: 'projects/greeter/.git' },
+        { unblock: true },
+      ],
+    }));
+    const { dir, env } = fakeEnv({ FM_CONTROL_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-answer-tools', steps: [{ say: 'please register', until: 'projects.registered:greeter', budgetSec: 20 }] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.equal(r.json.pass, true);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    const texts = state.sends.filter((s) => s.text !== undefined).map((s) => s.text);
+    assert.ok(texts.some((t) => t.startsWith('None. Do not install any tools')), `catalog answer typed; sends=${JSON.stringify(texts)}`);
+    assert.ok(r.json.steps[0].ms < 18_000, `did not wait the step budget (${r.json.steps[0].ms} ms)`);
+  });
+
+  test('an unrecognized parked question fails immediately with the pane text', () => {
+    const script = join(tmp('script'), 'unknown-block.json');
+    writeFileSync(script, JSON.stringify({
+      'please wait': [{ delayMs: 150, }, { block: 'What is your favorite color?\n❯ blue' }],
+    }));
+    const { env } = fakeEnv({ FM_CONTROL_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-unknown-block', steps: [{ say: 'please wait', until: 'tasks.count>=1', budgetSec: 60 }] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.json.pass, false);
+    assert.match(r.json.steps[0].reason, /favorite color/);
+    assert.ok(r.json.steps[0].ms < 20_000, `failed after the status poll, not the 60 s budget (${r.json.steps[0].ms} ms)`);
+  });
+
   test('a rejected trace never reaches herdr even with a live fake', () => {
     const { dir, env } = fakeEnv({ FM_CONTROL_ROOT: root });
     const r = runDrive(['run', join(FIXTURES, 'reject', 'lock-only.json')], env);
@@ -427,13 +469,30 @@ describe('grafted onboarding config and shell prompts', () => {
       const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
       assert.equal(cfg.hasCompletedOnboarding, true);
       assert.equal(cfg.bypassPermissionsModeAccepted, true);
+      assert.equal(cfg.hasAcknowledgedCostThreshold, true);
       assert.equal(cfg.projects[home].hasTrustDialogAccepted, true);
+      assert.equal(cfg.projects[home].hasCompletedProjectOnboarding, true);
       const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
       assert.equal(settings.theme, 'dark');
       assert.ok(!existsSync(join(userHome, '.claude.json')));
     } finally {
       process.env.HOME = prevHome;
     }
+  });
+
+  test('seedThrowawayHome writes a no-ask-tools captain.md', () => {
+    const home = tmp('seed-home');
+    seedThrowawayHome(home);
+    const text = readFileSync(join(home, 'data', 'captain.md'), 'utf8');
+    assert.equal(text, THROWAWAY_CAPTAIN);
+    assert.match(text, /Do not ask which tools to install/);
+  });
+
+  test('matchBlockedAnswer recognizes the tool-install catalog and ignores free-form questions', () => {
+    assert.equal(matchBlockedAnswer('MISSING: treehouse (install: curl ...)\nWhich tools should I install?')?.name, 'tool-install');
+    assert.equal(matchBlockedAnswer('tools are missing; install tasks-axi?')?.name, 'tool-install');
+    assert.equal(matchBlockedAnswer('What is your favorite color?'), null);
+    assert.equal(matchBlockedAnswer(''), null);
   });
 
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
@@ -455,6 +514,59 @@ describe('grafted onboarding config and shell prompts', () => {
     });
     assert.equal(r.ok, true, r.reason);
     assert.ok(Date.now() - started < 2000, `resolved immediately (${Date.now() - started} ms)`);
+  });
+
+  test('waitUntil answers a known parked question and keeps waiting until the claim holds', async () => {
+    const home = buildHome('empty');
+    let answered = 0;
+    const signals = { blocked: 'herdr reports the primary blocked on a question' };
+    const r = await waitUntil({
+      home,
+      parsed: parseUntil('projects.registered:greeter'),
+      ctx: { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() },
+      budgetMs: 5000,
+      deps: {
+        liveness: async () => ({ alive: true, reason: 'test' }),
+        signals,
+        answerBlocked: async () => {
+          answered += 1;
+          signals.blocked = null;
+          mkdirSync(join(home, 'data'), { recursive: true });
+          writeFileSync(join(home, 'data', 'projects.md'), '- greeter local-only\n');
+          mkdirSync(join(home, 'projects', 'greeter', '.git'), { recursive: true });
+          return { handled: true, name: 'tool-install' };
+        },
+        fetchHerdr: async () => {},
+        gitAhead: {},
+        seeds: {},
+        counters: {},
+      },
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(answered, 1);
+    assert.ok(r.ms < 2000, `answered and held quickly (${r.ms} ms)`);
+  });
+
+  test('waitUntil fails immediately on an unrecognized parked question', async () => {
+    const home = buildHome('empty');
+    const r = await waitUntil({
+      home,
+      parsed: parseUntil('tasks.count>=1'),
+      ctx: { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() },
+      budgetMs: 8000,
+      deps: {
+        liveness: async () => ({ alive: true, reason: 'test' }),
+        signals: { blocked: 'herdr reports the primary blocked on a question' },
+        answerBlocked: async () => ({ handled: false, reason: 'the primary stopped to ask a question: What is your favorite color?' }),
+        fetchHerdr: async () => {},
+        gitAhead: {},
+        seeds: {},
+        counters: {},
+      },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /favorite color/);
+    assert.ok(r.ms < 2000, `failed fast, not at the 8 s budget (${r.ms} ms)`);
   });
 
   test("C's prompt patterns match Git Bash, Linux cwd, and Windows shells", () => {
