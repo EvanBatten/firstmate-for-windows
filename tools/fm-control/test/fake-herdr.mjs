@@ -4,9 +4,11 @@
 // It answers the CLI verbs lib/herdr.mjs emits, appends every invocation to
 // $FAKE_HERDR_DIR/calls.log (one JSON argv per line), and plays the primary:
 // a launch line starts a real sleeper child whose pid it reports as the
-// claude foreground process and writes a fresh state/.lock into the home, so
-// the driver's ready detection, kill(pid, 0) liveness, /exit and relaunch all
-// run against a process that actually lives and dies.
+// claude foreground process and writes a fresh state/.lock plus
+// state/.session-start-complete into the home, so the driver's ready
+// detection, operable gate, kill(pid, 0) liveness, /exit and relaunch all
+// run against a process that actually lives and dies. FAKE_HERDR_LOCK_DELAY_MS
+// postpones those files so the operable wait can be exercised after splash.
 //
 // Captain lines are answered from $FAKE_HERDR_SCRIPT, a JSON object mapping a
 // substring of the say text to a list of home actions, applied in order by a
@@ -53,14 +55,25 @@ function primaryAlive(s) {
   try { process.kill(s.primary.pid, 0); return true; } catch { return false; }
 }
 
+function writeLock(s) {
+  mkdirSync(join(s.home, 'state'), { recursive: true });
+  const id = `fake-${s.lockSeq}\n`;
+  writeFileSync(join(s.home, 'state', '.lock'), id);
+  writeFileSync(join(s.home, 'state', '.session-start-complete'), id);
+  s.lockAt = Date.now();
+}
+
 function startPrimary(s) {
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], { detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
   s.primary = { pid: child.pid };
   s.launches += 1;
   s.lockSeq += 1;
-  mkdirSync(join(s.home, 'state'), { recursive: true });
-  writeFileSync(join(s.home, 'state', '.lock'), `fake-${s.lockSeq}\n`);
+  const delay = Number.parseInt(process.env.FAKE_HERDR_LOCK_DELAY_MS || '0', 10);
+  if (delay > 0) {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--lock-later', JSON.stringify({ home: s.home, lockSeq: s.lockSeq, delay })], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true });
+    child.unref();
+  } else writeLock(s);
 }
 
 function killPrimary(s) {
@@ -106,6 +119,14 @@ async function applyWrites(home, writes, sayText) {
 if (args[0] === '--apply') {
   const { home, writes, sayText } = JSON.parse(args[1]);
   await applyWrites(home, writes, sayText);
+} else if (args[0] === '--lock-later') {
+  const { home, lockSeq, delay } = JSON.parse(args[1]);
+  await new Promise((r) => setTimeout(r, delay));
+  const s = load();
+  s.home = s.home || home;
+  s.lockSeq = lockSeq;
+  writeLock(s);
+  save(s);
 } else {
   appendFileSync(join(DIR, 'calls.log'), `${JSON.stringify(args)}\n`);
   const a = stripSession(args);
@@ -141,19 +162,22 @@ if (args[0] === '--apply') {
       break;
     }
     case 'pane get':
-      out({ pane: { pane_id: a[2], agent_status: 'idle' } });
+      out({ pane: { pane_id: a[2], agent_status: process.env.FAKE_HERDR_STATUS || 'idle' } });
       break;
     case 'pane read':
-      process.stdout.write(primaryAlive(s) ? '\n> \n\nbypass permissions on\n' : '\n$ \n');
+      if (!primaryAlive(s)) process.stdout.write('\n$ \n');
+      else if (process.env.FAKE_HERDR_PANE_UNTIL_LOCK && !existsSync(join(s.home, 'state', '.lock'))) process.stdout.write(process.env.FAKE_HERDR_PANE_UNTIL_LOCK);
+      else if (process.env.FAKE_HERDR_PANE) process.stdout.write(process.env.FAKE_HERDR_PANE);
+      else process.stdout.write('\n> \n\nbypass permissions on\n');
       break;
     case 'pane send-keys':
-      s.sends.push({ keys: a.slice(3) });
+      s.sends.push({ keys: a.slice(3), t: Date.now() });
       save(s);
       out({});
       break;
     case 'pane run': {
       const text = a[3] ?? '';
-      s.sends.push({ text });
+      s.sends.push({ text, t: Date.now() });
       if (/claude --dangerously-skip-permissions/.test(text)) {
         startPrimary(s);
       } else if (text === '/exit') {

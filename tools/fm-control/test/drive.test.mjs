@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName } from '../lib/session.mjs';
+import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -294,7 +294,9 @@ describe('fake-herdr end to end', () => {
     assert.equal(j.pass, true);
     assert.equal(typeof j.wallMs, 'number');
     assert.equal(typeof j.readyMs, 'number');
+    assert.equal(typeof j.operableMs, 'number');
     assert.equal(typeof j.predicateMs, 'number');
+    assert.equal(j.overhead.operableMs, j.operableMs);
     assert.equal(j.steps.length, 6);
     for (const [i, s] of j.steps.entries()) {
       assert.equal(s.until, trace.steps[i].until);
@@ -403,6 +405,49 @@ describe('fake-herdr end to end', () => {
     const r = runDrive(['run', join(FIXTURES, 'reject', 'lock-only.json')], env);
     assert.equal(r.status, 2);
     assert.ok(!existsSync(join(dir, 'calls.log')));
+  });
+
+  test('first say waits for a delayed lock when the pane shows session-start', () => {
+    const { dir, env } = fakeEnv({
+      FM_CONTROL_ROOT: root,
+      FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
+      FAKE_HERDR_LOCK_DELAY_MS: '800',
+      FAKE_HERDR_PANE_UNTIL_LOCK: 'bypass permissions on\nRunning Bash: bin/fm-session-start.sh\n',
+      FM_CONTROL_OPERABLE_MS: '10000',
+      FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run'),
+    });
+    const trace = {
+      feature: 'e2e-operable-wait',
+      steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.json.pass, true);
+    assert.ok(r.json.operableMs >= 700, `operable wait ${r.json.operableMs} ms`);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    const firstSay = state.sends.find((s) => s.text && s.text.startsWith('ahoy! add my project'));
+    assert.ok(firstSay, 'the first captain say was typed');
+    assert.ok(state.lockAt, 'the fake recorded when the lock appeared');
+    assert.ok(firstSay.t >= state.lockAt, `say ${firstSay.t} was after lock ${state.lockAt}`);
+  });
+
+  test('a persistent-cd session-start denial does not send Escape', () => {
+    const { dir, env } = fakeEnv({
+      FM_CONTROL_ROOT: root,
+      FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
+      FAKE_HERDR_STATUS: 'blocked',
+      FAKE_HERDR_PANE: 'bypass permissions on\nBash: cd /tmp/home && bin/fm-session-start.sh\nDenied by persistent-cd hook\n',
+      FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run'),
+    });
+    const trace = {
+      feature: 'e2e-cd-denied',
+      steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, r.stderr);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    const escapes = state.sends.filter((s) => Array.isArray(s.keys) && s.keys.includes('escape'));
+    assert.equal(escapes.length, 0, 'Escape was not sent for a session-start persistent-cd denial');
   });
 });
 
@@ -529,6 +574,27 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.equal(atShellPrompt('Welcome to Claude\n'), false);
     assert.equal(atShellPrompt(''), false);
     assert.equal(atShellPrompt('> '), false, 'a lone agent composer glyph is not a shell prompt');
+  });
+});
+
+describe('operable home gate', () => {
+  test('homeIsOperable is lock or session-start-complete', () => {
+    const home = tmp('operable-home');
+    assert.equal(homeIsOperable(home), false);
+    mkdirSync(join(home, 'state'), { recursive: true });
+    writeFileSync(join(home, 'state', '.lock'), '1\n');
+    assert.equal(homeIsOperable(home), true);
+    rmSync(join(home, 'state', '.lock'));
+    assert.equal(homeIsOperable(home), false);
+    writeFileSync(join(home, 'state', '.session-start-complete'), '1\n');
+    assert.equal(homeIsOperable(home), true);
+  });
+
+  test('isSessionStartBusy matches fm-session-start, including a persistent-cd denial', () => {
+    assert.equal(isSessionStartBusy('bypass permissions on'), false);
+    assert.equal(isSessionStartBusy('Bash: cd /tmp/home && bin/fm-session-start.sh\nDenied by persistent-cd hook'), true);
+    assert.equal(isSessionStartBusy('Running bin/fm-session-start.sh'), true);
+    assert.equal(isSessionStartBusy(''), false);
   });
 });
 

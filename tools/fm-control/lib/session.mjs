@@ -9,7 +9,11 @@
 //
 // Ready is a process fact plus a firstmate fact: herdr's pane.process_info
 // lists a claude foreground process, and either state/.lock exists in the
-// home under a new identity or the prompt is up (see awaitReady). Liveness
+// home under a new identity or the prompt is up (see awaitReady). That is
+// implicit ready (splash / bypass banner). An operable home is a later
+// firstmate fact: state/.lock or state/.session-start-complete, the digest
+// marker fm-session-start.sh writes when the helm is actually taken.
+// The first captain say waits for that (see sayWhenOperable). Liveness
 // afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
 // first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
 // (onboarding, bypass-permissions, folder trust, theme) and passing it into
@@ -23,7 +27,8 @@
 //
 // Environment:
 //   FM_CONTROL_MODEL        primary model (default opus)
-//   FM_CONTROL_READY_MS     ready budget per launch (default 120000)
+//   FM_CONTROL_READY_MS     implicit-ready budget per launch (default 120000)
+//   FM_CONTROL_OPERABLE_MS  wait for lock/digest-complete before the first say (default 240000)
 //   FM_CONTROL_UNTIL_MS     default step budget when a step has no budgetSec (default 180000)
 //   FM_CONTROL_EVIDENCE     evidence directory (default <tmp>/fm-control-artifacts/<feature>-<utc>)
 //   FM_CONTROL_KEEP         1 keeps the throwaway home and pane after the run
@@ -172,6 +177,7 @@ export class Session {
     this.log = log;
     this.model = env.FM_CONTROL_MODEL || 'opus';
     this.readyMs = Number.parseInt(env.FM_CONTROL_READY_MS || '120000', 10);
+    this.operableBudgetMs = Number.parseInt(env.FM_CONTROL_OPERABLE_MS || '240000', 10);
     if (!this.env.CLAUDE_CODE_OAUTH_TOKEN && this.env.CLAUDE_CODE_OATH_TOKEN) {
       this.env = { ...this.env, CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OATH_TOKEN };
     }
@@ -364,7 +370,15 @@ export class Session {
   }
 
   lockText() {
-    try { return readFileSync(join(this.home, 'state', '.lock'), 'utf8').trim() || null; } catch { return null; }
+    return readHomeStateFile(this.home, '.lock');
+  }
+
+  sessionStartCompleteText() {
+    return readHomeStateFile(this.home, '.session-start-complete');
+  }
+
+  homeOperable() {
+    return homeIsOperable(this.home);
   }
 
   async paneText(source = 'visible', lines) {
@@ -403,12 +417,9 @@ export class Session {
     return false;
   }
 
-  // Ready is claude running as the pane's foreground process plus one of two
-  // firstmate-side facts: the home's lock exists under a new identity (the
-  // SessionStart hook took the helm, which it does once state/ exists), or
-  // the prompt is up with its bypass footer (a fresh home, where the hook
-  // stands down and the primary takes the helm on its first turn instead,
-  // exactly as tests/verification/session-lib.sh treats it).
+  // Implicit ready: claude in the foreground plus lock-under-new-identity or
+  // the bypass footer. This can fire on the splash before session-start has
+  // taken the helm; sayWhenOperable waits for that separately.
   async awaitReady() {
     const deadline = Date.now() + this.readyMs;
     let sawClaude = false;
@@ -450,6 +461,53 @@ export class Session {
     throw new HerdrError(`the primary did not become ready within ${Math.round(this.readyMs / 1000)} s. Its pane shows: ${lastLines(text)}`);
   }
 
+  // Operable home: session-start has taken the helm. Firstmate writes
+  // state/.lock when it acquires the lock and state/.session-start-complete
+  // when the digest finishes. Either is enough. The first non-empty captain
+  // say waits here so the feature budget does not start during splash.
+  //
+  // If the splash is idle and session-start is not in the pane, the hook
+  // stood down and the first say is what starts session-start; send it and
+  // keep waiting for the lock. If the pane already shows fm-session-start
+  // (including a persistent-cd denial), leave it alone and wait.
+  async sayWhenOperable(text) {
+    const t0 = Date.now();
+    const deadline = t0 + this.operableBudgetMs;
+    let sayMs = 0;
+    let said = false;
+    const send = async () => {
+      if (said || text === '') return;
+      sayMs = await this.say(text);
+      said = true;
+    };
+
+    while (Date.now() < deadline) {
+      if (this.homeOperable()) {
+        if (!said) await send();
+        return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
+      }
+      const pane = await this.paneText().catch(() => '');
+      if (await this.answerDialog(pane)) { await sleep(400); continue; }
+      if (atShellPrompt(pane) && (this.primaryPid || /claude --dangerously/.test(pane))) {
+        this.snapshot('exited-before-operable', pane);
+        throw new HerdrError(`the primary exited before the home was operable. Its pane shows: ${lastLines(pane)}`);
+      }
+      if (isSessionStartBusy(pane)) {
+        await sleep(1000);
+        continue;
+      }
+      await send();
+      await sleep(1000);
+    }
+    if (this.homeOperable()) {
+      if (!said) await send();
+      return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
+    }
+    const pane = await this.paneText().catch(() => '');
+    this.snapshot('not-operable', pane);
+    throw new HerdrError(`the home did not become operable within ${Math.round(this.operableBudgetMs / 1000)} s. Its pane shows: ${lastLines(pane)}`);
+  }
+
   // ---- liveness and status ------------------------------------------------
 
   async liveness() {
@@ -469,7 +527,19 @@ export class Session {
   watchPrimaryStatus() {
     const apply = (status) => {
       this.signals.status = status;
-      this.signals.blocked = status === 'blocked' ? 'herdr reports the primary blocked on a question' : null;
+      if (status === 'blocked') {
+        // A persistent-cd denial of `cd ... && fm-session-start` is not a
+        // parked captain question; the primary retries without cd.
+        this.paneText().then((text) => {
+          this.signals.blocked = isSessionStartBusy(text)
+            ? null
+            : 'herdr reports the primary blocked on a question';
+        }).catch(() => {
+          this.signals.blocked = 'herdr reports the primary blocked on a question';
+        });
+      } else {
+        this.signals.blocked = null;
+      }
       // Rare, event-driven dead-primary check: unknown status plus a shell
       // prompt. Not a 1 s pane-read loop.
       if (status === 'unknown' && this.paneId) {
@@ -482,12 +552,14 @@ export class Session {
       if (msg.data?.pane_id === this.paneId && msg.data?.agent_status) apply(msg.data.agent_status);
     });
     if (!handle) {
-      this.statusPoll = setInterval(async () => {
+      const poll = async () => {
         try {
           const r = await this.herdr.call('pane.get', { pane_id: this.paneId });
           apply(r.pane?.agent_status ?? 'unknown');
         } catch { /* keep the last known status */ }
-      }, 10_000);
+      };
+      poll();
+      this.statusPoll = setInterval(poll, 10_000);
     }
   }
 
@@ -511,12 +583,17 @@ export class Session {
     this.captainLog.push(`${new Date().toISOString()}\t${text}`);
     appendFileSync(join(this.evidenceDir, 'captain.log'), `${this.captainLog.at(-1)}\n`);
     if (this.signals.blocked) {
-      // A primary parked on a question takes a menu choice, not text; dismiss
-      // the question first, as a captain who wants to say something else would.
-      this.snapshot('dismissed-question', await this.paneText().catch(() => ''));
-      await this.keys('escape');
-      await sleep(800);
-      this.signals.blocked = null;
+      const pane = await this.paneText().catch(() => '');
+      if (isSessionStartBusy(pane)) {
+        this.signals.blocked = null;
+      } else {
+        // A primary parked on a question takes a menu choice, not text; dismiss
+        // the question first, as a captain who wants to say something else would.
+        this.snapshot('dismissed-question', pane);
+        await this.keys('escape');
+        await sleep(800);
+        this.signals.blocked = null;
+      }
     }
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text, keys: ['enter'] });
     return Date.now() - t0;
@@ -715,6 +792,22 @@ function safeReal(p) {
   try { return realpathSync(p); } catch { return p; }
 }
 const realpathSafe = safeReal;
+
+function readHomeStateFile(home, name) {
+  try { return readFileSync(join(home, 'state', name), 'utf8').trim() || null; } catch { return null; }
+}
+
+// Helm taken: lock acquired, or the digest-complete marker published.
+export function homeIsOperable(home) {
+  return readHomeStateFile(home, '.lock') !== null || readHomeStateFile(home, '.session-start-complete') !== null;
+}
+
+// Pane is busy with session-start, including a persistent-cd hook denial of
+// `cd ... && fm-session-start`. Not a parked captain question.
+export function isSessionStartBusy(text) {
+  return /fm-session-start/.test(String(text || ''));
+}
+
 export function lastLines(text, n = 6) {
   return text.split('\n').filter((l) => /[A-Za-z]/.test(l)).slice(-n).map((l) => l.replace(/\s+/g, ' ').trim()).join(' | ').slice(0, 600);
 }

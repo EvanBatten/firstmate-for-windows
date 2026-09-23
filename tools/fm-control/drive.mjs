@@ -12,12 +12,14 @@
 //   3  the environment failed: herdr unusable, clone failed, primary never became ready
 //
 // Result shape (one JSON object, always printed for run, even on failure):
-//   { feature, wallMs, pass, readyMs, predicateMs,
+//   { feature, wallMs, pass, readyMs, operableMs, predicateMs,
 //     steps: [{ say, until, ms, ok, reason, sayMs?, relaunchMs?, primaryStatus?, tasks? }],
-//     overhead: { transport, herdrCalls, spawns, herdrSpawns, gitSpawns, setupSpawns, cleanupSpawns, setupMs, closeMs },
+//     overhead: { transport, herdrCalls, spawns, herdrSpawns, gitSpawns, setupSpawns, cleanupSpawns, setupMs, operableMs, closeMs },
 //     evidence, error? }
-// predicateMs is the time spent waiting for claims; readyMs the first launch; the rest of wallMs is
-// the driver's own setup, typing, relaunch and cleanup, which the overhead block breaks down.
+// predicateMs is the time spent waiting for claims; readyMs the implicit splash launch;
+// operableMs the wait for lock / session-start-complete before the first say (also folded
+// into readyMs so the first feature budget does not start during splash). The rest of
+// wallMs is the driver's own setup, typing, relaunch and cleanup.
 // The trace grammar, predicate catalog and environment knobs are documented in lib/trace.mjs,
 // lib/predicates.mjs, lib/herdr.mjs and lib/session.mjs.
 
@@ -71,6 +73,7 @@ async function run(trace) {
     wallMs: 0,
     pass: false,
     readyMs: null,
+    operableMs: null,
     predicateMs: 0,
     steps: [],
     overhead: {},
@@ -112,6 +115,7 @@ async function run(trace) {
     };
 
     let allOk = true;
+    let firstSay = true;
     for (const [i, step] of steps.entries()) {
       const rec = { say: step.say, until: step.until, ms: 0, ok: false, reason: '' };
       result.steps.push(rec);
@@ -119,9 +123,24 @@ async function run(trace) {
         rec.relaunchMs = await session.relaunch();
         log(`step ${i + 1}: relaunched in ${rec.relaunchMs} ms; waiting for ${step.until}`);
       } else if (step.say !== '') {
-        rec.sayMs = await session.say(step.say);
-        log(`step ${i + 1}: said ${JSON.stringify(step.say.length > 60 ? `${step.say.slice(0, 57)}...` : step.say)}; waiting for ${step.until}`);
+        if (firstSay) {
+          const op = await session.sayWhenOperable(step.say);
+          rec.sayMs = op.sayMs;
+          result.operableMs = op.operableMs;
+          result.readyMs += op.operableMs;
+          firstSay = false;
+          log(`home operable in ${op.operableMs} ms; said ${JSON.stringify(step.say.length > 60 ? `${step.say.slice(0, 57)}...` : step.say)}; waiting for ${step.until}`);
+        } else {
+          rec.sayMs = await session.say(step.say);
+          log(`step ${i + 1}: said ${JSON.stringify(step.say.length > 60 ? `${step.say.slice(0, 57)}...` : step.say)}; waiting for ${step.until}`);
+        }
       } else {
+        if (firstSay && result.operableMs == null) {
+          const op = await session.sayWhenOperable('');
+          result.operableMs = op.operableMs;
+          result.readyMs += op.operableMs;
+          firstSay = false;
+        }
         log(`step ${i + 1}: waiting for ${step.until}`);
       }
       const budgetMs = step.budgetSec ? Math.round(step.budgetSec * 1000) : defaultBudgetMs;
@@ -161,6 +180,7 @@ async function run(trace) {
       setupSpawns: c.setupSpawns,
       cleanupSpawns: c.cleanupSpawns,
       setupMs: result.overhead.setupMs ?? null,
+      operableMs: result.operableMs,
       closeMs: result.overhead.closeMs,
     };
     result.wallMs = Date.now() - T0;
