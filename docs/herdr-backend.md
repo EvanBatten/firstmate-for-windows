@@ -321,7 +321,8 @@ Everything Firstmate types into a task pane is POSIX shell, so on MSYS the adapt
 
 A pane is a child of the Herdr server, so it starts with the registered Windows `PATH`, not with the `PATH` Firstmate checked its toolchain on.
 A tool installed into a directory that was never registered, as the treehouse and no-mistakes installers leave theirs, is then missing in the pane: `treehouse get` answers `command not found` and the spawn reports a worktree timeout.
-Herdr drops a `PATH` passed through `tab create --env` but carries any other variable, so the same `tab create` passes Firstmate's own `PATH` as `--env FM_PANE_PATH=<win32 list>`, and the first command adopts it before it starts Git Bash: `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; & '<git bash>' --login`.
+Herdr drops a `PATH` passed through `tab create --env` but carries any other variable, so the same `tab create` passes Firstmate's own `PATH` as `--env FM_PANE_PATH=<win32 list>`, and the first command adopts it before it starts Git Bash: `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH; Remove-Item Env:ORIGINAL_PATH -ErrorAction SilentlyContinue }; & '<git bash>' --login`.
+Git Bash login keeps an inherited `ORIGINAL_PATH` and ignores the `PATH` just assigned, so the adoption clears `ORIGINAL_PATH` or the pane still cannot see treehouse.
 The adoption is a test rather than an assignment, so a pane that was created some other way keeps the `PATH` it has.
 
 `pane get .foreground_cwd` is always `null` on the Windows build.

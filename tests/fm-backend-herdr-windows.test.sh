@@ -557,7 +557,7 @@ test_task_tab_create_bootstraps_git_bash_on_msys() {
     "the PATH handed to the pane must include a tool directory that only firstmate's own shell knows about"
   # shellcheck disable=SC2016 # pwsh variables, asserted as the literal text the pane receives.
   assert_contains "$(cat "$log")" \
-    "${US}pane${US}run${US}w1:p2${US}"'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '${want}' --login" \
+    "${US}pane${US}run${US}w1:p2${US}"'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH; Remove-Item Env:ORIGINAL_PATH -ErrorAction SilentlyContinue }; '"& '${want}' --login" \
     "the Windows pane's FIRST command must adopt that PATH only when it was handed one, then launch Git Bash by full path"
   pass "fm_backend_herdr_task_tab_create: an MSYS pane gets SHELL, the OSC 9;9 emitter, firstmate's PATH, and a Git Bash first command"
 }

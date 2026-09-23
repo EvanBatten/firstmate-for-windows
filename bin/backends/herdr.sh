@@ -512,8 +512,10 @@ fm_backend_herdr_win32_pane_bash() {
 #
 # herdr drops a PATH passed through `tab create --env`, under either spelling,
 # but carries any other variable. So the PATH rides in as FM_PANE_PATH and the
-# pane's first command adopts it; measured with that in place, all four tools
-# resolved in the pane.
+# pane's first command adopts it.
+# Git Bash --login keeps an inherited ORIGINAL_PATH and ignores the PATH just
+# assigned. On this machine that left treehouse missing after the adoption.
+# The adoption clears ORIGINAL_PATH so login uses the PATH just assigned.
 fm_backend_herdr_win32_pane_path() {
   local win
   win=$(cygpath -w -p "$PATH" 2>/dev/null) && [ -n "$win" ] || return 1
@@ -602,10 +604,13 @@ fm_backend_herdr_pane_start_bash() {  # <session> <pane>
   # fm_backend_herdr_win32_pane_path). It is a test, not an assignment, because
   # a pane made some other way carries no FM_PANE_PATH, and assigning an unset
   # variable would leave that pane with no PATH at all.
+  # ORIGINAL_PATH is cleared in the same guard. Git Bash --login prefers it
+  # over the PATH just assigned, which is how a pane lost treehouse after the
+  # adoption looked correct.
   quoted=${bash_win//\'/\'\'}
   # shellcheck disable=SC2016 # pwsh variables: the pane expands them, not this shell.
   fm_backend_herdr_cli "$session" pane run "$pane" \
-    'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1 ||
+    'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH; Remove-Item Env:ORIGINAL_PATH -ErrorAction SilentlyContinue }; '"& '$quoted' --login" >/dev/null 2>&1 ||
     echo "warning: herdr pane $pane was created but its Git Bash bootstrap command could not be sent; the pane is still running its default Windows shell" >&2
   return 0
 }
