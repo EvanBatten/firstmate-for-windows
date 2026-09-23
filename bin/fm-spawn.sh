@@ -2540,8 +2540,9 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # on one read alone silently records the wrong worktree= in state/<id>.meta. Require
   # two consecutive reads to agree on the same non-project path before accepting it;
   # a mismatch just becomes the new candidate rather than resetting the wait, so a
-  # pane that is already settled by the first real read only costs the one existing
-  # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  # pane that is already settled by the first real read only costs a short confirm
+  # sleep, not a whole extra 1s poll. Keep the 1s interval while the pane is still
+  # in the project or has not reported a path at all.
   candidate=""
   for _ in $(seq 1 60); do
     p=$(spawn_current_path "$WT_TARGET" || true)
@@ -2559,7 +2560,11 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     else
       candidate=""
     fi
-    sleep 1
+    if [ -n "$candidate" ]; then
+      sleep 0.1
+    else
+      sleep 1
+    fi
   done
   if [ -z "$WT" ]; then
     echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2

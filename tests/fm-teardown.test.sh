@@ -1439,17 +1439,71 @@ SH
   chmod +x "$case_dir/fakebin/herdr"
 }
 
-test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes() {
-  local case_dir log closed lock ready release holder_pid rc thlog
-  case_dir=$(make_case herdr-orphan-refusal)
+test_herdr_flat_teardown_closes_non_focused_pane_when_lock_is_contended() {
+  local case_dir log closed lock ready release holder_pid thlog
+  case_dir=$(make_case herdr-unlock-other)
   write_meta "$case_dir" local-only ship
   configure_flat_herdr_teardown_case "$case_dir"
   log="$case_dir/herdr.log"; : > "$log"
   closed="$case_dir/closed"
   : > "$case_dir/state/task-x1.status"
   : > "$case_dir/state/task-x1.turn-ended"
-  # Record every treehouse invocation: the contended-lock refusal must fire
-  # BEFORE the isolated copy is returned, so phase 1 may not invoke it at all.
+  thlog="$case_dir/treehouse.log"; : > "$thlog"
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$thlog"
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+
+  lock=$(FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" PATH="$case_dir/fakebin:$PATH" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_session_lock_path default' "$ROOT") \
+    || fail "herdr-unlock-other: could not resolve the fixture presentation lock path"
+  ready="$case_dir/lock-ready"; release="$case_dir/lock-release"
+  ROOT="$ROOT" LOCK="$lock" READY="$ready" RELEASE="$release" bash -c '
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$LOCK" || exit 1
+    : > "$READY"
+    while [ ! -e "$RELEASE" ]; do sleep 0.1; done
+    fm_lock_release "$LOCK"
+  ' &
+  holder_pid=$!
+  local waited=0
+  while [ ! -e "$ready" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+  [ -e "$ready" ] || fail "herdr-unlock-other: the contending lock holder never started"
+
+  FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
+    run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || { : > "$release"; wait "$holder_pid" 2>/dev/null || true; fail "herdr-unlock-other: contended non-focused teardown failed: $(cat "$case_dir/stderr")"; }
+  : > "$release"
+  wait "$holder_pid" 2>/dev/null || true
+  [ -e "$closed" ] || fail "herdr-unlock-other: the non-focused task pane was not closed without the lock"
+  [ -s "$thlog" ] || fail "herdr-unlock-other: contended non-focused teardown never returned the isolated copy"
+  [ ! -e "$case_dir/state/task-x1.meta" ] || fail "herdr-unlock-other: contended non-focused teardown left the metadata behind"
+  grep -q "teardown task-x1 complete" "$case_dir/stdout" \
+    || fail "herdr-unlock-other: contended non-focused teardown did not report completion"
+  assert_grep "closing the non-focused task pane without that lock" "$case_dir/stderr" \
+    "herdr-unlock-other: the unlocked close was not explained"
+  pass "herdr flat teardown closes a non-focused task pane when the presentation lock is contended"
+}
+
+test_herdr_flat_teardown_refuses_captain_tab_when_lock_is_contended() {
+  local case_dir log closed lock ready release holder_pid rc thlog
+  case_dir=$(make_case herdr-orphan-refusal)
+  write_meta "$case_dir" local-only ship
+  configure_flat_herdr_teardown_case "$case_dir"
+  # Make the task pane the captain's focused tab so an unlocked close is refused.
+  sed -i.bak \
+    -e 's/"workspace_id":"wH","active_tab_id":"wH:t1","focused":true/"workspace_id":"wH","active_tab_id":"wH:t1","focused":false/' \
+    -e 's/"workspace_id":"wG","active_tab_id":"wG:tQ","focused":false/"workspace_id":"wG","active_tab_id":"wG:tQ","focused":true/' \
+    -e 's/"tab_id":"wH:t1","focused":true/"tab_id":"wH:t1"/' \
+    -e 's/"tab_id":"wG:tQ","workspace_id":"wG"/"tab_id":"wG:tQ","workspace_id":"wG","focused":true/' \
+    "$case_dir/fakebin/herdr"
+  rm -f "$case_dir/fakebin/herdr.bak"
+  log="$case_dir/herdr.log"; : > "$log"
+  closed="$case_dir/closed"
+  : > "$case_dir/state/task-x1.status"
+  : > "$case_dir/state/task-x1.turn-ended"
   thlog="$case_dir/treehouse.log"; : > "$thlog"
   cat > "$case_dir/fakebin/treehouse" <<SH
 #!/usr/bin/env bash
@@ -1479,7 +1533,7 @@ SH
     run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
   if [ "$rc" -eq 0 ]; then
     : > "$release"; wait "$holder_pid" 2>/dev/null || true
-    fail "herdr-orphan-refusal: teardown reported success while the exact pane still existed under lock contention"
+    fail "herdr-orphan-refusal: teardown reported success while the captain tab still existed under lock contention"
   fi
   [ -e "$case_dir/state/task-x1.meta" ] || { : > "$release"; fail "herdr-orphan-refusal: refusal erased the durable endpoint metadata"; }
   [ -e "$case_dir/state/task-x1.status" ] || { : > "$release"; fail "herdr-orphan-refusal: refusal erased the task status record"; }
@@ -1497,7 +1551,7 @@ SH
     : > "$release"; fail "herdr-orphan-refusal: refusal still reported cleanup complete"
   fi
   if grep -q "^pane close" "$log"; then
-    : > "$release"; fail "herdr-orphan-refusal: an unlocked pane close was attempted under contention"
+    : > "$release"; fail "herdr-orphan-refusal: an unlocked pane close was attempted on the captain tab"
   fi
 
   : > "$release"
@@ -1511,7 +1565,7 @@ SH
   [ ! -e "$case_dir/state/task-x1.status" ] || fail "herdr-orphan-refusal: the successful retry left the status record behind"
   grep -q "teardown task-x1 complete" "$case_dir/stdout2" \
     || fail "herdr-orphan-refusal: the successful retry did not report completion"
-  pass "herdr flat teardown refuses before returning the isolated copy under lock contention and the retry completes cleanly"
+  pass "herdr flat teardown refuses the captain tab under lock contention and the retry completes cleanly"
 }
 
 test_herdr_flat_teardown_refuses_records_on_unparseable_presence() {
@@ -2745,7 +2799,8 @@ test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_teardown_missing_busy_sidecar_completes
 test_herdr_teardown_clears_escalation_marker
-test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes
+test_herdr_flat_teardown_closes_non_focused_pane_when_lock_is_contended
+test_herdr_flat_teardown_refuses_captain_tab_when_lock_is_contended
 test_herdr_flat_teardown_refuses_records_on_unparseable_presence
 test_herdr_flat_teardown_preflight_refuses_before_changes
 test_forced_secondmate_herdr_child_preflight_refuses_before_changes

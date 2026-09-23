@@ -112,7 +112,7 @@ session_open() {  # <workspace label>
   quoted=${bash_win//\'/\'\'}
   # pwsh expands these in the pane, not this shell.
   # shellcheck disable=SC2016
-  session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1
+  session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted'" >/dev/null 2>&1
   if session_herdr pane wait-output --regex '(?m)^\$ ?$' --timeout 30000 "$SESSION_PANE" >/dev/null 2>&1; then
     ok "the session's pane runs Git Bash with the captain's toolchain on PATH"
   else

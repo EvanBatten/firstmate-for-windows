@@ -316,12 +316,13 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 ## Windows (Git Bash / MSYS)
 
 Herdr on Windows opens every pane in its configured `default_shell`, which is a Windows shell, and `tab create` has no shell flag.
-Everything Firstmate types into a task pane is POSIX shell, so on MSYS the adapter bootstraps Git Bash itself: `fm_backend_herdr_task_tab_create` sends `& '<git bash>' --login` as the pane's first command, using `cygpath -w "$BASH"` so it names the interpreter Firstmate is actually running in.
+Everything Firstmate types into a task pane is POSIX shell, so on MSYS the adapter bootstraps Git Bash itself: `fm_backend_herdr_task_tab_create` sends `& '<git bash>'` as the pane's first command, using `cygpath -w "$BASH"` so it names the interpreter Firstmate is actually running in.
 `exec bash -l` and a bare `bash` both fail there - `exec` is not a pwsh command and `bash` resolves to WSL.
+`--login` is added only when Firstmate could not convert its own `PATH` for the pane; the login profile is then the fallback that finds tools, and it is also the multi-second wait a ready `FM_PANE_PATH` avoids.
 
 A pane is a child of the Herdr server, so it starts with the registered Windows `PATH`, not with the `PATH` Firstmate checked its toolchain on.
 A tool installed into a directory that was never registered, as the treehouse and no-mistakes installers leave theirs, is then missing in the pane: `treehouse get` answers `command not found` and the spawn reports a worktree timeout.
-Herdr drops a `PATH` passed through `tab create --env` but carries any other variable, so the same `tab create` passes Firstmate's own `PATH` as `--env FM_PANE_PATH=<win32 list>`, and the first command adopts it before it starts Git Bash: `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; & '<git bash>' --login`.
+Herdr drops a `PATH` passed through `tab create --env` but carries any other variable, so the same `tab create` passes Firstmate's own `PATH` as `--env FM_PANE_PATH=<win32 list>`, and the first command adopts it before it starts Git Bash: `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; & '<git bash>'`.
 The adoption is a test rather than an assignment, so a pane that was created some other way keeps the `PATH` it has.
 
 `pane get .foreground_cwd` is always `null` on the Windows build.

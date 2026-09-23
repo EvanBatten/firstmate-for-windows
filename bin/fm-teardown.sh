@@ -60,6 +60,8 @@
 # Projected closes share the presentation-order lock, refuse to close the
 # captain's active tab, and restore the exact response-derived pre-close tab
 # if Herdr's last-pane cleanup focuses an unrelated neighboring workspace.
+# A contended lock still closes a pane that is not that active tab; the
+# captain's focused tab is never closed unlocked.
 # Secondmates (kind=secondmate in meta) are retired explicitly. Normal
 # teardown refuses while their home has in-flight crewmate meta files; --force
 # is the approved discard path that prevalidates child removal targets, locks each
@@ -2357,7 +2359,9 @@ teardown_herdr_require_prerequisites() {  # <task-id>
     fm_backend_herdr_workspace_presence_state \
     fm_backend_herdr_endpoint_confirmed_gone \
     fm_backend_herdr_explicit_close_pane_confirmed \
-    fm_backend_herdr_presentation_session_lock_path; do
+    fm_backend_herdr_presentation_session_lock_path \
+    fm_backend_herdr_pane_active_focus_state \
+    fm_backend_herdr_kill_unlocked_if_not_active_tab; do
     if ! declare -F "$prerequisite" >/dev/null 2>&1; then
       echo "error: herdr teardown prerequisites are unavailable for $task_id; nothing was changed - restore the adapter and rerun teardown" >&2
       return 1
@@ -2412,7 +2416,7 @@ $TEARDOWN_HERDR_LOCK_RECORDS
 FMEOF
   fi
   attempt=0
-  while [ "$attempt" -lt 50 ]; do
+  while [ "$attempt" -lt "${FM_BACKEND_HERDR_PRESENTATION_LOCK_ATTEMPTS:-5}" ]; do
     if fm_lock_try_acquire "$lock_path"; then
       if ! verified_lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session") \
         || [ "$verified_lock_path" != "$lock_path" ]; then
@@ -2431,6 +2435,10 @@ $session	$lock_path"
     sleep 0.1
     attempt=$((attempt + 1))
   done
+  if [ "$(fm_backend_herdr_pane_active_focus_state "$session" "$pane")" = other ]; then
+    echo "warning: herdr session presentation lock is contended for $task_id; closing the non-focused task pane without that lock" >&2
+    return 0
+  fi
   echo "error: herdr session presentation lock is contended for $task_id; nothing was changed - rerun teardown once the contention clears" >&2
   return 1
 }
@@ -2689,11 +2697,11 @@ fi
 
 # A Herdr close may reposition shared workspace order, so the whole
 # destructive sequence below (worktree return, pane close, record removal)
-# runs under the named-session presentation lock, acquired BEFORE anything is
-# returned or erased: a contended lock refuses here while the isolated copy,
-# every durable record, and the endpoint are all still intact for a plain
-# rerun. An unresolvable lock path (for example an unreachable server) also
-# refuses before any destructive step.
+# prefers the named-session presentation lock, acquired BEFORE anything is
+# returned or erased. An unresolvable lock path (for example an unreachable
+# server) still refuses before any destructive step. A contended lock refuses
+# only when the pane is the captain's active tab or focus cannot be read;
+# a non-focused task pane continues and is closed unlocked.
 TEARDOWN_HERDR_SESSION=
 TEARDOWN_HERDR_PANE=
 if [ "$BACKEND" = herdr ]; then
@@ -2823,8 +2831,10 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
 elif [ "$BACKEND" = herdr ]; then
   if teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
     fm_backend_herdr_kill_serialized "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE" 2>/dev/null || true
+  elif fm_backend_herdr_kill_unlocked_if_not_active_tab "$TEARDOWN_HERDR_SESSION" "$TEARDOWN_HERDR_PANE"; then
+    :
   else
-    echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing unlocked" >&2
+    echo "warning: herdr session presentation lock path is unavailable; skipping the pane close rather than closing the captain's active tab unlocked" >&2
   fi
 elif [ "$BACKEND" != orca ]; then
   fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true

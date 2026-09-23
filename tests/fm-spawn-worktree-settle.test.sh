@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Regression test for the fm-spawn.sh treehouse-get worktree-detection settle
 # loop (bin/fm-spawn.sh, the `for _ in $(seq 1 60)` loop after `treehouse get`).
+# A candidate that already left the project confirms on a 0.1s second read.
 #
 # On some tmux/WSL setups a brand-new window's pane_current_path transiently
 # reports a stale, unrelated-but-real path on the very first poll, before the
@@ -121,10 +122,9 @@ test_single_stale_first_read_is_not_accepted() {
 }
 
 # A pane that reports the real worktree from the very first read still only
-# costs the loop's existing one-second inter-poll sleep to confirm - not an
-# extra full cycle on top of that.
+# costs the loop's short confirm sleep, not a full 1s poll on top of that.
 test_already_settled_pane_costs_one_confirm_sleep() {
-  local rec id out status start end elapsed
+  local rec id out status start end elapsed reads
   id=settle-already-settled-z2
   rec=$(make_settle_case settle-already-settled "$id" 0)
   read_settle_record "$rec"
@@ -134,11 +134,13 @@ test_already_settled_pane_costs_one_confirm_sleep() {
   status=$?
   end=$(date +%s)
   elapsed=$((end - start))
+  reads=$(cat "$COUNTFILE")
   expect_code 0 "$status" "spawn should succeed when the pane is already settled"
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
     "meta did not record the already-settled worktree"
-  [ "$elapsed" -le 5 ] || fail "already-settled pane took ${elapsed}s to confirm - expected close to the single inter-poll sleep"
-  pass "an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle"
+  [ "$reads" = 2 ] || fail "already-settled pane should confirm with two cwd reads, got $reads"
+  [ "$elapsed" -le 3 ] || fail "already-settled pane took ${elapsed}s to confirm - expected the 0.1s confirm sleep, not a 1s poll"
+  pass "an already-settled pane confirms via a short second read, not an extra 1s poll"
 }
 
 test_single_stale_first_read_is_not_accepted
