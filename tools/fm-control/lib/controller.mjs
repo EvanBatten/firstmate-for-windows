@@ -143,6 +143,7 @@ export class HerdrController extends EventEmitter {
     this.stream = null;
     this.server = null;
     this.fake = null;
+    this.socketPath = null;
   }
 
   async connect() {
@@ -179,6 +180,7 @@ export class HerdrController extends EventEmitter {
     }
     const socketPath = status?.server?.socket;
     if (!socketPath) throw new Error("Herdr status reported no socket path");
+    this.socketPath = socketPath;
 
     this.server = spawnCaptured(
       herdr,
@@ -188,15 +190,20 @@ export class HerdrController extends EventEmitter {
     );
     this.server.on("error", (error) => this.emit("failure", error));
     const deadline = Date.now() + 30000;
-    const controlSocket = await connectSocket(socketPath, deadline);
     const streamSocket = await connectSocket(socketPath, deadline);
-    this.control = new JsonLines(controlSocket, controlSocket);
     this.stream = new JsonLines(streamSocket, streamSocket);
     this.stream.on("event", (event) => this.emit("event", event));
   }
 
-  request(method, params = {}, timeoutMs) {
-    return this.control.request(method, params, timeoutMs);
+  async request(method, params = {}, timeoutMs = 30000) {
+    if (this.control) return this.control.request(method, params, timeoutMs);
+    const socket = await connectSocket(this.socketPath, Date.now() + timeoutMs);
+    const peer = new JsonLines(socket, socket);
+    try {
+      return await peer.request(method, params, timeoutMs);
+    } finally {
+      peer.close();
+    }
   }
 
   async subscribe(paneId) {
@@ -248,7 +255,7 @@ export class HerdrController extends EventEmitter {
 
   async close() {
     this.stream?.close();
-    if (this.stream !== this.control) this.control?.close();
+    this.control?.close();
     if (this.fake && !this.fake.killed) this.fake.kill();
     if (this.server && !this.server.killed) this.server.kill();
   }

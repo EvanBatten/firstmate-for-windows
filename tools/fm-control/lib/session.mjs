@@ -300,7 +300,7 @@ export class Session {
       return;
     }
     if (!say) return;
-    await this.controller.request("workspace.focus", { target: this.workspaceId });
+    await this.controller.request("workspace.focus", { workspace_id: this.workspaceId });
     await this.controller.sendInput(this.paneId, say);
   }
 
@@ -335,7 +335,11 @@ export class Session {
     }
     try {
       if (this.workspaceId) {
-        await this.controller?.request("workspace.close", { target: this.workspaceId }, 10000);
+        await this.controller?.request(
+          "workspace.close",
+          { workspace_id: this.workspaceId },
+          10000,
+        );
       }
     } catch {}
     await this.controller?.close();
