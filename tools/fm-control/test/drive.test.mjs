@@ -6,7 +6,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy } from '../lib/session.mjs';
+import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -273,6 +273,22 @@ function writeTrace(dir, trace) {
 describe('fake-herdr end to end', () => {
   let root;
   before(() => { root = makeRoot(); });
+
+  test('cloneHome writes an empty regular .fm-control-throwaway marker', async () => {
+    const session = new Session({
+      trace: { feature: 'throwaway-marker', steps: [] },
+      env: { ...process.env, FM_CONTROL_ROOT: root, FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run') },
+    });
+    session.scratch = tmp('marker-scratch');
+    session.home = join(session.scratch, 'firstmate');
+    await session.cloneHome();
+    const marker = join(session.home, '.fm-control-throwaway');
+    assert.ok(existsSync(marker), 'the throwaway home has the fast-session-start marker');
+    const st = lstatSync(marker);
+    assert.equal(st.isFile(), true);
+    assert.equal(st.isSymbolicLink(), false);
+    assert.equal(readFileSync(marker, 'utf8'), '');
+  });
 
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {
     const { dir, env } = fakeEnv({ FM_CONTROL_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run') });

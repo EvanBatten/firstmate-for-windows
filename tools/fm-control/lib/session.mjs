@@ -312,6 +312,9 @@ export class Session {
     } catch {
       throw new HerdrError("the clone's harness skill link does not resolve, so the primary would have no skills");
     }
+    // SessionStart's cheap path is opt-in. A real captain home has none of
+    // FM_SESSION_START_FAST, FM_VERIFY_HOME, or this regular file.
+    writeFileSync(join(this.home, '.fm-control-throwaway'), '');
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
   }
 
