@@ -123,7 +123,9 @@ test("fake Herdr drives restart trace and sends each captain say once", () => {
   const trace = JSON.parse(readFileSync(RESTART, "utf8"));
   const expected = trace.steps
     .map((step) => step.say)
-    .filter((say) => say && !say.startsWith("$"));
+    .filter((say) => say && !say.startsWith("$"))
+    .map((say) => say.replaceAll("{{projectOrigin}}", join(root, "greeter.git"))
+      .replaceAll("{{home}}", home));
   const sent = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
   assert.deepEqual(sent, expected);
   assert.equal(sent.includes("$relaunch"), false);
