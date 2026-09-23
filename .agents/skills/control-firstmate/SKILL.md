@@ -44,6 +44,7 @@ Load this skill before writing a trace, before running `drive.mjs`, and when [`v
 `say` is captain text typed into the primary pane.
 An empty `say` waits without typing.
 `$relaunch` exits the primary, starts `claude` again in the same pane, and waits for ready before evaluating `until`.
+If the pane is already at a shell prompt (`$`, `firstmate $`, or `PS ...>`), it skips `/exit` and launches immediately.
 `$exit` returns the pane to its shell.
 Any other `$...` token is refused.
 

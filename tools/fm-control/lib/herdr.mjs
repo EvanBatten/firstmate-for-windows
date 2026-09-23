@@ -4,7 +4,22 @@ import { existsSync } from "node:fs";
 
 const READY_BANNER = "bypass permissions on";
 const TRUST = "Yes, I trust this folder";
-const PROMPT_RE = /(^|\n)\$ *$/m;
+
+/**
+ * Git Bash prints a lone `$`. Linux bash prints `firstmate $`.
+ * Windows pwsh prints `PS C:\\path>` and cmd prints `C:\\path>`.
+ */
+export function atShellPrompt(text) {
+  const t = String(text || "").replace(/\r/g, "").replace(/\s+$/g, "");
+  if (!t) return false;
+  const last = t.split("\n").pop() || "";
+  return (
+    last === "$" ||
+    / \$ *$/.test(last) ||
+    /^PS .*> *$/.test(last) ||
+    /^[A-Za-z]:\\[^>]*> *$/.test(last)
+  );
+}
 
 function herdrBin(explicit) {
   if (explicit) return explicit;
@@ -264,7 +279,7 @@ export class HerdrClient {
   }
 
   atShellPrompt(text = this.lastText) {
-    return PROMPT_RE.test(String(text || "").replace(/\r/g, ""));
+    return atShellPrompt(text);
   }
 
   isDead() {
@@ -272,12 +287,21 @@ export class HerdrClient {
   }
 
   async refreshDead(paneId) {
+    if (this._refreshing) return this.dead;
+    this._refreshing = true;
     try {
-      await this.paneGet(paneId);
+      const info = await this.paneGet(paneId);
+      const status = info?.pane?.agent_status || info?.agent_status || "unknown";
+      if (status === "working" || status === "blocked") {
+        this.dead = false;
+        return false;
+      }
       const text = await this.paneRead(paneId, 8);
-      if (this.atShellPrompt(text)) this.dead = true;
+      if (atShellPrompt(text)) this.dead = true;
     } catch {
       this.dead = true;
+    } finally {
+      this._refreshing = false;
     }
     return this.dead;
   }

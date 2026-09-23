@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,11 +23,12 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function paneEnv() {
+function paneEnv(home) {
   const env = {};
   for (const key of ["HOME", "USER", "TERM", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
+  if (home) env.FM_HOME = home;
   const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const oath = process.env.CLAUDE_CODE_OATH_TOKEN;
   if (oauth) env.CLAUDE_CODE_OAUTH_TOKEN = oauth;
@@ -154,6 +164,7 @@ export class Session {
     this.closed = false;
     this.lastDeadCheck = 0;
     this.paneEnvFile = null;
+    this.deadMonitor = null;
   }
 
   stamps() {
@@ -177,7 +188,7 @@ export class Session {
     const created = await this.herdr.workspaceCreate({
       cwd: this.home,
       label: `fm-control-${this.feature}`,
-      env: paneEnv(),
+      env: paneEnv(this.home),
     });
     this.workspaceId = created.workspaceId;
     this.paneId = created.paneId;
@@ -205,6 +216,8 @@ export class Session {
           this.lockAtReady = this.lockAtReady || `ready-${Date.now()}`;
         }
         this.readyAtMs = Date.now();
+        this.herdr.dead = false;
+        this.startDeadMonitor();
         return;
       }
       if (/Choose the text style|Dark mode \(colorblind|\/theme/.test(text)) {
@@ -247,14 +260,23 @@ export class Session {
     throw new Error("primary did not become ready");
   }
 
+  startDeadMonitor() {
+    this.stopDeadMonitor();
+    this.deadMonitor = setInterval(() => {
+      if (!this.paneId) return;
+      this.herdr.refreshDead(this.paneId).catch(() => {
+        this.herdr.dead = true;
+      });
+    }, 1000);
+    if (typeof this.deadMonitor.unref === "function") this.deadMonitor.unref();
+  }
+
+  stopDeadMonitor() {
+    if (this.deadMonitor) clearInterval(this.deadMonitor);
+    this.deadMonitor = null;
+  }
+
   isDead() {
-    if (this.herdr.dead) return true;
-    const now = Date.now();
-    if (now - this.lastDeadCheck < 2000) return false;
-    this.lastDeadCheck = now;
-    this.herdr.refreshDead(this.paneId).catch(() => {
-      this.herdr.dead = true;
-    });
     return this.herdr.dead;
   }
 
@@ -287,6 +309,13 @@ export class Session {
   }
 
   async exitToPrompt(budgetMs = 90_000) {
+    let already = "";
+    try {
+      already = await this.herdr.paneRead(this.paneId, 8);
+    } catch {
+      already = "";
+    }
+    if (this.herdr.atShellPrompt(already)) return;
     await this.herdr.paneRun(this.paneId, "/exit");
     const deadline = Date.now() + budgetMs;
     let confirmed = false;
@@ -333,9 +362,70 @@ export class Session {
     }
   }
 
+  destroyPools() {
+    const root = join(process.env.HOME || "", ".treehouse");
+    if (!this.home || !existsSync(root)) return;
+    let pools = [];
+    try {
+      pools = readdirSync(root);
+    } catch {
+      return;
+    }
+    for (const name of pools) {
+      const pool = join(root, name);
+      if (!this.poolBelongsHere(pool)) continue;
+      try {
+        execFileSync("treehouse", ["destroy", pool, "--all", "--include-unlanded", "--include-in-use", "--yes"], {
+          timeout: 20_000,
+          stdio: "ignore",
+        });
+      } catch {
+        rmSync(pool, { recursive: true, force: true });
+      }
+    }
+  }
+
+  poolBelongsHere(pool) {
+    const stack = [pool];
+    let depth = 0;
+    while (stack.length && depth < 64) {
+      const dir = stack.pop();
+      depth += 1;
+      let kids = [];
+      try {
+        kids = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      if (kids.includes(".git") || existsSync(join(dir, ".git"))) {
+        try {
+          const common = execFileSync(
+            "git",
+            ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            { encoding: "utf8" },
+          ).trim();
+          if (common === this.home || common.startsWith(`${this.home}/`)) return true;
+        } catch {
+          /* not a repo */
+        }
+      }
+      for (const kid of kids) {
+        if (kid === ".git" || kid === "node_modules") continue;
+        const p = join(dir, kid);
+        try {
+          if (statSync(p).isDirectory()) stack.push(p);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return false;
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.stopDeadMonitor();
     try {
       if (this.paneId && !this.herdr.atShellPrompt()) {
         await this.exitToPrompt().catch(() => {});
@@ -344,6 +434,7 @@ export class Session {
       /* ignore */
     }
     this.stopWatcher();
+    this.destroyPools();
     if (this.createdWorkspace && this.workspaceId) {
       await this.herdr.workspaceClose(this.workspaceId);
     }
