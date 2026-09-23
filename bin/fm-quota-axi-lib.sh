@@ -14,6 +14,7 @@ FM_QUOTA_AXI_MIN=0.1.29
 fm_quota_axi_compatible() {
   local timeout=${1:-} output parts major minor patch extra
   local min_major min_minor min_patch min_extra
+  local line rest ver_re
   command -v quota-axi >/dev/null 2>&1 || return 1
   if [ -n "$timeout" ]; then
     case "$timeout" in
@@ -31,9 +32,16 @@ fm_quota_axi_compatible() {
   else
     output=$(quota-axi --version 2>/dev/null </dev/null) || return 1
   fi
-  parts=$(printf '%s\n' "$output" |
-    sed -n 's/.*\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2 \3/p' |
-    head -1)
+  parts=
+  ver_re='([0-9]+)\.([0-9]+)\.([0-9]+)'
+  while IFS= read -r line || [ -n "$line" ]; do
+    rest=$line
+    while [[ $rest =~ $ver_re ]]; do
+      parts="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
+      rest=${rest#*"${BASH_REMATCH[0]}"}
+    done
+    [ -z "$parts" ] || break
+  done <<< "$output"
   IFS=' ' read -r major minor patch extra <<< "$parts"
   # An unparseable version is incompatible, never assumed current, so a
   # development or vendored build cannot pass a floor it was never checked against.

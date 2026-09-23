@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# fm-timing-lib.sh - the single owner of the deferred network stage's elapsed-time
-# instrumentation, and of the repo's millisecond clock.
+# fm-timing-lib.sh - the single owner of elapsed-time instrumentation for the
+# deferred network stage and for FM_SESSION_START_PROFILE session-start
+# records, and of the repo's millisecond clock.
 #
 # Sourced, never executed.
 #
@@ -18,7 +19,8 @@
 # so the next slow run is answerable from the durable record alone.
 #
 # OFF BY DEFAULT, AND INERT. Every helper is a no-op unless FM_TIMING_LOG names a
-# file. Nothing here talks to the network, waits, locks, or changes control flow:
+# file. bin/fm-session-start.sh sets that file when FM_SESSION_START_PROFILE=1.
+# Nothing here talks to the network, waits, locks, or changes control flow:
 # a failed append is discarded rather than propagated, because losing a diagnostic
 # line must never change what a sweep does or how it exits.
 #

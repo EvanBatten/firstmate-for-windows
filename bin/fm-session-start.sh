@@ -213,6 +213,12 @@
 #             current AGENTS.md to print before the bulky digest. The baseline
 #             remains immutable so every later drifted compaction refreshes
 #             again, while an equal baseline emits no instruction refresh.
+#
+#   FM_SESSION_START_PROFILE=1
+#     Write coarse per-step elapsed times for this digest to
+#     state/.session-start-profile, or to FM_SESSION_START_PROFILE_FILE when
+#     that path is set. The records use bin/fm-timing-lib.sh and stay off
+#     the digest. Unset or any value other than 1 leaves the path inert.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -261,14 +267,27 @@ SESSION_START_STAGES='lock bootstrap wake-queue supervision-instructions read-on
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
   printf '%s\n' "$1" > "$FM_SESSION_START_STAGE_FILE" 2>/dev/null || true
+  if [ -n "${FM_TIMING_LOG:-}" ] && [ -n "${_FM_SS_STEP_NAME:-}" ]; then
+    fm_timing_record stage "$_FM_SS_STEP_NAME" "${_FM_SS_STEP_MS:-0}"
+  fi
+  _FM_SS_STEP_NAME=$1
+  _FM_SS_STEP_MS=$(fm_timing_now_ms)
 }
 
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
+  if [ "${FM_SESSION_START_PROFILE:-}" = 1 ]; then
+    SESSION_START_PROFILE_FILE=${FM_SESSION_START_PROFILE_FILE:-$STATE/.session-start-profile}
+    mkdir -p "$STATE" 2>/dev/null || true
+    fm_timing_start "$SESSION_START_PROFILE_FILE"
+  fi
+  SESSION_START_WRAP_MS=$(fm_timing_now_ms)
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
   # A non-positive or non-numeric budget is not a budget (`timeout 0` disables
   # the deadline outright), so an unusable value falls back to the default
@@ -321,8 +340,12 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     printf '%s\n' "$BAR"
   fi
   rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
+  fm_timing_record stage total "$SESSION_START_WRAP_MS"
   exit 0
 fi
+
+_FM_SS_STEP_NAME=setup
+_FM_SS_STEP_MS=$(fm_timing_now_ms)
 
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 
@@ -470,8 +493,54 @@ print_ready_queued_bounded() {
 }
 
 print_backlog_tasks_axi_compact() {
-  local path=$1 in_flight held blocked ready err
-  if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
+  local path=$1 in_flight held blocked ready err dir st1 st2 st3 st4
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-ss-backlog.XXXXXX" 2>/dev/null) || dir=
+  if [ -n "$dir" ]; then
+    # The four group filters are independent. One node CLI start each is the
+    # Windows cost; overlapping them keeps the same answers and one wall clock.
+    tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" \
+      >"$dir/in_flight" 2>"$dir/in_flight.err" &
+    st1=$!
+    tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS" \
+      >"$dir/held" 2>"$dir/held.err" &
+    st2=$!
+    tasks-axi list --file "$path" --state queued --blocked --fields "$BACKLOG_FIELDS" \
+      >"$dir/blocked" 2>"$dir/blocked.err" &
+    st3=$!
+    tasks-axi ready --file "$path" >"$dir/ready" 2>"$dir/ready.err" &
+    st4=$!
+    wait "$st1"; st1=$?
+    wait "$st2"; st2=$?
+    wait "$st3"; st3=$?
+    wait "$st4"; st4=$?
+    if [ "$st1" -ne 0 ]; then
+      err=$(cat "$dir/in_flight" "$dir/in_flight.err")
+    elif [ "$st2" -ne 0 ]; then
+      err=$(cat "$dir/held" "$dir/held.err")
+    elif [ "$st3" -ne 0 ]; then
+      err=$(cat "$dir/blocked" "$dir/blocked.err")
+    elif [ "$st4" -ne 0 ]; then
+      err=$(cat "$dir/ready" "$dir/ready.err")
+    else
+      in_flight=$(cat "$dir/in_flight")
+      held=$(cat "$dir/held")
+      blocked=$(cat "$dir/blocked")
+      ready=$(cat "$dir/ready")
+      rm -rf "$dir"
+      printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to %s; task bodies omitted)\n' \
+        "$QUEUED_LIMIT"
+      printf '\nin flight:\n'
+      printf '%s\n' "$in_flight" | strip_axi_help
+      printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
+      printf '%s\n' "$held" | strip_axi_help
+      printf '\nblocked queued:\n'
+      printf '%s\n' "$blocked" | strip_axi_help
+      printf '\nready queued (dispatchable now):\n'
+      print_ready_queued_bounded "$ready" "$path"
+      return 0
+    fi
+    rm -rf "$dir"
+  elif ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$in_flight
   elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$held
@@ -532,21 +601,31 @@ print_status_tail() {
 }
 
 hash_file_sha256() {
-  local file=$1 digest
+  local file=$1 digest hex
   [ -f "$file" ] || return 1
-  if command -v shasum >/dev/null 2>&1; then
-    digest=$(shasum -a 256 "$file" 2>/dev/null | awk '
-      length($1) == 64 && $1 !~ /[^[:xdigit:]]/ { print "sha256:" $1; found=1; exit }
-      END { if (!found) exit 1 }
-    ') && [ -n "$digest" ] && { printf '%s\n' "$digest"; return 0; }
-  fi
-  if command -v sha256sum >/dev/null 2>&1; then
-    digest=$(sha256sum "$file" 2>/dev/null | awk '
-      length($1) == 64 && $1 !~ /[^[:xdigit:]]/ { print "sha256:" $1; found=1; exit }
-      END { if (!found) exit 1 }
-    ') && [ -n "$digest" ] && { printf '%s\n' "$digest"; return 0; }
-  fi
-  return 1
+  # Prefer the platform's usual tool so a missing first candidate does not
+  # walk PATH. Parse the hex in-shell: one spawn, no awk, and no Windows
+  # path-backslash field shift.
+  case "${OSTYPE:-}" in
+    darwin*)
+      digest=$(shasum -a 256 "$file" 2>/dev/null) || digest=
+      ;;
+    *)
+      digest=$(sha256sum "$file" 2>/dev/null) \
+        || digest=$(shasum -a 256 "$file" 2>/dev/null) \
+        || digest=
+      ;;
+  esac
+  [ -n "$digest" ] || return 1
+  # Word-split the tool line so a Windows path in field 2 cannot shift the hex.
+  # shellcheck disable=SC2086
+  set -- $digest
+  hex=${1#\\}
+  case "$hex" in
+    *[!a-fA-F0-9]*|'') return 1 ;;
+  esac
+  [ "${#hex}" -eq 64 ] || return 1
+  printf 'sha256:%s\n' "$hex"
 }
 
 # The baseline describes instructions this true session started with, not the
@@ -653,6 +732,7 @@ if [ "$LOCK_RC" -ne 0 ]; then
 fi
 print_agents_refresh_if_required
 
+HOME_SUMMARY_PID=
 if [ "$READ_ONLY" -eq 0 ]; then
   if [ "$REEMIT" -eq 0 ]; then
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
@@ -661,8 +741,11 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # A full locked start publishes this home's current structured summary.
   # Publication is side-band and best-effort, so it can never change the
   # session-start result. A context re-emit is not another session start.
+  # Overlap it with the rest of the digest and wait before exit so a
+  # completed start still leaves the ledger, without blocking lock/bootstrap.
   if [ "$REEMIT" -eq 0 ]; then
-    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort >/dev/null 2>&1 &
+    HOME_SUMMARY_PID=$!
   fi
   # Every network call this session start owes is launched HERE, detached and
   # bounded, so it runs concurrently with the whole digest below instead of in
@@ -691,11 +774,28 @@ elif [ "$REEMIT" -eq 1 ]; then
   BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_LOCKED=1 FM_BOOTSTRAP_NETWORK=skip \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
-  BOOT_OUT=$(
-    "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
-    FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
-      "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
-  )
+  # Cleanup and local bootstrap are independent; overlapping them removes one
+  # serial script spawn from the blocking path, which is the Windows cost.
+  SESSION_START_CLEANUP_OUT=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-cleanup.XXXXXX" 2>/dev/null) || SESSION_START_CLEANUP_OUT=
+  if [ -n "$SESSION_START_CLEANUP_OUT" ]; then
+    "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" >"$SESSION_START_CLEANUP_OUT" 2>&1 &
+    SESSION_START_CLEANUP_PID=$!
+    BOOT_OUT=$(
+      FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
+        "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
+    )
+    wait "$SESSION_START_CLEANUP_PID" || true
+    if [ -s "$SESSION_START_CLEANUP_OUT" ]; then
+      BOOT_OUT=$(printf '%s\n%s\n' "$(cat "$SESSION_START_CLEANUP_OUT")" "$BOOT_OUT")
+    fi
+    rm -f "$SESSION_START_CLEANUP_OUT"
+  else
+    BOOT_OUT=$(
+      "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
+      FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
+        "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
+    )
+  fi
 fi
 if [ -n "$BOOT_OUT" ]; then
   printf '%s\n' "$BOOT_OUT"
@@ -973,6 +1073,13 @@ if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
       printf '\nSESSION_START_AGENTS_BASELINE: not recorded - a later supported rebuild will re-emit AGENTS.md.\n'
     fi
   fi
+fi
+
+if [ -n "${HOME_SUMMARY_PID:-}" ]; then
+  wait "$HOME_SUMMARY_PID" || true
+fi
+if [ -n "${FM_TIMING_LOG:-}" ] && [ -n "${_FM_SS_STEP_NAME:-}" ]; then
+  fm_timing_record stage "$_FM_SS_STEP_NAME" "${_FM_SS_STEP_MS:-0}"
 fi
 
 exit 0
