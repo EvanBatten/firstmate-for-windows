@@ -150,6 +150,8 @@ Its header is the single owner of composed commands, ordering, and digest conten
 `bin/fm-supervision-instructions.sh` renders the emitted supervision block from `docs/supervision-protocols/`.
 Do not reimplement it by separately running its lock, bootstrap, initial wake-drain, or deferred-network components.
 Run-tier harness surfaces run this command for you at session open while the rest only nudge it, so confirm the digest is present in this session and run it yourself when it is not; `docs/sessionstart-nudge.md` owns adapter tiers, source routing, and compatibility.
+When that digest is already in this session, or this lock's completion record already matches the live owner, do not run it again.
+Invoke it as `bin/fm-session-start.sh` or that script's absolute path, never as `cd <dir> && ...`.
 
 Read the complete digest once and trust it as this turn's startup and recovery input.
 If the harness shows only a preview and persists the full output to a file, read that file before acting.

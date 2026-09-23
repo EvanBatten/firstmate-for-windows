@@ -218,6 +218,11 @@
 #   banner inline, never a silent failure or a non-zero exit that would make
 #   an agent skip the rest of the digest.
 #
+#   A second unflagged invocation while this session still holds the lock and
+#   state/.session-start-complete names that same lock pid prints a short
+#   already-complete notice and exits 0 without repeating startup sweeps or
+#   the bulky digest. --reemit remains the path that reprints context.
+#
 #   --reemit  This process ALREADY took the helm at its own startup and has
 #             only lost its context (a /clear or a compaction). Skip the
 #             mutating sweeps that startup already reconciled - the stale Herdr
@@ -299,6 +304,23 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+
+# Cheap parent-process exit: SessionStart already finished for this lock, so a
+# later unflagged retry (including the one after a persistent-cd deny) must not
+# spend another full digest. --reemit still reprints context on purpose.
+if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ] && [ "$REEMIT" -eq 0 ] \
+  && fm_session_start_completed "$STATE"; then
+  cat <<'EOF'
+================================================================================
+SESSION START ALREADY COMPLETE
+================================================================================
+This lock's digest already finished.
+The SessionStart digest already in this session is the authoritative startup input.
+Do not re-run bin/fm-session-start.sh, and do not re-read the sources that digest printed.
+If this session lost that digest, rerun with --reemit.
+EOF
+  exit 0
+fi
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}

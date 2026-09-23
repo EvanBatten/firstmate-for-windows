@@ -52,7 +52,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-COMPLETION_FILE="$STATE/.session-start-complete"
 
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
@@ -94,14 +93,7 @@ fm_is_gate_agent "$FM_ROOT" && stand_down
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || stand_down
 
 session_start_completed() {
-  local lock_pid completion_pid
-  [ -f "$STATE/.lock" ] && [ ! -L "$STATE/.lock" ] || return 1
-  [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ] || return 1
-  fm_session_lock_owned_by_self "$STATE" || return 1
-  lock_pid=$(cat "$STATE/.lock" 2>/dev/null) || return 1
-  completion_pid=$(cat "$COMPLETION_FILE" 2>/dev/null) || return 1
-  case "$lock_pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$completion_pid" = "$lock_pid" ]
+  fm_session_start_completed "$STATE"
 }
 
 if [ -z "$SOURCE" ] && [ ! -t 0 ]; then
