@@ -79,7 +79,8 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
 A dead primary fails its step at once, never at the budget.
 A parked question fails the step only when that step's claim is still false.
-A known firstmate-setup question (the closed catalog in `tools/fm-control/lib/session.mjs`) is answered once and the wait continues; any other parked question fails immediately with the pane excerpt, never at the step budget.
+A known firstmate-setup question (the closed catalog in `tools/fm-control/lib/session.mjs`: tool-install, or treehouse-vs-isolated-copy) is answered once and the wait continues; any other parked question fails immediately with the pane excerpt, never at the step budget.
+A 10 s pane peek finds those questions even when Herdr still reports idle.
 Dead-primary and post-`/exit` detection use last-line shell prompts (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`) plus the pid check; waits use `fs.watch` and do not poll Herdr every second.
 
 The evidence directory keeps `result.json`, `captain.log`, a pane snapshot at every ready, dialog, relaunch and failure, the throwaway server's own log, and `home/state` plus `home/data` as the run left them.
