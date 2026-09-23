@@ -283,26 +283,33 @@ export class Session {
   async awaitReady() {
     const deadline = Date.now() + this.readyMs;
     let sawClaude = false;
+    let tick = 0;
     while (Date.now() < deadline) {
       const lock = this.lockText();
       const lockFresh = lock !== null && lock !== this.lockBaseline;
       const text = await this.paneText();
       if (await this.answerDialog(text)) { await sleep(400); continue; }
       const prompted = /bypass permissions on/.test(text);
-      const fg = await this.foreground();
-      const claude = fg.find((p) => /claude/i.test(p.name || '') || /claude/i.test(p.argv?.[0] || ''));
-      if (claude) {
-        sawClaude = true;
-        if (lockFresh || prompted) {
-          this.primaryPid = claude.pid;
-          this.lockAtReady = lock;
-          this.snapshot('ready', text);
-          return;
+      // The process list is asked for only when it can decide something: a
+      // ready candidate, or every third tick to notice an exit. On the cli
+      // transport each ask is a process, so this halves the ready cost.
+      if (lockFresh || prompted || tick % 3 === 0) {
+        const fg = await this.foreground();
+        const claude = fg.find((p) => /claude/i.test(p.name || '') || /claude/i.test(p.argv?.[0] || ''));
+        if (claude) {
+          sawClaude = true;
+          if (lockFresh || prompted) {
+            this.primaryPid = claude.pid;
+            this.lockAtReady = lock;
+            this.snapshot('ready', text);
+            return;
+          }
+        } else if (sawClaude || /claude --dangerously/.test(text)) {
+          this.snapshot('exited-before-ready', text);
+          throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
         }
-      } else if (sawClaude || /claude --dangerously/.test(text)) {
-        this.snapshot('exited-before-ready', text);
-        throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
       }
+      tick += 1;
       await sleep(1000);
     }
     const text = await this.paneText().catch(() => '');
