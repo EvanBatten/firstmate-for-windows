@@ -1092,6 +1092,7 @@ event_wait_or_sleep() {
 
   # Memoized capability probe (fm_backend_events_capable runs a heavy schema
   # read); re-probed only when the backend/session key changes.
+  watcher_beat
   if [ "$_event_cap_key" != "$first_backend:$first_session" ]; then
     _event_cap_key="$first_backend:$first_session"
     if fm_backend_events_capable "$first_backend" "$first_session"; then
@@ -1225,6 +1226,13 @@ watcher_cleanup() {
 }
 trap watcher_cleanup EXIT
 trap 'exit 1' HUP INT TERM
+# The loop top is this process's liveness beat. A Git Bash cycle spent about
+# 350s between those tops, past the 300s freshness bound, while this process
+# was alive and delivering a wake. Beat again around the slow steps. A helper
+# must not beat for us (docs/watcher-continuity.md).
+watcher_beat() {
+  touch "$STATE/.last-watcher-beat" 2>/dev/null || true
+}
 # This watcher's own pid, as recorded in the lock by fm_lock_claim (which writes
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
@@ -1235,6 +1243,7 @@ printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 FM_WATCH_DELIVERY_PID=$WATCHER_PID
 FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
 printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
+watcher_beat
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
@@ -1290,7 +1299,7 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  watcher_beat
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
@@ -1337,6 +1346,7 @@ while :; do
   else
     triage_log "inactive-outcome reconciliation unavailable"
   fi
+  watcher_beat
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
@@ -1542,6 +1552,7 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
+    watcher_beat
     tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     hf="$STATE/.hash-$key"
@@ -1752,5 +1763,6 @@ EOF
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.
+  watcher_beat
   event_wait_or_sleep
 done
