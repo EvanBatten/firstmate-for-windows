@@ -66,20 +66,11 @@ export function prepareClaudeConfig(home) {
 // Anything else fails the step immediately with the pane excerpt.
 export const BLOCKED_ANSWERS = [
   {
-    name: 'treehouse-or-copy',
-    match: /one-off isolated copy|isolated worktree and treehouse|Approve a one-off isolated copy/i,
-    answer: 'Option 2. Make a one-off isolated git copy for this task. Do not install treehouse. Then dispatch the worker and continue.',
-  },
-  {
     name: 'tool-install',
     match: /MISSING:\s*\S+|which tools? (?:should I |to )?install|install (?:treehouse|no-mistakes|gh-axi|chrome-devtools-axi|lavish-axi|tasks-axi|quota-axi)|tools? (?:are|is) missing/i,
     answer: 'None. Do not install any tools. Missing tools are not a blocker. Continue the work I already gave you.',
   },
 ];
-
-// Pane text that means firstmate parked on a setup question even when herdr
-// still reports idle. Same 10 s cadence as the CLI status poll.
-export const PARKED_QUESTION_HINT = /Decision needed|Which tools? (?:should I |to )?install|MISSING:\s*\S+|Once you say which|pick one:/i;
 
 export function matchBlockedAnswer(text) {
   const t = String(text || '');
@@ -92,8 +83,7 @@ This is a throwaway measurement home.
 
 Missing bootstrap tools (treehouse, no-mistakes, gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi, quota-axi) are not a blocker.
 Do not ask which tools to install.
-If a spawn wants treehouse and it is not installed, make a one-off isolated git copy yourself and continue. Do not ask.
-Do not park on a tool-install, treehouse, or onboarding question.
+Do not park on a tool-install or onboarding question.
 Continue the assigned work with the tools already on PATH.
 `;
 
@@ -134,7 +124,6 @@ export class Session {
     this.answeringBlocked = false;
     this.claudeConfigDir = null;
     this.statusPoll = null;
-    this.questionPoll = null;
     this.counters = { gitSpawns: 0, setupSpawns: 0, cleanupSpawns: 0 };
     this.captainLog = [];
     this.closed = false;
@@ -439,15 +428,14 @@ export class Session {
 
   // Herdr's own view of the primary: blocked means it stopped to ask the
   // captain a question. Event-driven on the socket transport, a slow poll on
-  // the cli transport. A 10 s pane peek on both transports also catches a
-  // setup question herdr still classifies as idle.
+  // the cli transport.
   watchPrimaryStatus() {
     const apply = (status) => {
       const prev = this.signals.status;
       this.signals.status = status;
       if (status === 'blocked' && prev !== 'blocked') {
         this.signals.blocked = 'herdr reports the primary blocked on a question';
-      } else if (prev === 'blocked' && status !== 'blocked') {
+      } else if (status !== 'blocked') {
         this.signals.blocked = null;
       }
       // Rare, event-driven dead-primary check: unknown status plus a shell
@@ -456,13 +444,6 @@ export class Session {
         this.paneText().then((text) => {
           if (atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
         }).catch(() => {});
-      }
-    };
-    const peekParkedQuestion = async () => {
-      if (this.signals.blocked || this.answeringBlocked) return;
-      const text = await this.paneText().catch(() => '');
-      if (matchBlockedAnswer(text) || PARKED_QUESTION_HINT.test(text)) {
-        this.signals.blocked = 'the pane shows a parked setup question';
       }
     };
     const handle = this.herdr.subscribe([{ type: 'pane.agent_status_changed', pane_id: this.paneId }], (msg) => {
@@ -476,7 +457,6 @@ export class Session {
         } catch { /* keep the last known status */ }
       }, 10_000);
     }
-    this.questionPoll = setInterval(() => { peekParkedQuestion().catch(() => {}); }, 10_000);
   }
 
   async fetchHerdr(kind, snap, paneIds) {
@@ -607,7 +587,6 @@ export class Session {
     this.closed = true;
     const t0 = Date.now();
     if (this.statusPoll) clearInterval(this.statusPoll);
-    if (this.questionPoll) clearInterval(this.questionPoll);
     if (!this.herdr) { this.archive(); this.removeScratch(); return Date.now() - t0; }
     const keep = this.env.FM_CONTROL_KEEP === '1';
     try { this.snapshot('final', await this.paneText()); } catch { /* pane may be gone */ }
