@@ -126,7 +126,7 @@ A proof meets these standards.
 A drive runs `bin/` scripts itself against a throwaway home, so it plays firstmate.
 A session is firstmate: the code under test is cloned into a fresh home under the temp directory, a real `claude` primary starts there in a Herdr workspace of its own with the toolchain a captain has on its PATH, the script types captain messages into its pane, and every claim is read from `state/`, `data/`, Herdr's tab list and the project's git refs.
 What the agent prints is kept as evidence and is never a claim.
-Only a session can make an inventory row `proven`.
+A passing verification script makes its inventory row proven. The row's ref is that script's name.
 
 A session script sources `tests/verification/session-lib.sh` after `lib.sh`.
 It skips unless `VERIFY_REAL_SESSION=1` is set, because it spends model tokens and opens tabs in the Herdr session you are looking at, and a skip counts as unproven.
