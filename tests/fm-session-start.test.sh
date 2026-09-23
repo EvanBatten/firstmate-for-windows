@@ -29,6 +29,9 @@
 #     surfaces exactly once (inline or as a wake, never both), a read-only
 #     session declares the checks it skipped, and the tasks-axi compatibility
 #     verdict is paid for once per session start
+#   - the early home-operable marker: written after lock plus detect-only
+#     bootstrap, absent on lock refusal, --home-operable polls it without a
+#     digest, and a second start against a matching fresh marker is cheap
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -742,7 +745,7 @@ EOF
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
-  local rec root home fakebin holder_pid out status
+  local rec root home fakebin holder_pid out status query
   rec=$(new_world lock-refusal)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -798,6 +801,13 @@ EOF
   # The rest of the digest (read-only-safe) still completed.
   assert_contains "$out" "FLEET STATE" "fleet-state digest section missing on the read-only path"
   assert_contains "$out" "NEXT STEP" "closing reminder missing on the read-only path"
+  assert_absent "$home/state/.home-operable" \
+    "a lock-refused start wrote the home-operable marker"
+  status=0
+  query=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$SESSION_START" --home-operable) || status=$?
+  expect_code 1 "$status" "a lock-refused home must not report operable"
+  assert_contains "$query" "HOME_OPERABLE: no" "the operable poll did not report no"
 
   pass "a lock refusal prints a loud read-only banner, skips every mutating step, and still completes the digest"
 }
@@ -843,6 +853,7 @@ EOF
     || fail "session start must freeze an env-off override over a present config flag"
 
   rm "$home/config/trace-context"
+  rm -f "$home/state/.home-operable" "$home/state/.session-start-complete"
   FM_TRACE_CONTEXT=on run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
   [ "$(awk '{print $2}' "$home/state/.trace-context-effective")" = on ] \
     || fail "a new session start must freeze an env-on override over an absent config flag"
@@ -1086,6 +1097,7 @@ EOF
   assert_contains "$out" "$home/state/task-a.status" "digest did not print the full status log path for a deeper read"
   assert_contains "$out" "a bounded tail of every state/*.status" "read-once contract does not distinguish bounded status tails"
 
+  rm -f "$home/state/.home-operable" "$home/state/.session-start-complete"
   out=$(FM_SESSION_START_STATUS_TAIL=2 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "working: step 7" "FM_SESSION_START_STATUS_TAIL=2 tail missing the most recent line"
   assert_not_contains "$out" "working: step 5" "FM_SESSION_START_STATUS_TAIL=2 did not bound the tail to 2 lines"
@@ -1836,6 +1848,8 @@ EOF
   assert_not_contains "$out" "NEXT STEP" "a truncated digest claimed to have reached its closing reminder"
   assert_absent "$home/state/.session-start-complete" \
     "a truncated startup recorded itself as complete"
+  assert_absent "$home/state/.home-operable" \
+    "a startup truncated during detect-only bootstrap wrote the home-operable marker"
 
   # The bound must reach the whole process group: a hung grandchild that
   # outlives the digest would keep holding whatever the digest was waiting on.
@@ -2209,6 +2223,138 @@ SH
   pass "instruction baselines require SHA-256 and successful startup completion"
 }
 
+# --- home-operable marker ----------------------------------------------------
+
+home_operable_elapsed_ms() {  # <digest>
+  printf '%s\n' "$1" | sed -n 's/^HOME_OPERABLE: lock=[0-9][0-9]* elapsed-ms=\([0-9][0-9]*\).*/\1/p' | tail -1
+}
+
+test_home_operable_marker_from_lock_and_cheap_second_start() {
+  local rec root home fakebin first second query status elapsed lock_pid
+  local first_ms second_ms start_ms end_ms
+  rec=$(new_world home-operable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  status=0
+  query=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$SESSION_START" --home-operable) || status=$?
+  expect_code 1 "$status" "an untouched home must not report operable"
+  assert_contains "$query" "HOME_OPERABLE: no" "the pre-start poll did not report no"
+  assert_not_contains "$query" "SESSION START -" "the operable poll printed the digest"
+
+  # shellcheck source=bin/fm-timing-lib.sh
+  . "$ROOT/bin/fm-timing-lib.sh"
+  start_ms=$(fm_timing_now_ms)
+  first=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  end_ms=$(fm_timing_now_ms)
+  first_ms=$((end_ms - start_ms))
+
+  assert_contains "$first" "lock acquired: harness pid" "first start did not take the lock"
+  assert_contains "$first" "HOME_OPERABLE: lock=" "first start did not publish the home-operable line"
+  assert_contains "$first" "FLEET STATE" "first start dropped the fleet digest"
+  assert_present "$home/state/.home-operable" "first start did not write the home-operable marker"
+  assert_present "$home/state/.session-start-complete" "first start did not record completion"
+  lock_pid=$(cat "$home/state/.lock")
+  [ "$(cat "$home/state/.home-operable")" = "$lock_pid" ] \
+    || fail "home-operable pid did not match the lock pid"
+  [ "$(cat "$home/state/.session-start-complete")" = "$lock_pid" ] \
+    || fail "completion pid did not match the lock pid"
+  elapsed=$(home_operable_elapsed_ms "$first")
+  [ -n "$elapsed" ] || fail "first start did not report marker elapsed-ms from lock"
+  status=0
+  query=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$SESSION_START" --home-operable) || status=$?
+  expect_code 0 "$status" "a matching marker must report operable"
+  assert_contains "$query" "HOME_OPERABLE: yes lock=$lock_pid" \
+    "the operable poll did not name the matching lock pid"
+
+  start_ms=$(fm_timing_now_ms)
+  second=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  end_ms=$(fm_timing_now_ms)
+  second_ms=$((end_ms - start_ms))
+
+  assert_contains "$second" "HOME_OPERABLE: lock=$lock_pid elapsed-ms=" "second start lost the marker line"
+  assert_contains "$second" "already-complete" "second start with a fresh marker did not take the cheap path"
+  assert_not_contains "$second" "FLEET STATE" "cheap second start re-emitted the fleet digest"
+  assert_not_contains "$second" "CONTEXT" "cheap second start re-emitted the context digest"
+  [ "$(cat "$home/state/.home-operable")" = "$lock_pid" ] \
+    || fail "cheap second start rewrote the marker onto a different pid"
+  # A second start that still has work to skip must beat a first start that
+  # printed the digest, and stay well under the 150s control-trace stall.
+  [ "$second_ms" -lt 8000 ] \
+    || fail "cheap second start took ${second_ms}ms (first ${first_ms}ms, marker ${elapsed}ms)"
+  [ "$second_ms" -lt "$first_ms" ] || [ "$first_ms" -lt 200 ] \
+    || fail "cheap second start (${second_ms}ms) was not cheaper than first (${first_ms}ms)"
+
+  printf 'home-operable timings: marker-from-lock=%sms first=%sms second=%sms\n' \
+    "$elapsed" "$first_ms" "$second_ms"
+  pass "home-operable is written after lock plus min bootstrap, and a second start with a fresh marker is cheap"
+}
+
+test_home_operable_without_completion_skips_mutate_and_keeps_digest() {
+  local rec root home fakebin first second lock_pid
+  rec=$(new_world home-operable-incomplete)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  first=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$first" "HOME_OPERABLE: lock=" "incomplete-marker fixture lost the first start"
+  lock_pid=$(cat "$home/state/.lock")
+  rm -f "$home/state/.session-start-complete"
+
+  mkdir -p "$home/other-secondmate/state"
+  fm_write_secondmate_meta "$home/state/sm-late.meta" "$home/other-secondmate" "firstmate:fm-sm-late" beta
+
+  second=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$second" "HOME_OPERABLE: lock=$lock_pid elapsed-ms=" \
+    "incomplete marker start did not keep the matching marker"
+  assert_contains "$second" "FLEET STATE" "incomplete marker start dropped the digest"
+  assert_not_contains "$second" "already-complete" \
+    "incomplete marker start took the cheap-complete path"
+  assert_not_contains "$second" "SECONDMATE_SYNC" \
+    "incomplete marker start repeated a mutating sweep"
+  assert_not_contains "$second" "NUDGE_SECONDMATES" \
+    "incomplete marker start repeated a mutating sweep"
+  [ "$(cat "$home/state/.home-operable")" = "$lock_pid" ] \
+    || fail "incomplete marker start changed the lock pid binding"
+
+  pass "a matching marker without completion skips mutating sweeps and still emits the digest"
+}
+
+test_home_operable_rejects_symlink_or_pid_mismatch() {
+  local rec root home fakebin query status
+  rec=$(new_world home-operable-stale)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '1\n' > "$home/state/.lock"
+  printf '2\n' > "$home/state/.home-operable"
+
+  status=0
+  query=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$SESSION_START" --home-operable) || status=$?
+  expect_code 1 "$status" "a pid-mismatched marker must not report operable"
+  assert_contains "$query" "HOME_OPERABLE: no" "a pid-mismatched poll did not report no"
+
+  rm -f "$home/state/.home-operable"
+  ln -s "$home/state/.lock" "$home/state/.home-operable"
+  status=0
+  query=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$SESSION_START" --home-operable) || status=$?
+  expect_code 1 "$status" "a symlink marker must not report operable"
+
+  pass "home-operable match refuses a pid mismatch and a symlink"
+}
+
 test_reemit_keeps_repair_ownership_with_the_lock_holder() {
   local rec root home fakebin reemit readonly_out holder_pid
   rec=$(new_world reemit-tangle)
@@ -2511,5 +2657,8 @@ test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
 test_agents_baseline_requires_sha256_and_successful_completion
 test_reemit_keeps_repair_ownership_with_the_lock_holder
+test_home_operable_marker_from_lock_and_cheap_second_start
+test_home_operable_without_completion_skips_mutate_and_keeps_digest
+test_home_operable_rejects_symlink_or_pid_mismatch
 
 echo "# fm-session-start.test.sh: all assertions passed"

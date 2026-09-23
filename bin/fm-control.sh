@@ -87,6 +87,12 @@
 #   - An ambiguous or unreadable endpoint state refuses; only a positively
 #     classified state acts.
 #
+# Home operable: do not treat this plane as available until state/.home-operable
+# matches state/.lock. bin/fm-session-start.sh owns that marker and the
+# --home-operable query. Waiting for the rest of the session-start digest is
+# not required. A second session-start after a matching marker is cheap and
+# must not be used as the wait.
+#
 # Environment knobs (all bounded waits, seconds):
 #   FM_CONTROL_POLL              poll interval for postcondition waits (0.5)
 #   FM_CONTROL_SETTLE_WAIT       adapter acknowledgement wait after interrupt (5)
