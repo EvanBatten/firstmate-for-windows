@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { prepareClaudeConfig } from '../lib/session.mjs';
+import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +51,7 @@ function fakeEnv(extra = {}) {
       ...process.env,
       HOME: fakeHome,
       USERPROFILE: fakeHome,
+      CLAUDE_CONFIG_DIR: '',
       FM_CONTROL_HERDR: FAKE,
       FM_CONTROL_TRANSPORT: 'cli',
       FM_CONTROL_QUIET: '1',
@@ -420,21 +421,80 @@ describe('grafted onboarding config and shell prompts', () => {
   test("B's throwaway CLAUDE_CONFIG_DIR is created and does not write ~/.claude.json", () => {
     const home = tmp('claude-home');
     const userHome = tmp('user-home');
-    const prevHome = process.env.HOME;
-    process.env.HOME = userHome;
-    try {
-      const dir = prepareClaudeConfig(home);
-      assert.equal(dir, join(home, '.fm-control-claude'));
-      const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
-      assert.equal(cfg.hasCompletedOnboarding, true);
-      assert.equal(cfg.bypassPermissionsModeAccepted, true);
-      assert.equal(cfg.projects[home].hasTrustDialogAccepted, true);
-      const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
-      assert.equal(settings.theme, 'dark');
-      assert.ok(!existsSync(join(userHome, '.claude.json')));
-    } finally {
-      process.env.HOME = prevHome;
-    }
+    const dir = prepareClaudeConfig(home, { HOME: userHome, USERPROFILE: userHome });
+    assert.equal(dir, join(home, '.fm-control-claude'));
+    const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
+    assert.equal(cfg.hasCompletedOnboarding, true);
+    assert.equal(cfg.bypassPermissionsModeAccepted, true);
+    assert.equal(cfg.projects[home].hasTrustDialogAccepted, true);
+    const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
+    assert.equal(settings.theme, 'dark');
+    assert.ok(!existsSync(join(userHome, '.claude.json')));
+    assert.ok(!existsSync(join(dir, '.credentials.json')), 'no credentials file when the host has none');
+  });
+
+  test('throwaway config inherits host claude.ai login files by presence and shape', () => {
+    const home = tmp('claude-home');
+    const userHome = tmp('user-home');
+    mkdirSync(join(userHome, '.claude'), { recursive: true });
+    writeFileSync(
+      join(userHome, '.claude', '.credentials.json'),
+      `${JSON.stringify({
+        claudeAiOauth: { accessToken: 'x', refreshToken: 'y', expiresAt: 1, scopes: ['user:inference'] },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      join(userHome, '.claude.json'),
+      `${JSON.stringify({
+        oauthAccount: { accountUuid: '00000000-0000-4000-8000-000000000000', emailAddress: 'user@example.invalid' },
+        hasCompletedOnboarding: false,
+        theme: 'light',
+      })}\n`,
+    );
+    const dir = prepareClaudeConfig(home, { HOME: userHome, USERPROFILE: userHome });
+    assert.ok(existsSync(join(dir, '.credentials.json')), 'credentials file is present in the throwaway dir');
+    const creds = JSON.parse(readFileSync(join(dir, '.credentials.json'), 'utf8'));
+    assert.equal(typeof creds.claudeAiOauth, 'object');
+    assert.equal(typeof creds.claudeAiOauth.accessToken, 'string');
+    assert.ok(creds.claudeAiOauth.accessToken.length > 0);
+    assert.equal(typeof creds.claudeAiOauth.refreshToken, 'string');
+    assert.ok(Array.isArray(creds.claudeAiOauth.scopes));
+    const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
+    assert.equal(cfg.hasCompletedOnboarding, true, 'onboarding flags still win over the host file');
+    assert.equal(cfg.bypassPermissionsModeAccepted, true);
+    assert.equal(typeof cfg.oauthAccount, 'object');
+    assert.equal(typeof cfg.oauthAccount.accountUuid, 'string');
+    assert.ok(cfg.oauthAccount.accountUuid.length > 0);
+    const host = JSON.parse(readFileSync(join(userHome, '.claude.json'), 'utf8'));
+    assert.equal(host.hasCompletedOnboarding, false, 'the host ~/.claude.json is not mutated');
+    assert.ok(!host.bypassPermissionsModeAccepted);
+  });
+
+  test('evidence archival keeps onboarding shape and omits inherited login material', () => {
+    const home = tmp('claude-home');
+    const userHome = tmp('user-home');
+    mkdirSync(join(userHome, '.claude'), { recursive: true });
+    writeFileSync(
+      join(userHome, '.claude', '.credentials.json'),
+      `${JSON.stringify({ claudeAiOauth: { accessToken: 'x', refreshToken: 'y' } })}\n`,
+    );
+    writeFileSync(
+      join(userHome, '.claude.json'),
+      `${JSON.stringify({ oauthAccount: { accountUuid: 'acct' }, hasCompletedOnboarding: true })}\n`,
+    );
+    const dir = prepareClaudeConfig(home, { HOME: userHome, USERPROFILE: userHome });
+    const evidence = tmp('claude-evidence');
+    archiveClaudeConfig(dir, evidence);
+    assert.ok(!existsSync(join(evidence, '.credentials.json')), 'credentials are not copied into evidence');
+    const archived = JSON.parse(readFileSync(join(evidence, '.claude.json'), 'utf8'));
+    assert.equal(archived.hasCompletedOnboarding, true);
+    assert.equal(archived.bypassPermissionsModeAccepted, true);
+    assert.equal(archived.oauthAccount, undefined);
+    for (const key of Object.keys(archived)) assert.equal(isAuthStateKey(key), false);
+    assert.equal(isCredentialFileName('.credentials.json'), true);
+    const theme = JSON.parse(readFileSync(join(evidence, 'settings.json'), 'utf8'));
+    assert.equal(theme.theme, 'dark');
   });
 
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {

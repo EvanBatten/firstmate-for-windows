@@ -16,8 +16,9 @@ It clones the checkout into a throwaway home, opens one Herdr pane it owns, star
 One JSON object on stdout says what held, how long each claim took, and what the driver itself cost.
 
 The driver writes a throwaway `CLAUDE_CONFIG_DIR` inside the home with `hasCompletedOnboarding`, `bypassPermissionsModeAccepted`, project trust, and a theme settings file, then passes that directory into the pane env.
-It does not mutate `~/.claude.json`.
-`CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_CODE_OATH_TOKEN`, exported as the OAUTH name) is passed to the pane and is never written anywhere.
+It also inherits the host `claude.ai` login into that directory (the credentials file plus session keys) so a Windows desktop session stays logged in without a setup-token.
+It does not mutate `~/.claude.json`, and it never logs or archives those values.
+`CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_CODE_OATH_TOKEN`, exported as the OAUTH name) is passed to the pane when present and is never written anywhere.
 
 ## Write a trace
 
@@ -99,4 +100,4 @@ It never writes to the checkout it clones and never merges anything; the primary
 ## Tests
 
 `node --test tools/fm-control/test/` (or `node --test tools/fm-control/test/drive.test.mjs`) runs without Herdr or Claude: refusals exit 2 with zero Herdr spawns, every predicate yields a literal boolean over fixture homes, and a scripted stand-in for the `herdr` binary drives whole traces, including the shipped `restart-primary` one.
-The suite also checks that the throwaway onboarding config dir is created without writing `~/.claude.json`, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.
+The suite also checks that the throwaway onboarding config dir is created without writing `~/.claude.json`, that host login files are inherited by presence and shape only, that evidence archival omits credentials, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.

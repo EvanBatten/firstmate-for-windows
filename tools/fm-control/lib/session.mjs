@@ -13,7 +13,11 @@
 // afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
 // first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
 // (onboarding, bypass-permissions, folder trust, theme) and passing it into
-// the pane env. ~/.claude.json is never mutated. Dialog handlers remain as a
+// the pane env. Host claude.ai login is inherited into that dir: the
+// credentials file Claude reads on Linux/Windows, plus session keys from
+// ~/.claude.json, without mutating the host files. Values are never logged.
+// CLAUDE_CODE_OAUTH_TOKEN is still passed when present, but is not required
+// for a desktop claude.ai session login. Dialog handlers remain as a
 // fallback. A dead primary is the pid going away or the pane returning to a
 // shell prompt (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`).
 //
@@ -27,7 +31,7 @@
 //   FM_CONTROL_ROOT         checkout to clone as the home (default: the repo holding this file)
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, copyFileSync, chmodSync, linkSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,13 +39,21 @@ import { spawn } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
 import { recordedPaneIds } from './predicates.mjs';
 
-// Isolated Claude config for one throwaway home. Never writes ~/.claude.json.
-export function prepareClaudeConfig(home) {
+// Isolated Claude config for one throwaway home. Never writes the host
+// ~/.claude.json. CLAUDE_CONFIG_DIR redirects Claude's whole state, including
+// auth, so a dir that only has onboarding flags leaves a claude.ai desktop
+// login behind. Inherit the host files Claude actually reads (docs:
+// ~/.claude/.credentials.json, and ~/.claude.json session keys) into the
+// throwaway dir. Prefer a hardlink for the credentials file so a mid-run
+// refresh stays on the same inode as the host login; copy when a hardlink
+// cannot be made. Evidence archival strips those files and keys.
+export function prepareClaudeConfig(home, env = process.env) {
   const config = join(home, '.fm-control-claude');
   mkdirSync(config, { recursive: true });
   writeFileSync(
     join(config, '.claude.json'),
     `${JSON.stringify({
+      ...hostAuthState(env),
       hasCompletedOnboarding: true,
       bypassPermissionsModeAccepted: true,
       projects: {
@@ -55,7 +67,99 @@ export function prepareClaudeConfig(home) {
     `${JSON.stringify({ theme: 'dark' })}\n`,
     { mode: 0o600 },
   );
+  inheritHostCredentials(config, env);
   return config;
+}
+
+function userHome(env) {
+  if (process.platform === 'win32') return env.USERPROFILE || env.HOME || homedir();
+  return env.HOME || env.USERPROFILE || homedir();
+}
+
+// Names of keys Claude stores for a claude.ai / Console session in
+// ~/.claude.json. Matched by name only; values are never logged or asserted.
+export function isAuthStateKey(key) {
+  return /oauth|account|apiKey|api_key|userID|userId|authMethod|loggedIn|organizationUuid|refreshToken|accessToken/i.test(key);
+}
+
+export function isCredentialFileName(name) {
+  return name === '.credentials.json' || name === 'credentials.json';
+}
+
+function readJsonQuiet(path) {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+}
+
+function hostClaudeJsonPaths(env) {
+  const home = userHome(env);
+  const paths = [join(home, '.claude.json')];
+  if (env.CLAUDE_CONFIG_DIR) paths.push(join(env.CLAUDE_CONFIG_DIR, '.claude.json'));
+  paths.push(join(home, '.claude', '.claude.json'));
+  return paths;
+}
+
+function hostCredentialPaths(env) {
+  const home = userHome(env);
+  const paths = [];
+  if (env.CLAUDE_CONFIG_DIR) paths.push(join(env.CLAUDE_CONFIG_DIR, '.credentials.json'));
+  paths.push(join(home, '.claude', '.credentials.json'));
+  return paths;
+}
+
+function hostAuthState(env) {
+  const out = {};
+  for (const path of hostClaudeJsonPaths(env)) {
+    const parsed = readJsonQuiet(path);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (isAuthStateKey(key)) out[key] = value;
+    }
+  }
+  return out;
+}
+
+function inheritHostCredentials(config, env) {
+  const dest = join(config, '.credentials.json');
+  for (const src of hostCredentialPaths(env)) {
+    if (!existsSync(src) || src === dest) continue;
+    try {
+      try { linkSync(src, dest); } catch {
+        copyFileSync(src, dest);
+        try { chmodSync(dest, 0o600); } catch { /* Windows ignores mode */ }
+      }
+    } catch {
+      // absence or an unreadable host file leaves the pane on env-token auth
+    }
+    return;
+  }
+}
+
+// Copy a throwaway config into evidence without credentials or session keys.
+export function archiveClaudeConfig(src, dest) {
+  mkdirSync(dest, { recursive: true });
+  for (const name of readdirSync(src)) {
+    if (isCredentialFileName(name)) continue;
+    const from = join(src, name);
+    const to = join(dest, name);
+    let st;
+    try { st = lstatSync(from); } catch { continue; }
+    if (st.isDirectory()) {
+      archiveClaudeConfig(from, to);
+      continue;
+    }
+    if (name === '.claude.json' || name === 'claude.json') {
+      const parsed = readJsonQuiet(from);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const redacted = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (!isAuthStateKey(key)) redacted[key] = value;
+        }
+        writeFileSync(to, `${JSON.stringify(redacted)}\n`);
+        continue;
+      }
+    }
+    cpSync(from, to);
+  }
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -105,7 +209,7 @@ export class Session {
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
-    if (this.env.FM_CONTROL_PRETRUST !== '0') this.claudeConfigDir = prepareClaudeConfig(this.home);
+    if (this.env.FM_CONTROL_PRETRUST !== '0') this.claudeConfigDir = prepareClaudeConfig(this.home, this.env);
     this.herdr = await Herdr.attach(this.env, { log: this.log });
     try {
       const list = await this.herdr.call('workspace.list');
@@ -289,7 +393,7 @@ export class Session {
     }
     if (/Select login method/.test(text)) {
       this.snapshot('login-prompt', text);
-      throw new HerdrError('claude opened its first-run login dialog in the pane; the throwaway CLAUDE_CONFIG_DIR did not skip onboarding (or CLAUDE_CODE_OAUTH_TOKEN is missing)');
+      throw new HerdrError('claude opened its first-run login dialog in the pane; the throwaway CLAUDE_CONFIG_DIR did not skip onboarding (host claude.ai login was not inherited, and CLAUDE_CODE_OAUTH_TOKEN is missing)');
     }
     if (/Light mode \(ANSI colors only\)/.test(text)) {
       this.snapshot('theme-prompt', text);
@@ -595,7 +699,7 @@ export class Session {
       try { cpSync(join(this.home, d), join(this.evidenceDir, 'home', d), { recursive: true, dereference: false, force: true, errorOnExist: false }); } catch { /* absent */ }
     }
     if (this.claudeConfigDir) {
-      try { cpSync(this.claudeConfigDir, join(this.evidenceDir, 'claude-config'), { recursive: true }); } catch { /* absent */ }
+      try { archiveClaudeConfig(this.claudeConfigDir, join(this.evidenceDir, 'claude-config')); } catch { /* absent */ }
     }
   }
 
