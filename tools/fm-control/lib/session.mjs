@@ -33,6 +33,9 @@
 //   FM_CONTROL_EVIDENCE     evidence directory (default <tmp>/fm-control-artifacts/<feature>-<utc>)
 //   FM_CONTROL_KEEP         1 keeps the throwaway home and pane after the run
 //   FM_CONTROL_PRETRUST     0 skips writing the throwaway CLAUDE_CONFIG_DIR
+//   FM_CONTROL_PRESTART     0 skips the throwaway session-start that writes
+//                           state/.lock before claude launches (default: run it)
+//   FM_CONTROL_BASH         Git Bash used for that pre-start (default: detect)
 //   FM_CONTROL_ROOT         checkout to clone as the home (default: the repo holding this file)
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
@@ -216,6 +219,20 @@ export class Session {
       await this.seedProject(this.trace.project || 'greeter');
     }
     if (this.env.FM_CONTROL_PRETRUST !== '0') this.claudeConfigDir = prepareClaudeConfig(this.home, this.env);
+    // Throwaway homes only. Take the helm from this driver so state/.lock
+    // exists before claude's splash, and the first say does not wait on the
+    // pane to finish session-start. A captain home has no marker and is skipped.
+    if (this.env.FM_CONTROL_PRESTART !== '0') {
+      const pre = Date.now();
+      const result = await prestartThrowawayHome(this.home, { env: this.env, log: this.log, counters: this.counters });
+      if (!result.skipped) {
+        this.keep('prestart.txt', result.out || '');
+        this.log(`throwaway session-start pre-ran in ${Date.now() - pre} ms`);
+        // The pre-start lock is not Claude's splash. Remember it so awaitReady
+        // still waits for the pane, and so lock.rotated after relaunch works.
+        this.lockBaseline = this.lockText();
+      }
+    }
     this.herdr = await Herdr.attach(this.env, { log: this.log });
     try {
       const list = await this.herdr.call('workspace.list');
@@ -485,12 +502,12 @@ export class Session {
     };
 
     while (Date.now() < deadline) {
+      const pane = await this.paneText().catch(() => '');
+      if (await this.answerDialog(pane)) { await sleep(400); continue; }
       if (this.homeOperable()) {
         if (!said) await send();
         return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
       }
-      const pane = await this.paneText().catch(() => '');
-      if (await this.answerDialog(pane)) { await sleep(400); continue; }
       if (atShellPrompt(pane) && (this.primaryPid || /claude --dangerously/.test(pane))) {
         this.snapshot('exited-before-operable', pane);
         throw new HerdrError(`the primary exited before the home was operable. Its pane shows: ${lastLines(pane)}`);
@@ -798,6 +815,92 @@ const realpathSafe = safeReal;
 
 function readHomeStateFile(home, name) {
   try { return readFileSync(join(home, 'state', name), 'utf8').trim() || null; } catch { return null; }
+}
+
+export function isThrowawayControlHome(home) {
+  const marker = join(home, '.fm-control-throwaway');
+  try { return existsSync(marker) && !lstatSync(marker).isSymbolicLink(); } catch { return false; }
+}
+
+export function controlBashPath(env = process.env) {
+  if (env.FM_CONTROL_BASH) return env.FM_CONTROL_BASH;
+  if (process.platform !== 'win32') return 'bash';
+  const candidates = [
+    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    env['ProgramFiles(x86)'] && join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+export function toPosixPath(p) {
+  const abs = resolve(p);
+  if (process.platform !== 'win32') return abs;
+  const m = abs.match(/^([A-Za-z]):[\\/](.*)$/);
+  if (!m) return abs.replace(/\\/g, '/');
+  return `/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`;
+}
+
+// Run bin/fm-session-start.sh once against a marked throwaway home so the
+// operable gate sees state/.lock before claude launches. Fail closed when
+// the script exits non-zero or finishes without a lock or completion record.
+// Unmarked homes are a no-op.
+export function prestartThrowawayHome(home, { env = process.env, log = () => {}, counters, timeoutMs = 240_000 } = {}) {
+  if (env.FM_CONTROL_PRESTART === '0') return Promise.resolve({ skipped: 'disabled' });
+  if (!isThrowawayControlHome(home)) return Promise.resolve({ skipped: 'not-throwaway' });
+  const bash = controlBashPath(env);
+  if (!bash) {
+    return Promise.reject(new HerdrError('cannot pre-start the throwaway home: no Git Bash (set FM_CONTROL_BASH)'));
+  }
+  const script = join(home, 'bin', 'fm-session-start.sh');
+  if (!existsSync(script)) {
+    return Promise.reject(new HerdrError(`cannot pre-start the throwaway home: missing ${script}`));
+  }
+  const posixHome = toPosixPath(home);
+  const posixScript = toPosixPath(script);
+  return new Promise((resolve, reject) => {
+    if (counters) counters.setupSpawns += 1;
+    const childEnv = { ...env, FM_HOME: posixHome, FM_ROOT_OVERRIDE: posixHome };
+    delete childEnv.CURSOR_AGENT;
+    delete childEnv.CURSOR_INVOKED_AS;
+    delete childEnv.CLAUDECODE;
+    delete childEnv.PI_CODING_AGENT;
+    delete childEnv.GROK_AGENT;
+    const child = spawn(bash, [posixScript], {
+      cwd: home,
+      env: childEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new HerdrError(`throwaway session-start timed out after ${Math.round(timeoutMs / 1000)} s`));
+    }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new HerdrError(`cannot pre-start the throwaway home: ${e.message}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new HerdrError(`throwaway session-start exited ${code}${err.trim() ? `: ${lastLines(err, 2)}` : out.trim() ? `: ${lastLines(out, 2)}` : ''}`));
+        return;
+      }
+      if (readHomeStateFile(home, '.lock') === null && readHomeStateFile(home, '.session-start-complete') === null) {
+        reject(new HerdrError('throwaway session-start finished without a lock or completion record'));
+        return;
+      }
+      log(`throwaway session-start pre-ran (${out.split('\n').length} lines)`);
+      resolve({ skipped: false, out, err });
+    });
+  });
 }
 
 // Helm taken: lock acquired, or the digest-complete marker published.

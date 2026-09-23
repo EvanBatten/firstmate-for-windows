@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy } from '../lib/session.mjs';
+import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +56,7 @@ function fakeEnv(extra = {}) {
       FM_CONTROL_TRANSPORT: 'cli',
       FM_CONTROL_QUIET: '1',
       FM_CONTROL_READY_MS: '20000',
+      FM_CONTROL_PRESTART: '0',
       FAKE_HERDR_DIR: fakeDir,
       ...extra,
     },
@@ -427,11 +428,12 @@ describe('fake-herdr end to end', () => {
     const { dir, env } = fakeEnv({
       FM_CONTROL_ROOT: root,
       FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
-      FAKE_HERDR_LOCK_DELAY_MS: '800',
+      FAKE_HERDR_LOCK_DELAY_MS: '2500',
       FAKE_HERDR_PANE_UNTIL_LOCK: 'bypass permissions on\nRunning Bash: bin/fm-session-start.sh\n',
-      FM_CONTROL_OPERABLE_MS: '10000',
+      FM_CONTROL_OPERABLE_MS: '15000',
       FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run'),
     });
+    const evidence = env.FM_CONTROL_EVIDENCE;
     const trace = {
       feature: 'e2e-operable-wait',
       steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
@@ -439,12 +441,13 @@ describe('fake-herdr end to end', () => {
     const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.json.pass, true);
-    assert.ok(r.json.operableMs >= 700, `operable wait ${r.json.operableMs} ms`);
+    assert.ok(!existsSync(join(evidence, 'prestart.txt')), 'fake runs do not pre-start session-start');
     const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
     const firstSay = state.sends.find((s) => s.text && s.text.startsWith('ahoy! add my project'));
     assert.ok(firstSay, 'the first captain say was typed');
     assert.ok(state.lockAt, 'the fake recorded when the lock appeared');
     assert.ok(firstSay.t >= state.lockAt, `say ${firstSay.t} was after lock ${state.lockAt}`);
+    assert.ok(r.json.operableMs >= 1500, `operable wait ${r.json.operableMs} ms`);
   });
 
   test('a persistent-cd session-start denial does not send Escape', () => {
@@ -611,6 +614,64 @@ describe('operable home gate', () => {
     assert.equal(isSessionStartBusy('Bash: cd /tmp/home && bin/fm-session-start.sh\nDenied by persistent-cd hook'), true);
     assert.equal(isSessionStartBusy('Running bin/fm-session-start.sh'), true);
     assert.equal(isSessionStartBusy(''), false);
+  });
+
+  test('isThrowawayControlHome requires a regular marker', () => {
+    const home = tmp('throwaway-marker');
+    assert.equal(isThrowawayControlHome(home), false);
+    writeFileSync(join(home, '.fm-control-throwaway'), '');
+    assert.equal(isThrowawayControlHome(home), true);
+  });
+
+  test('controlBashPath honors FM_CONTROL_BASH', () => {
+    assert.equal(controlBashPath({ FM_CONTROL_BASH: 'C:\\git\\bash.exe' }), 'C:\\git\\bash.exe');
+  });
+
+  test('prestartThrowawayHome is a no-op without the marker or when disabled', async () => {
+    const home = tmp('prestart-skip');
+    mkdirSync(join(home, 'state'), { recursive: true });
+    const skipped = await prestartThrowawayHome(home, { env: { ...process.env } });
+    assert.equal(skipped.skipped, 'not-throwaway');
+    writeFileSync(join(home, '.fm-control-throwaway'), '');
+    const disabled = await prestartThrowawayHome(home, { env: { ...process.env, FM_CONTROL_PRESTART: '0' } });
+    assert.equal(disabled.skipped, 'disabled');
+    assert.equal(homeIsOperable(home), false);
+  });
+
+  test('prestartThrowawayHome writes the lock and fails closed on a missing lock', async () => {
+    const bash = controlBashPath(process.env);
+    if (!bash) {
+      assert.ok(true, 'no Git Bash on this host; skip the live pre-start cases');
+      return;
+    }
+    const okHome = tmp('prestart-ok');
+    mkdirSync(join(okHome, 'bin'), { recursive: true });
+    mkdirSync(join(okHome, 'state'), { recursive: true });
+    writeFileSync(join(okHome, '.fm-control-throwaway'), '');
+    writeFileSync(join(okHome, 'bin', 'fm-session-start.sh'), '#!/usr/bin/env bash\nprintf \'1\\n\' > "$FM_HOME/state/.lock"\n');
+    const ok = await prestartThrowawayHome(okHome, { env: { ...process.env, FM_CONTROL_BASH: bash }, timeoutMs: 15_000 });
+    assert.equal(ok.skipped, false);
+    assert.equal(homeIsOperable(okHome), true);
+
+    const miss = tmp('prestart-miss');
+    mkdirSync(join(miss, 'bin'), { recursive: true });
+    mkdirSync(join(miss, 'state'), { recursive: true });
+    writeFileSync(join(miss, '.fm-control-throwaway'), '');
+    writeFileSync(join(miss, 'bin', 'fm-session-start.sh'), '#!/usr/bin/env bash\nexit 0\n');
+    await assert.rejects(
+      () => prestartThrowawayHome(miss, { env: { ...process.env, FM_CONTROL_BASH: bash }, timeoutMs: 15_000 }),
+      /without a lock or completion record/,
+    );
+
+    const bad = tmp('prestart-bad');
+    mkdirSync(join(bad, 'bin'), { recursive: true });
+    mkdirSync(join(bad, 'state'), { recursive: true });
+    writeFileSync(join(bad, '.fm-control-throwaway'), '');
+    writeFileSync(join(bad, 'bin', 'fm-session-start.sh'), '#!/usr/bin/env bash\nexit 2\n');
+    await assert.rejects(
+      () => prestartThrowawayHome(bad, { env: { ...process.env, FM_CONTROL_BASH: bash }, timeoutMs: 15_000 }),
+      /exited 2/,
+    );
   });
 });
 
