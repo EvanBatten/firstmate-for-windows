@@ -10,6 +10,11 @@
 # All hermetic over temp dirs; no real agent session is invoked.
 set -u
 
+# Pin the first-claim bound. Git Bash's unset default is 90s, and a fresh
+# home that never claims would otherwise spend that whole bound on every
+# block this file expects to be short.
+export FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS=15000
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -1792,7 +1797,7 @@ test_hook_claude_mode_window_is_a_wall_clock_deadline() {
   : > "$dir/state/task1.meta"
   assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
   late_claim_publish "$dir" 8
-  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=3000 run_hook_claude "$dir" false); status=$?
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=3000 FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS=3000 run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
   expect_code 2 "$status" "a 3000 ms window must expire on the clock, not after 30 polls of whatever the host charges"
   assert_contains "$out" "TURN WOULD END BLIND" "the expired window must still carry the blind-turn banner"
@@ -1830,6 +1835,32 @@ test_hook_claude_mode_never_claimed_home_waits_the_bound() {
   expect_code 0 "$status" "a home that has never claimed must wait the bound for its first claim instead of forcing a continuation"
   [ -z "$out" ] || fail "the honored first claim produced output: $out"
   pass "fm-turnend-guard --claude: a home that has never claimed waits the whole bound on its first turn end"
+}
+
+# Git Bash's unset default is 90s. A claim at 16s used to miss the 15s bound
+# and force a continuation on a fresh home.
+test_hook_claude_mode_git_bash_first_claim_default_covers_a_slow_claim() {
+  local dir out status
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *)
+      pass "fm-turnend-guard --claude: Git Bash first-claim default is not this host"
+      return
+      ;;
+  esac
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-git-bash-first")
+  : > "$dir/state/task1.meta"
+  assert_absent "$dir/state/.claude-autoarm-epoch" "this case must start with no claim ledger"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
+  late_claim_publish "$dir" 16
+  out=$(
+    unset FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS
+    FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false
+  ); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "Git Bash must still be waiting at 16 s for a first claim"
+  [ -z "$out" ] || fail "the Git Bash first claim produced output: $out"
+  pass "fm-turnend-guard --claude: a fresh Git Bash home waits past 15 s for its first claim"
 }
 
 test_hook_claude_mode_malformed_record_keeps_the_floor() {
@@ -1977,6 +2008,8 @@ test_hook_claude_mode_leading_zero_window_bounds_are_decimal() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-floor-leading-zero")
   : > "$dir/state/task1.meta"
+  printf 'epoch=1 owner_pid=1 outcome=rewake updated_at=1\n' > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
   assert_absent "$dir/state/.claude-autoarm-claim-ms" "the floor cases must size the window from the floor alone"
   late_claim_publish "$dir" 7
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=010000 run_hook_claude "$dir" false); status=$?
@@ -1986,6 +2019,8 @@ test_hook_claude_mode_leading_zero_window_bounds_are_decimal() {
 
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-floor-leading-zero-nonoctal")
   : > "$dir/state/task1.meta"
+  printf 'epoch=1 owner_pid=1 outcome=rewake updated_at=1\n' > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=09 run_hook_claude "$dir" false); status=$?
   expect_code 2 "$status" "a floor of 09 must be 9 ms of window and still reach the guard's own Stop decision"
   assert_contains "$out" "TURN WOULD END BLIND" "a zero-padded floor must still carry the blind-turn banner"
@@ -2099,6 +2134,7 @@ test_hook_claude_mode_waits_for_late_claim
 test_hook_claude_mode_window_is_a_wall_clock_deadline
 test_hook_claude_mode_recorded_claim_widens_the_window
 test_hook_claude_mode_never_claimed_home_waits_the_bound
+test_hook_claude_mode_git_bash_first_claim_default_covers_a_slow_claim
 test_hook_claude_mode_malformed_record_keeps_the_floor
 test_hook_claude_mode_caps_the_widened_window
 test_hook_claude_mode_recorded_slow_claim_outlasts_the_old_fifteen_second_cap
