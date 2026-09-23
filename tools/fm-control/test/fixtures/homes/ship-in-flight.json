@@ -1,0 +1,18 @@
+{
+  "dirs": [
+    "projects/greeter/.git/refs/heads",
+    "state/t1.inbox/handled",
+    "data/t1"
+  ],
+  "files": {
+    "state/.lock": "4242\n",
+    "state/.wake-queue": "",
+    "data/projects.md": "# Projects\n\n- greeter [local-only] - a throwaway project\n",
+    "data/backlog.md": "# Backlog\n\n## In flight\n- [ ] t1 - greeter: add greet.sh (repo: greeter) (kind: ship)\n  Delivery: local-only, yolo off.\n## Queued\n- [ ] t2 - later\n## Done\n",
+    "projects/greeter/.git/refs/heads/main": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+    "state/t1.meta": "kind=ship\nproject=greeter\nherdr_pane_id=pane-w1\nwindow=fm-t1\n",
+    "state/t1.status": "working: implementing greet.sh\nnote: three subcommands planned\n",
+    "state/t1.inbox/handled/0001.md": "carry on\n",
+    "data/t1/brief.md": "# Brief\n"
+  }
+}

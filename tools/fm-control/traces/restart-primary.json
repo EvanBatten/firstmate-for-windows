@@ -1,0 +1,36 @@
+{
+  "feature": "restart-primary",
+  "project": "greeter",
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change: add greet.sh with three subcommands, hello, bye and version, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. once the worker is dispatched, leave that worker running in its own tab. do not background a wait. when it is done, verify the result by running it and land it on main; you have my approval. tell me when it is landed.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 600
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1",
+      "budgetSec": 900
+    },
+    {
+      "say": "$relaunch",
+      "until": "tasks.count>=1 && worker.alive",
+      "budgetSec": 600
+    },
+    {
+      "say": "ahoy, I'm back. carry on where we left off: when the greeter worker is done, verify its result and land it on main, you have my approval, then clean up and tell me.",
+      "until": "lock.rotated",
+      "budgetSec": 600
+    },
+    {
+      "say": "",
+      "until": "git.ahead:greeter>=1",
+      "budgetSec": 1200
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean",
+      "budgetSec": 600
+    }
+  ]
+}
