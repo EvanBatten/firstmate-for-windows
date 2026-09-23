@@ -1,0 +1,16 @@
+{
+  "dirs": [
+    "projects/greeter/.git",
+    "data/s1"
+  ],
+  "files": {
+    "state/.lock": "5150\n",
+    "state/.wake-queue": "1700000000\t1\tsignal\ts1\tdone\n",
+    "data/projects.md": "# Projects\n\n- greeter [local-only] - a throwaway project\n",
+    "data/backlog.md": "# Backlog\n\n## In flight\n## Queued\n- [ ] s1 - greeter: investigate greet.sh (kind: scout)\n## Done\n",
+    "projects/greeter/.git/packed-refs": "# pack-refs with: peeled fully-peeled sorted \naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
+    "state/s1.meta": "kind=scout\nproject=greeter\nwindow=herdr:pane-s1\n",
+    "state/s1.status": "working: reading the project\ndone: report written\n",
+    "data/s1/report.md": "# Findings\n\nA friendly Greet CLI wants hello, bye and version.\n"
+  }
+}
