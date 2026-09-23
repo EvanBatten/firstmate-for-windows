@@ -1,0 +1,10 @@
+{
+  "feature": "register-project",
+  "steps": [
+    {
+      "say": "add my project from {{projectOrigin}} as a local-only project called greeter. confirm when the project is registered and cloned.",
+      "until": "project-registered:greeter",
+      "budgetSec": 600
+    }
+  ]
+}
