@@ -76,7 +76,8 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 `pass` is true only when the last `until` held.
 `readyMs` is the first launch, `predicateMs` the total time spent waiting for claims, and the rest of `wallMs` is the driver: setup, typing, relaunch, and cleanup, which `overhead` breaks down.
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
-A dead primary or one parked on a question fails its step at once, never at the budget.
+A dead primary fails its step at once, never at the budget.
+A parked question fails the step only when that step's claim is still false.
 Dead-primary and post-`/exit` detection use last-line shell prompts (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`) plus the pid check; waits use `fs.watch` and do not poll Herdr every second.
 
 The evidence directory keeps `result.json`, `captain.log`, a pane snapshot at every ready, dialog, relaunch and failure, the throwaway server's own log, and `home/state` plus `home/data` as the run left them.
