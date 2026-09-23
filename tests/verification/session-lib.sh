@@ -451,9 +451,7 @@ project_seed() {
 session_relaunch() {
   local deadline
   session_snapshot before-relaunch
-  session_herdr pane send-text "$SESSION_PANE" '/exit' >/dev/null 2>&1
-  sleep 1
-  session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
+  session_herdr pane run "$SESSION_PANE" '/exit' >/dev/null 2>&1
   deadline=$(( $(date +%s) + 90 ))
   until session_at_shell_prompt; do
     [ "$(date +%s)" -lt "$deadline" ] || { bad "the primary did not exit on /exit within 90 s, so no restart could happen"; return 1; }
