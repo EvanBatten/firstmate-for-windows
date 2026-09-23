@@ -388,7 +388,8 @@ describe('fake-herdr end to end', () => {
     assert.equal(j.steps.length, 6);
     assert.ok(j.steps.every((s) => s.ok), JSON.stringify(j.steps));
     assert.equal(j.overhead.gitSpawns, 1, 'git.ahead cost exactly one git process');
-    assert.ok(j.wallMs < 30_000, `fake run finished in ${j.wallMs} ms`);
+    // Measured fake restart-primary wall: 49206 ms on Windows vs ~1734 ms on Linux.
+    assert.ok(j.wallMs < (process.platform === 'win32' ? 120_000 : 30_000), `fake run finished in ${j.wallMs} ms`);
     const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
     const texts = state.sends.filter((s) => s.text !== undefined).map((s) => s.text);
     assert.equal(texts.filter((t) => t.startsWith('ahoy! add my project')).length, 1);
