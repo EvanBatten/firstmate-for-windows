@@ -2028,13 +2028,15 @@ EOF
   cp "$ROOT/bin/fm-arm-command-policy.mjs" "$root/bin/fm-arm-command-policy.mjs"
   chmod +x "$root/bin/fm-cd-pretool-check.sh"
 
-  deny_out=$("$root/bin/fm-cd-pretool-check.sh" --claude \
+  # wake-helpers.sh exports a throwaway FM_ROOT_OVERRIDE so this suite cannot trip the live tangle guard.
+  # The copied checker must see this fixture as its primary, or it stays inert and the deny proof vanishes.
+  deny_out=$(FM_ROOT_OVERRIDE="$root" "$root/bin/fm-cd-pretool-check.sh" --claude \
     --command "cd $home && bin/fm-session-start.sh" 2>&1) || deny_rc=$?
   expect_code 2 "$deny_rc" "cd <verify-home> && bin/fm-session-start.sh must still be denied"
   assert_contains "$deny_out" "[persistent-cd]" \
     "the verify-home cd form lost the persistent-cd reason"
 
-  captain_out=$("$root/bin/fm-cd-pretool-check.sh" --claude \
+  captain_out=$(FM_ROOT_OVERRIDE="$root" "$root/bin/fm-cd-pretool-check.sh" --claude \
     --command 'cd projects/foo && bin/fm-session-start.sh' 2>&1) || captain_rc=$?
   expect_code 2 "$captain_rc" "cd projects/foo && bin/fm-session-start.sh must stay denied on a captain-shaped home"
   assert_contains "$captain_out" "[persistent-cd]" \
