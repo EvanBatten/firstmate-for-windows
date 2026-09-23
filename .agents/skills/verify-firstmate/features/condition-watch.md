@@ -27,7 +27,8 @@ Preconditions:
 - Nothing else is needed: the condition is a file the script creates, and the action touches another file.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run condition-watch`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`, and takes a few minutes because the watch polls for real.
+  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The armed interval is 2 seconds, and each of the two waits stops at 90 seconds.
 - **Arm.** The script runs `bin/fm-procevent-when.sh arm probe --interval 2 --stable 1 --deadline 180 --condition test -f <flag> --action touch <marker>`.
   It succeeds, and `bin/fm-procevent.sh list` names `when-probe`.
 - **Start.** The script runs `bin/fm-procevent.sh reconcile`.

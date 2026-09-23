@@ -16,16 +16,15 @@ The captain asks a question; a scout answers it in `data/<id>/report.md` without
 
 - The captain asks for an investigation or a written answer rather than a change.
 - Firstmate dispatches a scout with `bin/fm-spawn.sh --scout`; the scout writes `data/<id>/report.md`; firstmate relays the findings.
-- The captain authorizes the change; firstmate promotes the scout with `bin/fm-promote.sh` instead of starting a second worker, then lands and cleans up as for any ship task.
+- The captain authorizes the change; firstmate promotes the scout with `bin/fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>` instead of starting a second worker, then lands and cleans up as for any ship task.
 
 ## Driving it with verify.sh
 
 Preconditions:
 
-- The same as [Supervision wakes](./supervision-wakes.md): inside Herdr, `claude` signed in, the toolchain beside the primary checkout, `VERIFY_REAL_SESSION=1`.
+- The same preconditions as [Supervision wakes](./supervision-wakes.md).
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run scout-report`.
-  It takes twenty to thirty minutes.
 - **Ask.** An investigation into which subcommands the greeter should have, as a written report, with the opus worker.
 - **Scout.** `state/<id>.meta` says `kind=scout`.
 - **Report.** `data/<id>/report.md` appears and mentions the greeter; the project's `main` and working tree are unchanged.

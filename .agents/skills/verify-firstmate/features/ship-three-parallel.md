@@ -23,13 +23,13 @@ It is a session: the code under test is cloned into a fresh home, a real firstma
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- You are inside a Herdr session, and `herdr`, `jq`, `claude`, `git`, `timeout` and `cygpath` are installed, with `claude` signed in.
+- `HERDR_ENV=1`, and `herdr`, `jq`, `claude`, `git`, `timeout`, `cygpath`, and `tar` are installed, with `claude` signed in.
+  Without `HERDR_ENV=1` the script skips and says it is not inside a Herdr session.
 - The primary checkout has a `.tools/` directory with the axi tools, and treehouse is installed; the session gives the clone the same toolchain.
 - You accept that it spends model tokens and opens tabs the captain will see.
   Without `VERIFY_REAL_SESSION=1` the script skips, and a skip counts as unproven.
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run ship-three-parallel`.
-  It takes fifteen to thirty minutes.
 - **Start the session.** The script clones the code under test into a fresh home, opens a Herdr workspace labelled `fm-verify-three-ships`, starts `claude` there with the captain's toolchain on PATH, and gets it past the trust prompt.
 - **Ask.** The script types one message: add the project as local-only, ship three named changes in parallel, approval to land them all.
 - **Register.** `data/projects.md` gains a `greeter` line and `projects/greeter/.git` exists.

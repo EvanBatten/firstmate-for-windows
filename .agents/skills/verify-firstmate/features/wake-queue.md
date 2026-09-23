@@ -1,7 +1,10 @@
 # Notification queue
 
 Everything that needs firstmate's attention arrives through one durable queue.
-Work in that queue is presented to firstmate, stays there until firstmate acknowledges it, and can only be acknowledged by the turn that was handed it, so an interrupted turn loses nothing and a stale one retires nothing.
+Work in that queue is presented to firstmate and stays there until firstmate acknowledges it with the generation that drain printed.
+An interrupted turn loses nothing, because a later look presents the same rows.
+A stale generation does not mark the recovery episode acknowledged.
+The owned rows are still removed, the command exits 0, and the drain says a newer episode is pending.
 
 ## Sub-features
 

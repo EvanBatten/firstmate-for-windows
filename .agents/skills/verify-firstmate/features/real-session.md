@@ -2,7 +2,7 @@
 
 This is the whole loop the captain relies on, run for real.
 He asks for a change, a worker appears in a new Herdr tab he can watch, the worker builds the change in its own isolated copy of the project, the result lands on the project's main, and nothing is left behind.
-It is the only feature here that starts a real model worker.
+This drive starts that worker itself, by calling `bin/fm-spawn.sh`.
 
 ## Sub-features
 
@@ -27,17 +27,23 @@ It is the only feature here that starts a real model worker.
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- You are inside a Herdr session, because the worker's tab opens in the workspace you are in.
-- `herdr`, `jq`, `treehouse`, `claude`, `tasks-axi`, and `timeout` are installed, and `claude` is signed in.
+- `HERDR_ENV=1`.
+  Without it the script skips and says it is not inside a Herdr session.
+  On Herdr 0.8.0 and newer, with no presentation opt-out, the `fm-<task>` tab is a disposable one-task workspace.
+- `herdr`, `jq`, `treehouse`, `claude`, `tasks-axi`, and `timeout` are on `PATH`.
+  The script checks that the binaries exist.
+  It does not check that `claude` is signed in.
 - You accept that it spends model tokens and opens a tab the captain will see.
   Without `VERIFY_REAL_SESSION=1` the script skips and says so.
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run real-session`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`, and takes several minutes.
+  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
 - **File and instruct.** The script builds a project with its own local `origin`, files a work item, and fills the instructions with a small task: add `greet.sh`.
 - **Spawn.** The script runs `bin/fm-spawn.sh <task> <project> --mode local-only --yolo off --harness claude`.
   It succeeds, the recorded isolated copy is a linked worktree that is not the project's own checkout, and `herdr tab list` shows a tab labelled `fm-<task>`.
 - **Trust prompt.** The script reads the pane, sends `Down` only when the cursor sits on "No", then sends `Enter`, both through `bin/fm-send.sh <task> --key <key>`.
+  A pane that already shows bypass permissions gets no key.
+  If neither prompt appears within 120 seconds, the script continues into the work wait.
 - **Work.** The script waits for a `done:` line in the task's status record, keeping a snapshot of the pane every thirty seconds.
 - **Check.** The script runs `bash greet.sh` and `bash greet.sh captain` in the isolated copy.
   They print `hello from the crew` and `hello captain from the crew`, and the project's own checkout is clean and unmoved.
@@ -46,16 +52,19 @@ Preconditions:
 - **Clean up.** The script runs `bin/fm-teardown.sh <task>`.
   The tab is gone, no `<task>.*` record is left under `state/`, and `tasks-axi show <task>` prints `state: done`.
 - **Proof.** Read `real-session/transcript.txt` and the `pane-*.txt` snapshots in the evidence directory.
-  The snapshots are the record of the worker at work; `spawn.err`, `merge.txt`, and `teardown.txt` hold what each step printed.
+  The snapshots are the record of the worker at work.
+  `brief.md`, `spawn.out`, `spawn.err`, `merge.txt`, and `teardown.txt` hold what each step printed.
+  `status.txt` is kept when the status file exists.
 
 ## Gotchas
 
 - A smaller worker model can refuse the launch instructions as a prompt injection and never report anything.
-  The script then fails at "the worker never reported done" and quotes the pane.
+  The script then fails with "the worker stopped or ran out of time (<seconds>s) without reporting done" and quotes the pane.
   Leave `VERIFY_REAL_SESSION_MODEL` unset unless that refusal is what you are testing.
 - The trust prompt's default option has changed between harness versions, so never assume a bare `Enter` accepts it.
 - A spawn that fails leaves its tab open; the script closes the tab it created, and only that one.
 - The project needs an `origin`, even a local one, or the spawn refuses to start from a base it cannot refresh.
 - This proves the local-only path with the claude harness on Herdr.
   The pull-request paths, scouts, steering a worker mid-task, other harnesses, and other backends are not driven here.
-- The isolated copies live in a pool under `~/.treehouse/demo-<hash>`; cleanup returns the copy to its pool and does not delete the pool.
+- Cleanup runs `treehouse return` from the project directory.
+  The script does not check or delete the pool.

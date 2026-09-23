@@ -83,6 +83,9 @@ A `proven` row whose script skipped, or did not run at all, counts toward `unpro
 .agents/skills/verify-firstmate/verify.sh run                  # all of them
 ```
 
+One `run` with several feature names pays the doctor once.
+A separate `run` for each feature repeats it.
+
 Every line a script prints is a claim about its feature in plain language, `ok - <claim>` or `not ok - <what is wrong>`.
 The run ends with `verification: <n> passed, <n> failed, <n> skipped`, then the inventory's fractional verdict, and exits with the number of failed scripts.
 A skipped script is one this machine could not answer, so report it as skipped and never as verified; the verdict line scores it as unproven for the same reason.

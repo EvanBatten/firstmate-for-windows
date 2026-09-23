@@ -24,7 +24,8 @@ Preconditions:
 - The doctor reports `# doctor: worth driving` and does not warn that `herdr`, `jq`, or `timeout` is missing; without them this feature skips.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run herdr-lab-pane`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`, and takes a few minutes.
+  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  A missing `herdr` skips immediately.
 - **Lab session.** The script runs `bin/fm-herdr-lab.sh name paneshell` and `bin/fm-herdr-lab.sh prepare <session>`, then starts that session's server.
 - **Two panes.** The script creates one pane with a plain `workspace create` and one through the backend's task-tab function, and waits for each pane's shell to settle.
 - **Type into both.** The script types the same POSIX one-liner into each pane.
@@ -35,7 +36,10 @@ Preconditions:
 ## Gotchas
 
 - Every Herdr call in the script is bounded, because an unbounded one once hung for hours.
-  A timeout is reported as a failure that names the budget, not as a skip.
+  A `name` call that does not return within 30 seconds is a skip.
+  A timeout while preparing the lab or waiting for a pane is a failure that names the budget.
+- The plain pane refusing the POSIX line is the Windows differential.
+  On a POSIX host both panes run the line, and the script fails that claim instead of skipping.
 - The lab session is started by this run, so its panes inherit this shell's environment.
   It therefore cannot show a tool missing from a pane of the live session; [Real session](./real-session.md) is the feature that can.
 - The lab helper refuses the session named `default`.

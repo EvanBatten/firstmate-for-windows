@@ -23,10 +23,9 @@ Then the captain lands it, and cleanup follows the landing.
 
 Preconditions:
 
-- The same as [Supervision wakes](./supervision-wakes.md): inside Herdr, `claude` signed in, the toolchain beside the primary checkout, `VERIFY_REAL_SESSION=1`.
+- The same preconditions as [Supervision wakes](./supervision-wakes.md).
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run steer-worker`.
-  It takes fifteen to twenty-five minutes.
 - **Ask.** One change with three subcommands and a README section, the opus worker, end the turn after dispatch, and wait for the captain before landing.
 - **Steer.** As soon as `state/<id>.meta` exists the script asks for a fourth subcommand, `shout`.
   A `state/<id>.inbox/NNN.msg` record appears carrying that word, and later sits under `handled/`.

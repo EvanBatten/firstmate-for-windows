@@ -8,7 +8,7 @@ With a worker in flight the captain's window closes and opens again; a new prima
 
 - `restart-survive` sees the worker's record and pane untouched by the primary's exit and relaunch.
 - `restart-relock` sees the new session take `state/.lock` under a different identity than the old one.
-- `restart-carry-on` sees the new session land the worker's change and clean up from the records alone.
+- `restart-carry-on` sees the new session land the worker's change and clean up after the captain says to carry on.
 
 ## How to get to it (user POV)
 
@@ -20,10 +20,9 @@ With a worker in flight the captain's window closes and opens again; a new prima
 
 Preconditions:
 
-- The same as [Supervision wakes](./supervision-wakes.md): inside Herdr, `claude` signed in, the toolchain beside the primary checkout, `VERIFY_REAL_SESSION=1`.
+- The same preconditions as [Supervision wakes](./supervision-wakes.md).
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run restart-primary`.
-  It takes fifteen to twenty-five minutes.
 - **Ask and dispatch.** One change with the opus worker and an instruction to end the turn after dispatch; a `state/<id>.meta` record appears and the primary goes idle.
 - **Restart.** The script sends `/exit`, waits for the shell prompt, and starts `claude` again in the same pane.
   `state/<id>.meta` still exists and the worker's pane still answers.
