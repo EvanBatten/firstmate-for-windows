@@ -337,6 +337,10 @@
       "audience": "public-product"
     },
     {
+      "path": "design/fm-control.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/agent-control.md",
       "audience": "maintainer-architecture"
     },
