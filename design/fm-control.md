@@ -256,12 +256,14 @@ export class Pane {
 export class HerdrClient {
   static async connect(session?: string): Promise<HerdrClient>;
   async request(req: HerdrRequest): Promise<HerdrResponse>;
-  async workspaceCreate(opts: { cwd: string; label: string }): Promise<{
+  async workspaceCreate(opts: { cwd: string; label: string; env?: Record<string, string> }): Promise<{
     workspaceId: WorkspaceId;
     paneId: PaneId;
   }>;
   async workspaceClose(id: WorkspaceId): Promise<void>;
   async workspaceFocus(id: WorkspaceId): Promise<void>;
+  // CLI verb `herdr pane run`: type command and submit.
+  // Not a socket method. See herdr-client.mjs.
   async paneRun(id: PaneId, command: string): Promise<void>;
   async paneSendKeys(id: PaneId, key: string): Promise<void>;
   async paneRead(id: PaneId, lines?: number): Promise<string>;
@@ -313,10 +315,12 @@ This module is the owner.
 1. Create a scratch directory.
 2. Clone the current checkout into `scratch/firstmate` (the throwaway home), same isolation rule as `tests/verification/session-lib.sh`: never start firstmate in the primary checkout.
 3. Seed no project unless a later implementation helper is asked to; traces that need a local origin say so in `say` and the firstmate under test clones it.
-4. Ask `HerdrClient` once to create a workspace labeled `fm-control-<feature>` with `--cwd` set to the home as a Windows path and `--no-focus`.
+4. Ask `HerdrClient` once for `workspace.create` with `cwd` set to the home as a Windows path, `label` `fm-control-<feature>`, and `focus: false` (the CLI flag `--no-focus` is this field, not a socket parameter).
 5. Do not set `SHELL` to Git Bash.
 6. Do not type Git Bash `--login`.
-7. Optionally set `--env FM_PANE_PATH=<win32 PATH>` so pwsh can see `claude.exe` and the axi tools; adopt it in the launch line the same way the herdr adapter already does for a PATH herdr drops on `tab create --env`.
+7. Optionally pass `env.FM_PANE_PATH` as a Windows PATH list so pwsh can see `claude.exe` and the axi tools; adopt it in the launch line the same way the herdr adapter does when herdr drops a `PATH` passed through create `--env`.
+   The create result includes `root_pane` (`PaneInfo`) and `tab`.
+   That `root_pane.pane_id` is the one pane this session owns.
 
 `launchClaude`:
 
@@ -342,7 +346,9 @@ Do not treat pane prose, a digest banner, or herdr `agent_status` as the ready c
 `say`:
 
 If the text is `$relaunch`, call `relaunch`.
-Otherwise dismiss a blocked question with Escape, focus the workspace, and `pane.run` the captain line as pwsh-received pane input (herdr `pane run` types it; it is not a new shell).
+Otherwise dismiss a blocked question with Escape, focus the workspace, and `pane.run` the captain line.
+That call is the CLI verb `herdr pane run`: type the line and submit it.
+It is not a new pwsh process and not a `pane.run` socket method.
 
 `waitUntil`:
 
@@ -370,32 +376,63 @@ It is why the driver can type once and then leave herdr alone for minutes while 
 
 Internal.
 One instance per `drive.mjs` process.
+The public surface of this module is CLI-shaped (`workspaceCreate`, `paneRun`, `paneSendKeys`).
+The cache behind it is one control-socket connection, not one `herdr.exe` spawn per step.
+
+Checked against `herdr` 0.7.4, protocol 16, `herdr api schema --json` (this machine).
+Windows measurement on this port is herdr 0.8.2, protocol 20; the methods below exist in the protocol-16 request catalog.
+`herdr status --json` names the socket as `server.socket` (here `/home/ubuntu/.config/herdr/herdr.sock` with `server.running` false until a server starts).
 
 Connect once:
 
-1. Run `herdr status --json` a single time to learn the session name and control-socket path (Windows spelling `C:\Users\...\herdr.sock` is legal).
-2. Open one Node socket to that path (`net.connect({ path })` on Node 24, which can use AF_UNIX on this Windows build).
-3. Keep that socket for the run.
+1. Run `herdr status --json` a single time.
+   Read `server.socket` and `server.running`.
+   Windows spelling `C:\Users\...\herdr.sock` is already accepted by firstmate's socket-path check.
+2. If `server.running` is false, spawn `herdr server` once, then re-read status.
+3. Open one Node connection to `server.socket` and keep it for the run.
+   This design does not claim a verified `net.connect` AF_UNIX path from Node on Windows.
+   How Node opens a `C:\...\herdr.sock` path on win32 is left to the implementation pass.
+   A failed connect is a failed run, not a silent fallback to spawn-per-step.
 
-Every later pane or workspace call is one JSON request / one JSON response on that socket, the same newline-delimited shape `bin/backends/herdr-workspace-move.py` already uses:
+Every later call is one JSON request / one JSON response on that socket, the same newline-delimited shape `bin/backends/herdr-workspace-move.py` already uses:
 
 ```
 {"id":"...","method":"<method>","params":{...}}\n
 ```
 
-Allowed methods are only the ones `Session` and `Pane` need: workspace create/close/focus/list, pane run/send-keys/read/get, tab list/close if cleanup requires them.
-No `subscribe`.
+Allowed socket methods are only these, from the protocol-16 request catalog:
+
+- `workspace.create` (`cwd`, `env`, `label`, `focus`; default `focus` is false)
+- `workspace.close`, `workspace.focus`, `workspace.list`
+- `pane.send_text` (`pane_id`, `text`; does not submit)
+- `pane.send_keys` (`pane_id`, `keys`)
+- `pane.send_input` (`pane_id`, optional `text` and `keys`)
+- `pane.read` (`pane_id`, `source`, optional `lines`; socket `source` is `visible` / `recent` / `recent_unwrapped` / `detection`, not the CLI hyphen form)
+- `pane.get`
+- `tab.list`, `tab.close` if cleanup needs them
+
+There is no `pane.run` request method.
+`herdr pane run <pane> <command>` is a CLI helper.
+Firstmate already records that this helper types the command and submits it in one CLI call, and that `pane send-text` does not auto-submit (`bin/backends/herdr.sh`, `fm_backend_herdr_send_text_line` / `fm_backend_herdr_send_literal`).
+
+`HerdrClient.paneRun` keeps that CLI meaning and implements it on the cached socket as type-then-submit: `pane.send_text` followed by `pane.send_keys` with `enter`, or one `pane.send_input` that carries the text plus the submit key.
+Captain `say` lines and the pwsh `claude.exe` launch both go through `paneRun`.
+They do not spawn `herdr pane run`.
+
+No `events.subscribe`.
+No `events.wait`.
 No `pane.agent_status_changed`.
 No event buffer.
+`pane.wait_for_output` exists in the catalog and is still unused: feature waits are home-record polls.
 
 If the socket dies, reconnect once and continue.
 If the reconnect fails, the run fails.
 Do not open a second live socket while the first is up.
 Do not spawn `herdr.exe` per step.
 
-The one allowed extra CLI spawn after connect is a last-resort `herdr server` start when `status` reports no running server, issued once during `connect`, never from `waitUntil`.
+The one allowed extra CLI spawn after connect is that last-resort `herdr server` start, issued once during `connect`, never from `waitUntil`.
 
-`MSYS2_ARG_CONV_EXCL=*` is set on that first CLI spawn so a Git-Bash-hosted `node` cannot rewrite `/exit` or a leading-slash captain line.
+`MSYS2_ARG_CONV_EXCL=*` is set on those first CLI spawns so a Git-Bash-hosted `node` cannot rewrite `/exit` or a leading-slash captain line.
 After the socket is open, captain text never crosses a CLI argv.
 
 ## Run sequence
