@@ -105,6 +105,13 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
     const live = setInterval(async () => {
       if (settled) return;
       if (deps.signals?.blocked) {
+        // A claim that already holds wins. A parked question only fails a
+        // step whose until is still false.
+        const snap = snapshotHome(home);
+        snap.gitAhead = deps.gitAhead;
+        onSnapshot?.(snap);
+        const r = evaluateUntil(parsed, snap, ctx);
+        if (r.ok) { finish({ ok: true, reason: r.reason, snap }); return; }
         finish({ ok: false, reason: `the primary stopped to ask a question: ${deps.signals.blocked}`, blocked: true });
         return;
       }

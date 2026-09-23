@@ -15,6 +15,7 @@ import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predica
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig } from '../lib/session.mjs';
+import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DRIVE = join(HERE, '..', 'drive.mjs');
@@ -433,6 +434,27 @@ describe('grafted onboarding config and shell prompts', () => {
     } finally {
       process.env.HOME = prevHome;
     }
+  });
+
+  test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
+    const home = buildHome('ship-in-flight');
+    const started = Date.now();
+    const r = await waitUntil({
+      home,
+      parsed: parseUntil('projects.registered:greeter'),
+      ctx: { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() },
+      budgetMs: 5000,
+      deps: {
+        liveness: async () => ({ alive: true, reason: 'test' }),
+        signals: { blocked: 'herdr reports the primary blocked on a question' },
+        fetchHerdr: async () => {},
+        gitAhead: {},
+        seeds: {},
+        counters: {},
+      },
+    });
+    assert.equal(r.ok, true, r.reason);
+    assert.ok(Date.now() - started < 2000, `resolved immediately (${Date.now() - started} ms)`);
   });
 
   test("C's prompt patterns match Git Bash, Linux cwd, and Windows shells", () => {
