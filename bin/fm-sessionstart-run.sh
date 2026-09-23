@@ -46,6 +46,17 @@
 # preflight. A lock another live session holds and a truncated digest are
 # reported inside the digest, while broken GitHub auth arrives through the
 # deferred network result inline or as a wake, for exactly that reason.
+#
+# HOOK COMPACT STARTUP. This wrapper is the SessionStart hook's blocking seat.
+# A full digest's 120s bound and the hook's former 180s timeout sat in front of
+# the first captain turn, and a truncated banner then told the agent to rerun
+# the same command at 500s. Restart-primary only needs the lock taken and a
+# complete short digest before the captain can speak. Every digest this wrapper
+# launches therefore sets FM_SESSION_START_COMPACT=1 and, unless the caller
+# already chose a bound, FM_SESSION_START_TIMEOUT=20. bin/fm-session-start.sh
+# still prints every section and records completion; it skips the stages the
+# predicate does not need. An agent that later runs fm-session-start.sh itself
+# keeps the ordinary 120s full digest.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -183,6 +194,20 @@ msys_severed_ancestry_delegates() {
   exit 0
 }
 
+# Hook-launched digest: take the lock and finish a complete short digest
+# inside the SessionStart seat. Direct agent reruns do not enter here.
+run_hook_digest() {
+  FM_SESSION_START_COMPACT=1
+  export FM_SESSION_START_COMPACT
+  case "${FM_SESSION_START_TIMEOUT:-}" in
+    ''|*[!0-9]*|0)
+      FM_SESSION_START_TIMEOUT=20
+      export FM_SESSION_START_TIMEOUT
+      ;;
+  esac
+  "$@" || true
+}
+
 case "$SOURCE" in
   resume|reload|fork)
     "$SCRIPT_DIR/fm-sessionstart-nudge.sh" || true
@@ -190,14 +215,14 @@ case "$SOURCE" in
   clear|compact)
     msys_severed_ancestry_delegates
     if session_start_completed; then
-      "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SOURCE" || true
+      run_hook_digest "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SOURCE"
     else
-      "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
+      run_hook_digest "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE"
     fi
     ;;
   *)
     msys_severed_ancestry_delegates
-    "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
+    run_hook_digest "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE"
     ;;
 esac
 exit 0
