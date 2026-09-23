@@ -294,7 +294,9 @@ test_hook_non_claude_health_ignores_claude_budget_contention() {
   dir=$(make_primary_dir "$TMP_ROOT/hook-non-claude-budget-contention")
   home=$(cd "$dir" && pwd)
   : > "$dir/state/task1.meta"
-  sleep 60 &
+  # Seven guard invocations follow. One invocation sources the guard in about
+  # 12s on a slow Git Bash, so a 60s holder dies before the last harness.
+  sleep 180 &
   pid=$!
   identity=$(watcher_identity "$dir" "$pid") || {
     kill "$pid" 2>/dev/null || true
@@ -306,7 +308,7 @@ test_hook_non_claude_health_ignores_claude_budget_contention() {
   printf 'session=claude-episode\ncount=3\nepoch=9\n' > "$dir/state/.turnend-claude-blocks"
   printf 'notice-state\n' > "$dir/state/.claude-autoarm-failure-notified"
   printf 'alarm-state\n' > "$dir/state/.claude-autoarm-failure-alarmed"
-  sleep 60 &
+  sleep 180 &
   holder=$!
   mkdir -p "$dir/state/.turnend-claude-blocks.lock"
   printf '%s\n' "$holder" > "$dir/state/.turnend-claude-blocks.lock/pid"
@@ -1865,9 +1867,24 @@ test_hook_claude_mode_caps_the_widened_window() {
   late_claim_publish "$dir" 8
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
-  expect_code 0 "$status" "the default 15 s cap must still hold an 8 s claim inside the window"
+  expect_code 0 "$status" "the default measured cap must still hold an 8 s claim inside the window"
   [ -z "$out" ] || fail "the default-cap allow produced output: $out"
   pass "fm-turnend-guard --claude: the cap bounds what a measurement may widen the window to"
+}
+
+# A recorded 41400 ms claim used to be cut to the 15 s measured cap, so the
+# guard decided the auto-arm was absent while the claim was still in flight.
+test_hook_claude_mode_recorded_slow_claim_outlasts_the_old_fifteen_second_cap() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-slow-claim")
+  : > "$dir/state/task1.meta"
+  printf '41400\n' > "$dir/state/.claude-autoarm-claim-ms"
+  late_claim_publish "$dir" 16
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "a recorded 41400 ms claim must widen the window past 15 s so a claim at 16 s is honored"
+  [ -z "$out" ] || fail "the slow recorded claim produced output: $out"
+  pass "fm-turnend-guard --claude: a recorded slow claim is not cut back to 15 s"
 }
 
 # The same 60 s measurement and the same 8 s claim under a malformed cap: the
@@ -1884,7 +1901,7 @@ test_hook_claude_mode_malformed_cap_falls_back_to_the_default() {
   late_claim_publish "$dir" 8
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=not-a-number run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
-  expect_code 0 "$status" "a malformed cap must fall back to the 15 s default, which still holds an 8 s claim"
+  expect_code 0 "$status" "a malformed cap must fall back to the default measured cap, which still holds an 8 s claim"
   [ -z "$out" ] || fail "the malformed-cap fallback produced output: $out"
   pass "fm-turnend-guard --claude: a malformed cap falls back to the default rather than to no window or an error"
 }
@@ -2084,6 +2101,7 @@ test_hook_claude_mode_recorded_claim_widens_the_window
 test_hook_claude_mode_never_claimed_home_waits_the_bound
 test_hook_claude_mode_malformed_record_keeps_the_floor
 test_hook_claude_mode_caps_the_widened_window
+test_hook_claude_mode_recorded_slow_claim_outlasts_the_old_fifteen_second_cap
 test_hook_claude_mode_malformed_cap_falls_back_to_the_default
 test_hook_claude_mode_malformed_claim_record_keeps_the_default_window
 test_hook_claude_mode_leading_zero_claim_record_is_decimal
