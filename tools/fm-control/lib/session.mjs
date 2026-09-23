@@ -31,6 +31,7 @@ import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Herdr, HerdrError, sleep } from './herdr.mjs';
+import { recordedPaneIds } from './predicates.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = resolve(HERE, '..', '..', '..');
@@ -421,6 +422,18 @@ export class Session {
   snapshot(label, text) {
     const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
     this.keep(`pane-${stamp}-${label}.txt`, text);
+  }
+
+  // The primary's pane and every recorded worker's pane, kept when a step
+  // fails, so a worker parked on its own dialog is visible in the evidence.
+  async snapshotAll(label, snap) {
+    try { this.snapshot(label, await this.paneText()); } catch { /* pane may be gone */ }
+    for (const id of snap ? recordedPaneIds(snap) : []) {
+      try {
+        const r = await this.herdr.call('pane.read', { pane_id: id, source: 'visible' });
+        this.snapshot(`${label}-worker-${id.replace(/[^A-Za-z0-9_-]/g, '_')}`, r.read?.text ?? '');
+      } catch { /* worker pane gone */ }
+    }
   }
 
   noteTaskIds(snap) {

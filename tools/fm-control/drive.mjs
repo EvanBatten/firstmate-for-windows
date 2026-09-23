@@ -134,7 +134,7 @@ async function run(trace) {
       log(`step ${i + 1}: ${r.ok ? 'holds' : 'FAILED'} after ${r.ms} ms (${r.reason})`);
       if (!r.ok) {
         allOk = false;
-        try { session.snapshot(`step${i + 1}-failed`, await session.paneText()); } catch { /* pane may be gone */ }
+        await session.snapshotAll(`step${i + 1}-failed`, r.snap);
         break;
       }
     }
