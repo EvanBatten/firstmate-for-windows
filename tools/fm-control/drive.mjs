@@ -13,7 +13,7 @@
 //
 // Result shape (one JSON object, always printed for run, even on failure):
 //   { feature, wallMs, pass, readyMs, predicateMs,
-//     steps: [{ say, until, ms, ok, reason, sayMs? , relaunchMs? }],
+//     steps: [{ say, until, ms, ok, reason, sayMs?, relaunchMs?, primaryStatus?, tasks? }],
 //     overhead: { transport, herdrCalls, spawns, herdrSpawns, gitSpawns, setupSpawns, cleanupSpawns, setupMs, closeMs },
 //     evidence, error? }
 // predicateMs is the time spent waiting for claims; readyMs the first launch; the rest of wallMs is
@@ -134,6 +134,8 @@ async function run(trace) {
       log(`step ${i + 1}: ${r.ok ? 'holds' : 'FAILED'} after ${r.ms} ms (${r.reason})`);
       if (!r.ok) {
         allOk = false;
+        rec.primaryStatus = await session.primaryStatus();
+        rec.tasks = r.snap ? r.snap.taskIds : [];
         await session.snapshotAll(`step${i + 1}-failed`, r.snap);
         break;
       }

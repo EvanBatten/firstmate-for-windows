@@ -424,6 +424,12 @@ export class Session {
     this.keep(`pane-${stamp}-${label}.txt`, text);
   }
 
+  // Herdr's own classification of the primary's pane (idle, working,
+  // blocked...), one pane.get; unknown when herdr does not answer.
+  async primaryStatus() {
+    try { return (await this.herdr.call('pane.get', { pane_id: this.paneId })).pane?.agent_status ?? 'unknown'; } catch { return 'unknown'; }
+  }
+
   // The primary's pane and every recorded worker's pane, kept when a step
   // fails, so a worker parked on its own dialog is visible in the evidence.
   async snapshotAll(label, snap) {
