@@ -31,9 +31,44 @@ function paneEnv() {
   return env;
 }
 
-function claudeLaunch(model) {
+function claudeLaunch(model, envFile) {
   const bin = process.platform === "win32" ? "claude.exe" : "claude";
-  return `${bin} --dangerously-skip-permissions --model ${model}`;
+  const cmd = `${bin} --dangerously-skip-permissions --model ${model}`;
+  if (!envFile) return cmd;
+  if (process.platform === "win32") {
+    const quoted = envFile.replace(/'/g, "''");
+    return `$env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content -LiteralPath '${quoted}' -Raw).Trim(); Remove-Item -LiteralPath '${quoted}' -Force; ${cmd}`;
+  }
+  return `IFS= read -r CLAUDE_CODE_OAUTH_TOKEN < .fm-control-env; export CLAUDE_CODE_OAUTH_TOKEN; rm -f .fm-control-env; ${cmd}`;
+}
+
+function mergeClaudeOnboarding(home) {
+  const dest = join(process.env.HOME || "", ".claude.json");
+  if (!process.env.HOME) return;
+  let current = {};
+  try {
+    current = JSON.parse(readFileSync(dest, "utf8"));
+  } catch {
+    current = {};
+  }
+  if (!current || typeof current !== "object") current = {};
+  current.hasCompletedOnboarding = true;
+  if (!current.lastOnboardingVersion) current.lastOnboardingVersion = "2.1.280";
+  if (!current.projects || typeof current.projects !== "object") current.projects = {};
+  const key = home;
+  current.projects[key] = {
+    ...(current.projects[key] || {}),
+    hasTrustDialogAccepted: true,
+  };
+  writeFileSync(dest, JSON.stringify(current, null, 2) + "\n", { mode: 0o600 });
+}
+
+function writePaneEnvFile(home) {
+  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_CODE_OATH_TOKEN || "";
+  if (!token) return null;
+  const dest = join(home, ".fm-control-env");
+  writeFileSync(dest, token.endsWith("\n") ? token : `${token}\n`, { mode: 0o600 });
+  return dest;
 }
 
 export function seedProject(scratch, name = "greeter") {
@@ -118,6 +153,7 @@ export class Session {
     this.readyAtMs = null;
     this.closed = false;
     this.lastDeadCheck = 0;
+    this.paneEnvFile = null;
   }
 
   stamps() {
@@ -135,6 +171,8 @@ export class Session {
     const seeded = seedProject(this.scratch, "greeter");
     this.projectOrigin = seeded.origin;
     this.projectSeeds.greeter = seeded.base;
+    this.paneEnvFile = writePaneEnvFile(this.home);
+    mergeClaudeOnboarding(this.home);
     await this.herdr.connect();
     const created = await this.herdr.workspaceCreate({
       cwd: this.home,
@@ -160,18 +198,6 @@ export class Session {
       } catch {
         text = "";
       }
-      if (text.includes(TRUST)) {
-        await this.herdr.paneSendKeys(this.paneId, ["down"]);
-        await new Promise((r) => setTimeout(r, 200));
-        try {
-          const again = await this.herdr.paneRead(this.paneId, 40);
-          if (/❯ *Yes/.test(again) || again.includes("Yes, I trust")) {
-            await this.herdr.paneSendKeys(this.paneId, ["enter"]);
-          }
-        } catch {
-          await this.herdr.paneSendKeys(this.paneId, ["enter"]);
-        }
-      }
       if (text.includes(READY_BANNER)) {
         try {
           this.lockAtReady = readFileSync(join(this.home, "state", ".lock"), "utf8");
@@ -181,7 +207,39 @@ export class Session {
         this.readyAtMs = Date.now();
         return;
       }
-      if (this.herdr.atShellPrompt(text) && /claude --dangerously/.test(text)) {
+      if (/Choose the text style|Dark mode \(colorblind|\/theme/.test(text)) {
+        await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+        await new Promise((r) => setTimeout(r, 300));
+        continue;
+      }
+      if (/Paste code here if prompted/.test(text)) {
+        throw new Error("primary asked to paste an OAuth code; token did not authenticate the pane");
+      }
+      if (/Select login method|Claude account with subscription/.test(text)) {
+        throw new Error("primary is still in first-run login; ~/.claude.json onboarding seed did not take");
+      }
+      if (/Bypass Permissions mode|Yes, I accept/.test(text) && /No, exit/.test(text)) {
+        await this.herdr.paneSendKeys(this.paneId, ["down"]);
+        await new Promise((r) => setTimeout(r, 200));
+        await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      if (text.includes(TRUST) || /Do you trust the files|trust this folder/.test(text)) {
+        await this.herdr.paneSendKeys(this.paneId, ["down"]);
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+          const again = await this.herdr.paneRead(this.paneId, 40);
+          if (/❯ *Yes/.test(again) || /Yes, I trust|trust this folder/.test(again)) {
+            await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+          }
+        } catch {
+          await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+        }
+        await new Promise((r) => setTimeout(r, 300));
+        continue;
+      }
+      if (this.herdr.atShellPrompt(text) && /claude --dangerously/.test(text) && !/Welcome to Claude/.test(text)) {
         throw new Error("primary exited before ready");
       }
       await new Promise((r) => setTimeout(r, 200));

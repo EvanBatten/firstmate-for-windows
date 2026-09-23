@@ -18,10 +18,40 @@ function winPath(p) {
   return p.replace(/\//g, "\\");
 }
 
+function readLine(sock, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("socket read timeout"));
+    }, timeoutMs);
+    const onData = (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl >= 0) {
+        cleanup();
+        resolve(buf.slice(0, nl));
+      }
+    };
+    const onErr = (err) => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      sock.off("data", onData);
+      sock.off("error", onErr);
+    };
+    sock.on("data", onData);
+    sock.on("error", onErr);
+  });
+}
+
 /**
  * Socket-first herdr client.
- * One long-lived AF_UNIX connection after at most two CLI spawns
- * (status, and server start if the named session is down).
+ * One request per AF_UNIX connection (the live control socket is
+ * request/response, not a multiplexed session). At most two CLI spawns:
+ * status, and `herdr server` if the named session is down.
  * Feature waits never call this.
  */
 export class HerdrClient {
@@ -29,10 +59,7 @@ export class HerdrClient {
     this.bin = herdrBin(opts.bin);
     this.sessionName = opts.sessionName || `fm-ctl-${process.pid}`;
     this.socketPath = opts.socketPath || process.env.FM_CONTROL_SOCKET || null;
-    this.sock = null;
-    this.buf = "";
     this.nextId = 1;
-    this.pending = new Map();
     this.herdrCalls = 0;
     this.spawns = 0;
     this.startedServer = false;
@@ -88,19 +115,16 @@ export class HerdrClient {
   }
 
   async connect() {
-    if (this.sock) return;
-    if (!this.socketPath) {
-      const status = await this.spawnHerdr(["status", "--json"]);
-      const server = status.json?.server || {};
-      this.socketPath = server.socket;
-      if (!server.running) {
-        await this.startServer();
-      }
+    if (this.socketPath) return;
+    const status = await this.spawnHerdr(["status", "--json"]);
+    const server = status.json?.server || {};
+    this.socketPath = server.socket;
+    if (!server.running) {
+      await this.startServer();
     }
     if (!this.socketPath) {
       throw new Error("herdr status did not name a socket");
     }
-    await this.openSocket();
   }
 
   async startServer() {
@@ -136,64 +160,30 @@ export class HerdrClient {
       sock.once("error", onErr);
       sock.once("connect", () => {
         sock.off("error", onErr);
-        this.sock = sock;
         sock.setEncoding("utf8");
-        sock.on("data", (chunk) => this.onData(chunk));
-        sock.on("error", () => {
-          this.dead = true;
-        });
-        sock.on("close", () => {
-          this.sock = null;
-        });
-        resolve();
+        resolve(sock);
       });
     });
-  }
-
-  onData(chunk) {
-    this.buf += chunk;
-    let nl;
-    while ((nl = this.buf.indexOf("\n")) >= 0) {
-      const line = this.buf.slice(0, nl);
-      this.buf = this.buf.slice(nl + 1);
-      if (!line.trim()) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (msg.id && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
-        this.pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message || "herdr rpc error"));
-        else resolve(msg.result);
-      }
-    }
   }
 
   async rpc(method, params = {}, timeoutMs = 30_000) {
-    if (!this.sock) await this.connect();
+    if (!this.socketPath) await this.connect();
     this.herdrCalls += 1;
     const id = `fm-${this.nextId++}`;
-    const payload = JSON.stringify({ id, method, params }) + "\n";
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`rpc timeout: ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (v) => {
-          clearTimeout(timer);
-          resolve(v);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-      this.sock.write(payload);
-    });
+    const sock = await this.openSocket();
+    try {
+      sock.write(JSON.stringify({ id, method, params }) + "\n");
+      const line = await readLine(sock, timeoutMs);
+      const msg = JSON.parse(line);
+      if (msg.error) throw new Error(msg.error.message || "herdr rpc error");
+      return msg.result;
+    } finally {
+      try {
+        sock.end();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async workspaceCreate({ cwd, label, env }) {
@@ -225,6 +215,8 @@ export class HerdrClient {
   }
 
   async paneRun(paneId, text) {
+    // pane.send_input is the atomic type-and-submit helper. send_text plus
+    // enter is not: it can corrupt a line that contains `<`.
     await this.rpc("pane.send_input", { pane_id: paneId, text, keys: ["enter"] });
   }
 
@@ -291,17 +283,12 @@ export class HerdrClient {
   }
 
   async close({ stopSession = false } = {}) {
-    if (this.sock) {
-      try {
-        this.sock.end();
-      } catch {
-        /* ignore */
-      }
-      this.sock = null;
-    }
     if (stopSession && this.startedServer) {
       try {
-        await this.spawnHerdr(["session", "stop"], { parseJson: true, timeoutMs: 10_000 });
+        await this.spawnHerdr(["session", "stop", this.sessionName], {
+          parseJson: true,
+          timeoutMs: 10_000,
+        });
       } catch {
         if (this.serverChild) {
           try {
