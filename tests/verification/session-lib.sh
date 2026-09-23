@@ -357,10 +357,17 @@ session_health() {
 }
 
 session_stop_watcher() {
-  local pid
+  local pid i
   pid=$(cat "$SESSION_HOME/state/.watch.lock/pid" 2>/dev/null)
   case "$pid" in ''|*[!0-9]*) return 0 ;; esac
   kill "$pid" 2>/dev/null || true
+  # The watcher's cleanup waits out an in-flight home-summary refresh before
+  # it exits. Health runs next, so wait until that cleanup has finished.
+  i=0
+  while [ "$i" -lt 350 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.2
+    i=$((i + 1))
+  done
 }
 
 session_destroy_pools() {

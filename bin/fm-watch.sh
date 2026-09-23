@@ -1206,7 +1206,23 @@ home_summary_refresh_detached() {
 }
 
 watcher_cleanup() {
-  local cleanup_status=0 owns_lock=0 transition=release-lock
+  local cleanup_status=0 owns_lock=0 transition=release-lock i
+  # The detached home-summary refresh holds the refresh lock, and a stale
+  # holder makes it take the steal mutex. Stopping this watcher without
+  # letting that child finish leaves the steal behind, and a home then looks
+  # like it has a lock takeover. Wait, then signal it so its own cleanup runs.
+  if [ -n "${HOME_SUMMARY_PID:-}" ]; then
+    i=0
+    while [ "$i" -lt 300 ] && kill -0 "$HOME_SUMMARY_PID" 2>/dev/null; do
+      sleep 0.2
+      i=$((i + 1))
+    done
+    if kill -0 "$HOME_SUMMARY_PID" 2>/dev/null; then
+      kill "$HOME_SUMMARY_PID" 2>/dev/null || true
+      wait "$HOME_SUMMARY_PID" 2>/dev/null || true
+    fi
+    HOME_SUMMARY_PID=
+  fi
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
