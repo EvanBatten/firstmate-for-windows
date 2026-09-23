@@ -3,6 +3,12 @@
 # Writes the harness (agent) process PID found by walking the shell's ancestry,
 # which lives as long as the firstmate session - unlike the transient subshell
 # PID of any one tool call, which is dead moments after it is written.
+# A throwaway/verify/control home (fm_session_fast_home) writes this process's
+# pid instead, without the Win32 ancestry walk. That walk does not find a
+# native harness from Git Bash on this host and is what exhausted the 120s
+# session-start bound. The cheap pid is still fail-closed: a live recorded
+# holder blocks a second acquirer, and a captain home without the opt-in
+# still refuses when ancestry cannot name a harness.
 # Usage: fm-lock.sh           acquire; exit 1 unless ownership is verified
 #        fm-lock.sh status    print holder and liveness; always exits 0
 set -u
@@ -29,11 +35,17 @@ if [ "${1:-}" = "status" ]; then
     echo "lock: unreadable"
     exit 0
   }
-  if fm_harness_pid_alive "$old"; then echo "lock: held by live harness pid $old"; else echo "lock: stale (pid $old dead or not a harness)"; fi
+  if fm_session_fast_home && fm_pid_alive "$old"; then
+    echo "lock: held by live pid $old"
+  elif fm_harness_pid_alive "$old"; then
+    echo "lock: held by live harness pid $old"
+  else
+    echo "lock: stale (pid $old dead or not a holder)"
+  fi
   exit 0
 fi
 
-me=$(fm_harness_ancestry_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+me=$(fm_session_lock_acquire_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
@@ -65,7 +77,7 @@ if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
     echo "lock acquired: harness pid $me"
     exit 0
   fi
-  if fm_harness_pid_alive "$old"; then
+  if fm_session_lock_holder_live "$old"; then
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
     exit 1
   fi
@@ -90,7 +102,7 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     echo "error: session lock is unreadable; operate read-only until resolved" >&2
     exit 1
   }
-  if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+  if [ "$old" != "$me" ] && fm_session_lock_holder_live "$old"; then
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
     exit 1
   fi

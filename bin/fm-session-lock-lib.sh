@@ -138,6 +138,63 @@ fm_harness_ancestry_pids() {
   [ "$printed" -eq 1 ]
 }
 
+# True when this home opted into the throwaway/verify/control session-start
+# path. Same three selectors bin/fm-session-start.sh documents. A symlink
+# marker is ignored so a confused link cannot opt a real captain home in.
+fm_session_fast_home() {
+  local home=${1:-${FM_HOME:-}}
+  case "${FM_SESSION_START_FAST:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  case "${FM_VERIFY_HOME:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  [ -n "$home" ] || return 1
+  [ -f "$home/.fm-control-throwaway" ] && [ ! -L "$home/.fm-control-throwaway" ]
+}
+
+# Print a lock pid for a throwaway home without walking Win32 ancestry.
+# On MSYS that is this process's winpid, which fm_pid_alive can probe
+# with ps -W. Elsewhere it is $$. Captain homes must not call this.
+fm_throwaway_lock_pid() {
+  local win
+  if [ "${FM_PROC_OS:-}" = msys ]; then
+    win=$(_fm_proc_msys_winpid "$$" 2>/dev/null) || true
+    case "$win" in
+      ''|*[!0-9]*) ;;
+      *) printf '%s\n' "$win"; return 0 ;;
+    esac
+  fi
+  printf '%s\n' "$$"
+}
+
+# The pid written into state/.lock for this acquire. A throwaway home
+# skips the PowerShell ancestry walk: Git Bash started by a native
+# harness has MSYS ppid 1 and Get-Process .Parent 0, so that walk never
+# names the harness and the 120s session-start bound expires at lock.
+# The recorded pid is this tool process, live for the digest, and a
+# later acquire treats a still-live recorded pid as the holder even
+# though it is not a harness. Captain homes still fail closed on
+# ancestry.
+fm_session_lock_acquire_pid() {
+  if fm_session_fast_home; then
+    fm_throwaway_lock_pid
+    return
+  fi
+  fm_harness_ancestry_pid
+}
+
+# True when pid $1 still blocks another acquirer. Captain homes require
+# a live harness. Throwaway homes require only a live recorded pid,
+# because their lock names the tool process.
+fm_session_lock_holder_live() {
+  if fm_session_fast_home; then
+    fm_pid_alive "$1"
+    return
+  fi
+  fm_harness_pid_alive "$1"
+}
+
 # Print the one pid that identifies this session when the session lock is being
 # WRITTEN: the outermost pid of the contiguous run. That is the pid that lives as
 # long as the session - a Claude worker several levels in is reaped when its hook

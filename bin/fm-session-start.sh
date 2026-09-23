@@ -39,7 +39,10 @@
 # deferred network stage, home-summary publication, and mutating local
 # bootstrap sweeps still run.
 # Fast path still acquires the session lock, still refuses to write
-# projects/, and still starts no teardown. After a successful lock it
+# projects/, and still starts no teardown. The lock uses this same opt-in
+# to record this process's pid without the Win32 ancestry walk, which on
+# Git Bash does not find a native harness and is what exhausted the 120s
+# bound. After a successful lock it
 # records state/.session-start-complete immediately so a waiter can
 # proceed, then finishes a shrunk digest. It skips home-summary refresh,
 # Herdr projection cleanup, the deferred network stage, inactive-outcome
@@ -378,14 +381,7 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 # marker file are listed in the header. A symlink marker is ignored so a
 # confused link cannot opt a real home into the shrunk digest.
 session_start_fast_home() {
-  case "${FM_SESSION_START_FAST:-}" in
-    1|true|yes|TRUE|YES|on|ON) return 0 ;;
-  esac
-  case "${FM_VERIFY_HOME:-}" in
-    1|true|yes|TRUE|YES|on|ON) return 0 ;;
-  esac
-  [ -f "$FM_HOME/.fm-control-throwaway" ] || return 1
-  [ ! -L "$FM_HOME/.fm-control-throwaway" ]
+  fm_session_fast_home "$FM_HOME"
 }
 
 FAST=0

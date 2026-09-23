@@ -521,6 +521,58 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
   pass "session-lock e2e: a version-named session under a harness-named daemon keeps its own lock"
 }
 
+test_throwaway_home_opts_in_and_symlink_does_not() {
+  local dir
+  dir="$TMP_ROOT/fast-home"
+  mkdir -p "$dir"
+  FM_HOME="$dir" lib_eval "$FAKEBIN" 'fm_session_fast_home' \
+    && fail "an unmarked home must not take the throwaway lock path"
+  : > "$dir/.fm-control-throwaway"
+  FM_HOME="$dir" lib_eval "$FAKEBIN" 'fm_session_fast_home' \
+    || fail "a regular throwaway marker must opt the home in"
+  rm -f "$dir/.fm-control-throwaway"
+  ln -s "$dir" "$dir/.fm-control-throwaway"
+  FM_HOME="$dir" lib_eval "$FAKEBIN" 'fm_session_fast_home' \
+    && fail "a symlink throwaway marker must not opt the home in"
+  FM_HOME="$dir" FM_SESSION_START_FAST=1 lib_eval "$FAKEBIN" 'fm_session_fast_home' \
+    || fail "FM_SESSION_START_FAST must opt the home in without a marker"
+  pass "session-lock: throwaway opt-in matches the session-start selectors"
+}
+
+test_throwaway_acquire_pid_skips_ancestry() {
+  local dir fakebin got
+  dir="$TMP_ROOT/fast-acquire"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+  : > "$dir/.fm-control-throwaway"
+  got=$(FM_HOME="$dir" lib_eval "$fakebin" 'fm_session_lock_acquire_pid') \
+    || fail "a throwaway home must acquire a pid when ancestry cannot run"
+  case "$got" in
+    ''|*[!0-9]*) fail "throwaway lock pid must be numeric, got '$got'" ;;
+  esac
+  pass "session-lock: throwaway acquire pid does not need a harness ancestry"
+}
+
+test_throwaway_lock_script_acquires_without_a_harness() {
+  local dir out
+  dir="$TMP_ROOT/fast-lock-script"
+  mkdir -p "$dir/state"
+  : > "$dir/.fm-control-throwaway"
+  out=$(FM_HOME="$dir" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-lock.sh" 2>&1) \
+    || fail "throwaway fm-lock.sh must acquire without a harness ancestor: $out"
+  assert_contains "$out" "lock acquired:" "throwaway fm-lock.sh did not report acquisition"
+  [ -f "$dir/state/.lock" ] || fail "throwaway fm-lock.sh did not write state/.lock"
+  pass "session-lock: throwaway fm-lock.sh writes a lock without walking to a harness"
+}
+
+test_throwaway_home_opts_in_and_symlink_does_not
+test_throwaway_acquire_pid_skips_ancestry
+test_throwaway_lock_script_acquires_without_a_harness
 test_version_named_session_is_identified_on_both_platforms
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
