@@ -378,21 +378,33 @@ session_destroy_pools() {
   done
 }
 
+# /exit while a shell is still running raises Claude's "Background work is
+# running" dialog. Option 1 is "Exit and stop tasks", and Enter accepts it.
+session_exit_to_prompt() {
+  local deadline text confirmed=0
+  session_herdr pane run "$SESSION_PANE" '/exit' >/dev/null 2>&1
+  deadline=$(( $(date +%s) + 90 ))
+  until session_at_shell_prompt; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    text=$(session_pane_text "$SESSION_PANE" 40)
+    if [ "$confirmed" -eq 0 ] && printf '%s' "$text" | grep -q 'Background work is running'; then
+      session_snapshot exit-dialog
+      session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
+      confirmed=1
+    fi
+    sleep 3
+  done
+  return 0
+}
+
 session_close() {
-  local deadline tab label ws
+  local tab label ws
   [ "$SESSION_CLOSED" = 0 ] && [ -n "$SESSION_PANE" ] || return 0
   SESSION_CLOSED=1
   [ -z "$SESSION_OBSERVER_PID" ] || kill "$SESSION_OBSERVER_PID" 2>/dev/null || true
   session_snapshot final
   if ! session_at_shell_prompt; then
-    session_herdr pane send-text "$SESSION_PANE" '/exit' >/dev/null 2>&1
-    sleep 1
-    session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
-    deadline=$(( $(date +%s) + 90 ))
-    until session_at_shell_prompt; do
-      [ "$(date +%s)" -lt "$deadline" ] || { verify_note "the primary did not exit on /exit within 90s"; break; }
-      sleep 3
-    done
+    session_exit_to_prompt || verify_note "the primary did not exit on /exit within 90s"
   fi
   session_stop_watcher
   # Only tabs labelled for this home's tasks, and only a workspace that did
@@ -449,14 +461,8 @@ project_seed() {
 # again. Exits the primary, starts claude again in the same pane, and waits
 # for it to be ready; the home, its records and any worker are untouched.
 session_relaunch() {
-  local deadline
   session_snapshot before-relaunch
-  session_herdr pane run "$SESSION_PANE" '/exit' >/dev/null 2>&1
-  deadline=$(( $(date +%s) + 90 ))
-  until session_at_shell_prompt; do
-    [ "$(date +%s)" -lt "$deadline" ] || { bad "the primary did not exit on /exit within 90 s, so no restart could happen"; return 1; }
-    sleep 3
-  done
+  session_exit_to_prompt || { bad "the primary did not exit on /exit within 90 s, so no restart could happen"; return 1; }
   ok "the primary exited on the captain's /exit"
   session_launch
 }
