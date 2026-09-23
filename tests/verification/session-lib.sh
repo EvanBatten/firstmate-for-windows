@@ -113,7 +113,15 @@ session_open() {  # <workspace label>
   # pwsh expands these in the pane, not this shell.
   # shellcheck disable=SC2016
   session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1
-  if session_herdr pane wait-output --regex '(?m)^\$ ?$' --timeout 30000 "$SESSION_PANE" >/dev/null 2>&1; then
+  # wait-output's regex runs on the whole buffer and session_herdr kills it
+  # at 30s, so a visible `$` still failed this claim. Read the last lines.
+  prompted=0
+  deadline=$(( $(date +%s) + 90 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if session_at_shell_prompt; then prompted=1; break; fi
+    sleep 2
+  done
+  if [ "$prompted" -eq 1 ]; then
     ok "the session's pane runs Git Bash with the captain's toolchain on PATH"
   else
     session_snapshot no-bash-prompt
@@ -254,9 +262,9 @@ captain_says() {  # <text>
     session_herdr pane send-keys "$SESSION_PANE" esc >/dev/null 2>&1
     sleep 2
   fi
-  session_herdr pane send-text "$SESSION_PANE" "$*" >/dev/null 2>&1 || { bad "the captain's message could not be typed into the pane"; return 1; }
-  sleep 1
-  session_herdr pane send-keys "$SESSION_PANE" Enter >/dev/null 2>&1
+  session_herdr workspace focus "$SESSION_WS" >/dev/null 2>&1 || true
+  session_herdr pane run "$SESSION_PANE" "$*" >/dev/null 2>&1 || { bad "the captain's message could not be typed into the pane"; return 1; }
+  sleep 2
 }
 
 # session_wait <claim> <seconds> <command...>: poll the command until it
