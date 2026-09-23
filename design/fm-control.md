@@ -171,10 +171,10 @@ Allowed:
 
 - one Node process for the whole `run`
 - one stream socket that holds `events.subscribe` for the life of the run
-- one control socket for request and response RPCs (`workspace.create`, `pane.run`, `pane.send_text`, `pane.send_keys`, `agent.get`, close)
+- one control socket for request and response RPCs (`workspace.create`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `agent.get`, close)
 - at most one attach spawn, and only when `HERDR_SOCKET_PATH` is empty: `herdr session list --json` or `herdr status --json` to resolve the socket, then never again
 - `fs.watch` on the throwaway home's `state/` and `data/`
-- the primary `claude` process, which lives in the Herdr pane and is started by a control-socket `pane.run`, not by a local `child_process.spawn("claude")`
+- the primary `claude` process, which lives in the Herdr pane and is started by `pane.send_text` plus `pane.send_keys` (or one `pane.send_input`) on that socket, not by a local `child_process.spawn("claude")` and not by a `pane.run` RPC (that method is absent from the schema)
 
 CPython on Windows has no `AF_UNIX` (`bin/backends/herdr-workspace-move.py` already records that refusal).
 The existing Python subscriber is therefore not a Windows transport.
@@ -213,7 +213,8 @@ Level reconcile happens once per subscribe ack: the control socket issues `agent
 Missed edges during a reconnect are recovered the same way.
 The reducer does not care which socket produced the event.
 
-When `state/<id>.meta` first contains `herdr_pane_id=`, the reducer emits `{ type: "subscribe", paneId }`.
+When `state/<id>.meta` first contains `herdr_pane_id=`, the reducer emits a `subscribe` effect whose payload is `{ type: "pane.agent_status_changed", pane_id }`.
+Worker panes do not get `pane.output_matched`.
 A second subscribe request on the stream socket, or a second stream connection from the same Node process, is allowed.
 Spawning `herdr` to discover that pane is not.
 
@@ -245,11 +246,11 @@ boot --> launching --> trusting --> ready --> awaiting --> passed
 | Phase | Meaning | Who may send |
 | --- | --- | --- |
 | `boot` | sockets not yet subscribed | nobody |
-| `launching` | `pane.run` of `claude` is in flight | nobody |
-| `trusting` | folder-trust dialog is up | `send-keys` only (Down / Enter) |
+| `launching` | `claude` command has been typed into the new pane and is starting | nobody |
+| `trusting` | folder-trust dialog is up | `pane.send_keys` only (`keys: ["down"]` / `keys: ["enter"]`) |
 | `ready` | primary can accept a captain `say` | the transition *out* of ready |
 | `awaiting` | current `until` is false | nobody |
-| `relaunching` | reserved `__relaunch__` lifecycle | `/exit` and pane.run, not a captain `say` |
+| `relaunching` | reserved `__relaunch__` lifecycle | `/exit` via `pane.send_text` plus `pane.send_keys`, then the same launch pair, not a captain `say` |
 | `passed` | last predicate is true | nobody |
 | `failed` | timeout, primary exited, or blocked on a question | nobody |
 | `rejected` | catalog or schema refusal | nobody; process never attached |
@@ -267,8 +268,8 @@ A trace that needs to answer a question must `say` the answer as its own step af
 Launch readiness may look at stream data:
 
 - `pane.agent_status_changed` to `idle` or `done` after `claude` has started
-- a single internal `pane.output_matched` for the trust dialog (`Yes, I trust this folder`) so `send-keys` can move the cursor
-- a single internal match that the permissions banner is up, so `trusting -> ready` can fire
+- a `pane.output_matched` subscription with `source` and a substring `match` for the trust dialog (`Yes, I trust this folder`) so `pane.send_keys` can move the cursor
+- a second internal `pane.output_matched` subscription for the permissions banner, so `trusting -> ready` can fire
 
 Those matches are driver-internal.
 They must not be written as `until`.
@@ -369,7 +370,7 @@ They are not implemented in this change.
  * @typedef {(
  *   | { kind: 'subscribed' }
  *   | { kind: 'agent_status', paneId: string, workspaceId: string, status: string, agent: string }
- *   | { kind: 'output_matched', paneId: string, pattern: string }
+ *   | { kind: 'output_matched', paneId: string, pattern: string, matchedLine: string }
  *   | { kind: 'home', path: string, mtimeMs: number }
  *   | { kind: 'tick', nowMs: number }
  *   | { kind: 'rpc_ok', id: string }
@@ -400,9 +401,9 @@ They are not implemented in this change.
 /**
  * @typedef {(
  *   | { type: 'send-text', paneId: string, text: string }
- *   | { type: 'send-keys', paneId: string, key: 'enter'|'escape'|'down' }
- *   | { type: 'pane-run', paneId: string, command: string }
- *   | { type: 'subscribe', paneId: string }
+ *   | { type: 'send-keys', paneId: string, keys: string[] }
+ *   | { type: 'send-input', paneId: string, text?: string, keys?: string[] }
+ *   | { type: 'subscribe', subscriptions: object[] }
  *   | { type: 'relaunch' }
  *   | { type: 'stop', reason: 'passed'|'failed' }
  * )} Effect
@@ -450,9 +451,9 @@ export function evaluateUntil(home: string, until: string, ctx: { lockBefore: st
 export function connectControl(socketPath: string): Promise<ControlSocket>
 export function connectStream(socketPath: string, paneIds: string[]): Promise<AsyncIterable<Event>>
 export function sendText(sock: ControlSocket, paneId: string, text: string): Promise<void>
-export function sendKeys(sock: ControlSocket, paneId: string, key: 'enter'|'escape'|'down'): Promise<void>
-export function paneRun(sock: ControlSocket, paneId: string, command: string): Promise<void>
-export function agentGet(sock: ControlSocket, paneId: string): Promise<Event>
+export function sendKeys(sock: ControlSocket, paneId: string, keys: string[]): Promise<void>
+export function sendInput(sock: ControlSocket, paneId: string, text?: string, keys?: string[]): Promise<void>
+export function agentGet(sock: ControlSocket, target: string): Promise<Event>
 export function resolveSocketPath(env: NodeJS.ProcessEnv): Promise<string>
 
 // tools/fm-control/lib/home-watch.mjs
@@ -493,13 +494,24 @@ Those tests are not in this change.
 
 ## Wire
 
-Verified against Herdr protocol 16+ (`docs/verification/runtime-backends.md`, `herdr 0.7.5` schema):
+Read from `herdr 0.7.4` (protocol 16, schema_version 1) via `herdr api schema --json` on this machine.
+The earlier draft cited a 0.7.5 row from [`docs/verification/runtime-backends.md`](../docs/verification/runtime-backends.md) without reading a schema.
+This section replaces that guess.
+
+`schemas.subscription_event.$defs.SubscriptionEventKind.enum` is exactly:
 
 ```
-kinds: pane.output_matched, pane.agent_status_changed, pane.scroll_changed
+pane.output_matched
+pane.agent_status_changed
+pane.scroll_changed
 ```
 
-Stream request, newline-delimited JSON, same shape as [`bin/backends/herdr-eventwait.py`](../bin/backends/herdr-eventwait.py):
+`events.subscribe` accepts a larger `Subscription` oneOf (workspace, tab, pane lifecycle, `layout.updated`, plus those three).
+Those extra kinds are not in `SubscriptionEventKind`.
+This design treats only the three envelope kinds as stream `Event`s until a live subscribe proves another envelope.
+Do not feed unread kinds into `reduce`.
+
+Stream request, newline-delimited JSON, method name confirmed:
 
 ```json
 {
@@ -507,31 +519,65 @@ Stream request, newline-delimited JSON, same shape as [`bin/backends/herdr-event
   "method": "events.subscribe",
   "params": {
     "subscriptions": [
-      { "type": "pane.agent_status_changed", "pane_id": "w1:p1" }
+      { "type": "pane.agent_status_changed", "pane_id": "w1:p1" },
+      {
+        "type": "pane.output_matched",
+        "pane_id": "w1:p1",
+        "source": "recent_unwrapped",
+        "match": { "type": "substring", "value": "Yes, I trust this folder" },
+        "strip_ansi": true
+      }
     ]
   }
 }
 ```
 
+`pane.agent_status_changed` requires `type` and `pane_id`.
+`pane.output_matched` requires `type`, `pane_id`, `source` (`visible` | `recent` | `recent_unwrapped` | `detection`), and `match` (`{ type: "substring"|"regex", value }`).
+A subscribe that omits `source` and `match` on `pane.output_matched` is invalid.
+
 Ack: `result.type === "subscription_started"`.
-Event: `{ "event": "pane.agent_status_changed", "data": { "pane_id", "workspace_id", "agent_status", "agent" } }`.
 
-Control methods this design needs, all on the second socket:
+`pane.agent_status_changed` data requires `pane_id`, `workspace_id`, `agent_status`.
+`agent_status` is `idle` | `working` | `blocked` | `done` | `unknown`.
+`agent` is optional `string | null`.
 
-| Method | When |
-| --- | --- |
-| `workspace.create` | once, throwaway label, `--no-focus` equivalent |
-| `pane.run` | launch `claude`, and `__relaunch__` |
-| `pane.send_text` | ready to awaiting, ordinary `say` only |
-| `pane.send_keys` | trust dialog and `/exit` confirm |
-| `agent.get` | level reconcile after subscribe |
-| `pane.close` / `workspace.close` | teardown of ids this run created |
-
-Exact RPC names must be read from `herdr api schema --json` at implement time if they differ from the CLI verbs (`pane send-text` vs `pane.send_text`).
-The design constraint does not change: those calls go on the open socket, not through a new `herdr` process.
+`pane.output_matched` data requires `pane_id`, `matched_line`, and `read`.
+That match is driver-internal ready and trust only, never an `until`.
 
 `pane.scroll_changed` is ignored.
-`pane.output_matched` is subscribed only for the internal ready and trust patterns, never for `until`.
+
+Control methods this design uses, all on the second socket, names confirmed (underscore, dotted):
+
+| Method | Params | When |
+| --- | --- | --- |
+| `workspace.create` | `cwd`, `env`, `label`, `focus` (default false) | once; no command field |
+| `pane.send_text` | `pane_id`, `text` | ordinary `say`; does not auto-submit |
+| `pane.send_keys` | `pane_id`, `keys` (string array) | Enter after a `say`, trust Down/Enter, `/exit` confirm |
+| `pane.send_input` | `pane_id`, optional `text` and `keys` | launch `claude` in one RPC when both are needed |
+| `agent.get` | `target` (string) | level reconcile after subscribe |
+| `pane.close` | `pane_id` | teardown of a pane this run created |
+| `workspace.close` | workspace target | teardown of the workspace this run created |
+
+There is no `pane.run` method in this schema.
+The CLI verb `pane run` is a convenience that types a line and submits it.
+The socket equivalent is `pane.send_text` then `pane.send_keys` with `keys: ["enter"]`, or one `pane.send_input` carrying both.
+
+`agent.start` exists (`name`, `argv`, optional cwd/env/tab/workspace).
+This design does not use it for the primary.
+The captain path is still "type `claude` into the pane."
+
+`pane.wait_for_output` and `pane.read` exist.
+Do not call them per step.
+A blocking read on the control socket is the same one-query shape without a process spawn.
+Ready and trust wait on `pane.output_matched` subscriptions.
+Predicates wait on home files.
+
+`pane.send_keys` takes an array, not a single key enum.
+Map the Effect `{ type: "send-keys", keys: ["down"] }` onto `params.keys`.
+
+Those calls stay on the open sockets.
+They do not start a new `herdr` process.
 
 ## Home layout the driver creates
 
