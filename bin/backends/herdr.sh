@@ -592,9 +592,12 @@ fm_backend_herdr_pane_start_bash() {  # <session> <pane>
   bash_win=$(fm_backend_herdr_win32_pane_bash) || return 0
   [ -n "$bash_win" ] || return 0
   # pwsh's call operator: the path is quoted because it contains spaces, and a
-  # bare `bash` here would be WSL's. --login gives the same profile chain an
-  # interactive Git Bash window gets; measured on this machine, nothing in that
-  # chain reassigns PROMPT_COMMAND or cd's away from the pane's --cwd.
+  # bare `bash` here would be WSL's. --login is only the fallback when this
+  # shell could not convert its own PATH for FM_PANE_PATH: that profile chain
+  # is what an interactive Git Bash window uses to find tools, and it is also
+  # the multi-second login wait the Windows spawn paid before the pane was
+  # ready. When FM_PANE_PATH is already in the pane's environment, the first
+  # command adopts it and starts bash without --login.
   # pwsh escapes a single quote inside a single-quoted string by DOUBLING it,
   # which is what a per-user Git install under a path like C:\Users\o'brien
   # needs to parse at all.
@@ -603,9 +606,13 @@ fm_backend_herdr_pane_start_bash() {  # <session> <pane>
   # a pane made some other way carries no FM_PANE_PATH, and assigning an unset
   # variable would leave that pane with no PATH at all.
   quoted=${bash_win//\'/\'\'}
+  launch="& '$quoted'"
+  if ! fm_backend_herdr_win32_pane_path >/dev/null; then
+    launch="$launch --login"
+  fi
   # shellcheck disable=SC2016 # pwsh variables: the pane expands them, not this shell.
   fm_backend_herdr_cli "$session" pane run "$pane" \
-    'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1 ||
+    'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"$launch" >/dev/null 2>&1 ||
     echo "warning: herdr pane $pane was created but its Git Bash bootstrap command could not be sent; the pane is still running its default Windows shell" >&2
   return 0
 }
@@ -982,9 +989,22 @@ fm_backend_herdr_presentation_session_socket_path() {  # <session>
   fm_backend_herdr_canonical_socket_path "$socket"
 }
 
+# Process-lifetime memo file for one session name. Callers almost always
+# capture these functions in command substitution, so an in-shell variable
+# would die with that subshell; $$ stays the parent pid and the next poll
+# in this process can reuse a successful answer. Failures are never stored.
+fm_backend_herdr_session_memo_file() {  # <kind> <session>
+  printf '/tmp/fm-herdr-%s-%s-%s' "$1" "$$" "$(printf '%s' "$2" | tr -c 'A-Za-z0-9' '_')"
+}
+
 fm_backend_herdr_presentation_session_lock_path() {  # <session>
-  local session=$1 socket key dir hash
+  local session=$1 socket key dir hash memo
   [ -n "$session" ] || return 1
+  memo=$(fm_backend_herdr_session_memo_file lock-path "$session")
+  if [ -s "$memo" ]; then
+    cat "$memo"
+    return 0
+  fi
   socket=$(fm_backend_herdr_presentation_session_socket_path "$session") || return 1
   if command -v shasum >/dev/null 2>&1; then
     hash=$(printf '%s\0%s' "$session" "$socket" | shasum -a 256 2>/dev/null | awk '{print $1}')
@@ -1003,7 +1023,9 @@ fm_backend_herdr_presentation_session_lock_path() {  # <session>
     fi
   fi
   fm_backend_herdr_presentation_lock_namespace_valid "$dir" || return 1
-  printf '%s/order-%s.lock' "$dir" "$key"
+  socket=$(printf '%s/order-%s.lock' "$dir" "$key")
+  printf '%s' "$socket" > "$memo" || true
+  printf '%s' "$socket"
 }
 
 # fm_backend_herdr_projection_focus_snapshot: print the exact active
@@ -1733,13 +1755,21 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # NOT auto-start the server, so this must run before any workspace/tab/pane
 # call. Bounded poll for the server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
+  local session=$1 running out i memo
+  memo=$(fm_backend_herdr_session_memo_file server-ready "$session")
+  [ -f "$memo" ] && return 0
   running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-  [ "$running" = "true" ] && return 0
+  if [ "$running" = "true" ]; then
+    : > "$memo"
+    return 0
+  fi
   ( fm_backend_herdr_cli "$session" server >/dev/null 2>&1 & ) || return 1
   for i in $(seq 1 20); do
     running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
-    [ "$running" = "true" ] && return 0
+    if [ "$running" = "true" ]; then
+      : > "$memo"
+      return 0
+    fi
     sleep 0.5
   done
   echo "error: herdr server for session '$session' did not report running within 10s" >&2
@@ -2843,7 +2873,10 @@ fm_backend_herdr_target_ready() {  # <target>
 # which would answer exactly that question, does not exist on Windows at all.
 fm_backend_herdr_current_path() {  # <target>
   local info path
-  fm_backend_herdr_target_ready "$1" || return 0
+  # Parse only: the spawn cwd poll can call this sixty times, and each
+  # server_ensure status --json was a Windows CLI spawn. A down server
+  # just yields an empty path, which the poll already treats as "not yet".
+  fm_backend_herdr_parse_target "$1" || return 0
   info=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null) || info=
   path=$(printf '%s' "$info" | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
   if [ -z "$path" ] && fm_backend_herdr_win32_pane_bash >/dev/null; then
@@ -3173,6 +3206,43 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   done
 }
 
+# How many times a kill or teardown lock preflight tries the session
+# presentation lock before giving up. Five 0.1s attempts is enough to ride
+# a brief overlapping mutation; fifty of them were a 5s close-path tax.
+FM_BACKEND_HERDR_PRESENTATION_LOCK_ATTEMPTS=${FM_BACKEND_HERDR_PRESENTATION_LOCK_ATTEMPTS:-5}
+
+# fm_backend_herdr_pane_active_focus_state: is this pane the captain's
+# currently focused tab? Prints active, other, or unknown. unknown means the
+# snapshot or pane identity could not be read, never a license to close.
+fm_backend_herdr_pane_active_focus_state() {  # <session> <pane>
+  local session=$1 pane=$2 before active_tab info target_pane target_tab
+  before=$(fm_backend_herdr_projection_focus_snapshot "$session") || { printf 'unknown'; return 0; }
+  active_tab=${before#*$'\t'}
+  [ -n "$active_tab" ] || { printf 'unknown'; return 0; }
+  info=$(fm_backend_herdr_cli "$session" pane get "$pane" 2>/dev/null) || { printf 'unknown'; return 0; }
+  target_pane=$(printf '%s' "$info" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)
+  target_tab=$(printf '%s' "$info" | jq -r '.result.pane.tab_id // empty' 2>/dev/null)
+  if [ "$target_pane" != "$pane" ] || [ -z "$target_tab" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if [ "$target_tab" = "$active_tab" ]; then
+    printf 'active'
+  else
+    printf 'other'
+  fi
+}
+
+# fm_backend_herdr_kill_unlocked_if_not_active_tab: one explicit close of a
+# pane that is not the captain's focused tab, used only when the session
+# presentation lock could not be taken. Never closes the focused tab.
+fm_backend_herdr_kill_unlocked_if_not_active_tab() {  # <session> <pane>
+  local session=$1 pane=$2 state
+  state=$(fm_backend_herdr_pane_active_focus_state "$session" "$pane")
+  [ "$state" = other ] || return 1
+  fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane"
+}
+
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors
 # tmux-kill-window's `|| true` contract). Verified: closing a tab's only pane
 # closes the tab too, so a separate tab close is unnecessary.
@@ -3184,6 +3254,9 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # restore as the backstop. A close that empties the FOCUSED workspace moves
 # focus legitimately, and every in-lock planning ambiguity or failure falls
 # back to the plain close, matching the pre-hardening contract.
+# If the presentation lock cannot be taken, a pane that is not the captain's
+# active tab is closed unlocked; the focused captain tab is never closed that
+# way.
 fm_backend_herdr_kill_serialized() {  # <session> <pane>
   local session=$1 pane=$2
   local before active_tab info target_pane target_tab target_ws plan shell_pid plan_move_record close_failed workspace_presence
@@ -3242,7 +3315,7 @@ fm_backend_herdr_kill() {  # <target>
     . "$FM_BACKEND_HERDR_ROOT/bin/fm-wake-lib.sh"
   fi
   if lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session"); then
-    while [ "$attempt" -lt 50 ]; do
+    while [ "$attempt" -lt "$FM_BACKEND_HERDR_PRESENTATION_LOCK_ATTEMPTS" ]; do
       if fm_lock_try_acquire "$lock_path"; then
         lock_held=1
         break
@@ -3254,6 +3327,8 @@ fm_backend_herdr_kill() {  # <target>
   if [ "$lock_held" = 1 ]; then
     fm_backend_herdr_kill_serialized "$session" "$pane"
     fm_lock_release "$lock_path" || true
+  elif fm_backend_herdr_kill_unlocked_if_not_active_tab "$session" "$pane"; then
+    :
   else
     echo "warning: herdr task kill could not acquire its session presentation lock; refusing an unlocked pane close" >&2
   fi

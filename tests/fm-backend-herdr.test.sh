@@ -2205,17 +2205,71 @@ test_kill_refuses_when_presentation_lock_is_unavailable() {
     ' 2>&1)
     status=$?
     [ "$status" -eq 0 ] || fail "$mode presentation lock refusal changed best-effort kill status: $status"
-    [ ! -s "$dir/cli.log" ] || fail "$mode presentation lock refusal still mutated Herdr: $(cat "$dir/cli.log")"
+    if grep -E 'pane close|tab close|workspace close' "$dir/cli.log" >/dev/null 2>&1; then
+      fail "$mode presentation lock refusal still closed a pane: $(cat "$dir/cli.log")"
+    fi
     assert_contains "$out" "refusing an unlocked pane close" \
       "$mode presentation lock refusal did not report the deferred close"
     attempts=$(wc -l < "$dir/attempts" | tr -d ' ')
     if [ "$mode" = contended ]; then
-      [ "$attempts" = 50 ] || fail "contended presentation lock did not use the bounded wait: $attempts attempts"
+      [ "$attempts" = 5 ] || fail "contended presentation lock did not use the bounded wait: $attempts attempts"
     else
       [ "$attempts" = 0 ] || fail "unresolved presentation lock path attempted acquisition: $attempts"
     fi
   done
-  pass "fm_backend_herdr_kill: unavailable session locks defer every pane close"
+  pass "fm_backend_herdr_kill: unavailable session locks defer an unlocked close when focus cannot be proven"
+}
+
+test_kill_closes_non_focused_tab_when_lock_is_contended() {
+  local dir out status attempts
+  dir="$TMP_ROOT/kill-lock-other"; mkdir -p "$dir"
+  : > "$dir/attempts"
+  : > "$dir/closed"
+  out=$(ROOT="$ROOT" ATTEMPTS="$dir/attempts" CLOSED="$dir/closed" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_target_ready() { fm_backend_herdr_parse_target "$1"; }
+    fm_backend_herdr_presentation_session_lock_path() { printf "/tmp/fm-herdr-contended-other-lock"; }
+    fm_lock_try_acquire() { printf "x\n" >> "$ATTEMPTS"; return 1; }
+    fm_backend_herdr_pane_active_focus_state() { printf other; }
+    fm_backend_herdr_explicit_close_pane_confirmed() {
+      printf "%s %s\n" "$1" "$2" > "$CLOSED"
+    }
+    sleep() { :; }
+    fm_backend_herdr_kill fmtest:w2:p2
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a contended non-focused kill should stay best-effort: $out"
+  assert_contains "$(cat "$dir/closed")" "fmtest w2:p2" \
+    "a contended lock must still close a pane that is not the captain tab"
+  assert_not_contains "$out" "refusing an unlocked pane close" \
+    "a proven non-focused pane must not inherit the captain-tab refusal"
+  attempts=$(wc -l < "$dir/attempts" | tr -d ' ')
+  [ "$attempts" = 5 ] || fail "contended non-focused kill did not use the bounded wait: $attempts"
+  pass "fm_backend_herdr_kill: a contended lock still closes a pane that is not the captain tab"
+}
+
+test_kill_refuses_captain_tab_when_lock_is_contended() {
+  local dir out status
+  dir="$TMP_ROOT/kill-lock-active"; mkdir -p "$dir"
+  : > "$dir/closed"
+  out=$(ROOT="$ROOT" CLOSED="$dir/closed" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_target_ready() { fm_backend_herdr_parse_target "$1"; }
+    fm_backend_herdr_presentation_session_lock_path() { printf "/tmp/fm-herdr-contended-active-lock"; }
+    fm_lock_try_acquire() { return 1; }
+    fm_backend_herdr_pane_active_focus_state() { printf active; }
+    fm_backend_herdr_explicit_close_pane_confirmed() {
+      printf "%s %s\n" "$1" "$2" > "$CLOSED"
+    }
+    sleep() { :; }
+    fm_backend_herdr_kill fmtest:w1:p1
+  ' 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "a contended captain-tab kill should stay best-effort: $out"
+  [ ! -s "$dir/closed" ] || fail "the captain tab was closed without the presentation lock: $(cat "$dir/closed")"
+  assert_contains "$out" "refusing an unlocked pane close" \
+    "a contended captain-tab kill must refuse the unlocked close"
+  pass "fm_backend_herdr_kill: a contended lock never closes the captain's active tab"
 }
 
 test_endpoint_confirmed_gone_gates_on_structured_presence() {
@@ -2627,6 +2681,28 @@ test_presentation_session_lock_path_is_shared_across_homes() {
       || fail "symlink parent socket paths must resolve one lock: $path_tmp vs $path_private"
   fi
   pass "herdr presentation lock: one path per session/socket across homes"
+}
+
+test_presentation_session_lock_path_reuses_a_resolved_path() {
+  local dir log resp fb path_a path_b calls
+  dir="$TMP_ROOT/presentation-session-lock-memo"; mkdir -p "$dir/responses" "$dir/sockdir"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  : > "$dir/sockdir/fmtest.sock"
+  printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/1.out"
+  printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  read -r path_a path_b < <(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      a=$(fm_backend_herdr_presentation_session_lock_path fmtest) || exit 1
+      b=$(fm_backend_herdr_presentation_session_lock_path fmtest) || exit 1
+      printf "%s %s\n" "$a" "$b"
+    ' "$ROOT") || fail "same-process lock path resolution failed"
+  [ -n "$path_a" ] && [ "$path_a" = "$path_b" ] ||
+    fail "the memoized lock path must match the first resolution: '$path_a' vs '$path_b'"
+  calls=$(grep -c $'\x1f''session'$'\x1f''list' "$log")
+  [ "$calls" = 1 ] || fail "a resolved session lock path must not list sessions again in the same process, got $calls"
+  pass "herdr presentation lock: one session list per process after a successful resolve"
 }
 
 test_presentation_session_lock_path_rejects_malformed_socket() {
@@ -4582,6 +4658,8 @@ test_kill_emptying_non_focused_uses_pane_death
 test_kill_focused_workspace_stays_plain_close
 test_endpoint_confirmed_gone_gates_on_structured_presence
 test_kill_refuses_when_presentation_lock_is_unavailable
+test_kill_closes_non_focused_tab_when_lock_is_contended
+test_kill_refuses_captain_tab_when_lock_is_contended
 test_projection_seeded_prune_refuses_active_tab
 test_projection_label_builder_uses_corner_and_strips_owner_prefixes
 test_projection_order_moves_only_exact_new_workspace_and_preserves_relative_order
@@ -4595,6 +4673,7 @@ test_projection_order_anchors_the_parent_by_exact_id
 test_projection_order_foreign_new_child_before_parent_is_read_only
 test_projection_order_missing_parent_is_read_only
 test_presentation_session_lock_path_is_shared_across_homes
+test_presentation_session_lock_path_reuses_a_resolved_path
 test_presentation_session_lock_path_rejects_malformed_socket
 test_projection_order_rejects_malformed_socket
 test_projection_reclaim_refusal_matrix_is_non_mutating

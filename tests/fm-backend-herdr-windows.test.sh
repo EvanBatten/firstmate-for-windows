@@ -557,9 +557,40 @@ test_task_tab_create_bootstraps_git_bash_on_msys() {
     "the PATH handed to the pane must include a tool directory that only firstmate's own shell knows about"
   # shellcheck disable=SC2016 # pwsh variables, asserted as the literal text the pane receives.
   assert_contains "$(cat "$log")" \
-    "${US}pane${US}run${US}w1:p2${US}"'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '${want}' --login" \
+    "${US}pane${US}run${US}w1:p2${US}"'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '${want}'" \
     "the Windows pane's FIRST command must adopt that PATH only when it was handed one, then launch Git Bash by full path"
+  assert_not_contains "$(cat "$log")" --login \
+    "a pane that already received FM_PANE_PATH must not pay the Git Bash --login profile wait"
   pass "fm_backend_herdr_task_tab_create: an MSYS pane gets SHELL, the OSC 9;9 emitter, firstmate's PATH, and a Git Bash first command"
+}
+
+test_task_tab_create_keeps_login_when_pane_path_is_withheld() {
+  local fb log want
+  fb="$TMP_ROOT/task-login-fallback/fakebin"; mkdir -p "$fb"; log="$TMP_ROOT/task-login-fallback/log"; : > "$log"
+  make_task_herdr "$fb"
+  cat > "$fb/cygpath" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = -w ] && [ "${2:-}" = -p ]; then
+  exit 2
+fi
+if [ "${1:-}" = -w ]; then
+  printf 'C:\\Git\\usr\\bin\\bash.exe\n'
+  exit 0
+fi
+exit 2
+SH
+  chmod +x "$fb/cygpath"
+  want=$(adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_win32_pane_bash')
+  [ -n "$want" ] || fail "the login-fallback probe must still name Git Bash"
+  FM_HERDR_LOG="$log" adapter "$fb" \
+    'FM_BACKEND_HERDR_WIN32_CLI=1 fm_backend_herdr_task_tab_create fmtest w1 /c/proj fm-x' >/dev/null
+  assert_not_contains "$(cat "$log")" "${US}FM_PANE_PATH=" \
+    "an unconvertible PATH must not be handed to the pane as FM_PANE_PATH"
+  assert_contains "$(cat "$log")" \
+    "${US}pane${US}run${US}w1:p2${US}"'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '${want}' --login" \
+    "without FM_PANE_PATH the pane must still start Git Bash --login so the profile can find tools"
+  pass "fm_backend_herdr_task_tab_create: --login remains only when FM_PANE_PATH could not be converted"
 }
 
 test_task_tab_create_never_bootstraps_a_pane_it_did_not_create() {
@@ -648,6 +679,22 @@ test_current_path_reads_the_pane_once() {
   [ "$calls" = 1 ] ||
     fail "both cwd fields must come from ONE pane get - two reads race a pane that is moving, got $calls calls"
   pass "fm_backend_herdr_current_path: both cwd fields come from a single pane get, so the fallback cannot race the poll"
+}
+
+test_current_path_does_not_status_the_server() {
+  local fb log status_calls pane_calls
+  fb=$(make_cygpath "$TMP_ROOT/cwd-no-status"); log="$TMP_ROOT/cwd-no-status/log"; : > "$log"
+  make_task_herdr "$fb"
+  FM_HERDR_LOG="$log" \
+    FM_HERDR_PANE_JSON='{"result":{"pane":{"cwd":"C:\\Users\\ebatt\\wt\\a1","foreground_cwd":null}}}' \
+    adapter "$fb" 'FM_BACKEND_HERDR_WIN32_CLI=1; fm_backend_herdr_current_path fmtest:w1:p2 >/dev/null; fm_backend_herdr_current_path fmtest:w1:p2 >/dev/null'
+  status_calls=$(grep -c "${US}status${US}--json" "$log" || true)
+  pane_calls=$(grep -c "${US}pane${US}get" "$log")
+  [ "$pane_calls" = 2 ] ||
+    fail "two current_path reads must still ask the pane twice, got $pane_calls pane gets"
+  [ "$status_calls" = 0 ] ||
+    fail "a cwd poll must not status --json on every read, got $status_calls"
+  pass "fm_backend_herdr_current_path: cwd polls read the pane without a server status probe"
 }
 
 # --- fm_backend_herdr_jq_rows: multi-row reads under a text-mode jq ----------
@@ -964,6 +1011,7 @@ test_win32_pane_path_is_this_shells_own_path
 test_win32_pane_path_is_withheld_when_it_cannot_be_converted
 test_task_tab_create_posix_call_is_unchanged
 test_task_tab_create_bootstraps_git_bash_on_msys
+test_task_tab_create_keeps_login_when_pane_path_is_withheld
 test_task_tab_create_never_bootstraps_a_pane_it_did_not_create
 test_task_tab_create_never_aims_a_bootstrap_at_a_guessed_pane
 test_prompt_command_emits_the_osc_sequence_herdr_reads
@@ -971,6 +1019,7 @@ test_current_path_posix_never_falls_back_to_the_frozen_cwd
 test_current_path_msys_falls_back_to_the_live_cwd
 test_current_path_msys_still_prefers_foreground_cwd
 test_current_path_reads_the_pane_once
+test_current_path_does_not_status_the_server
 test_jq_rows_posix_branch_passes_every_byte_through
 test_jq_rows_msys_branch_removes_the_record_terminator_cr
 test_jq_rows_msys_branch_keeps_a_cr_that_is_not_a_terminator
