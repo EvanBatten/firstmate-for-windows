@@ -313,11 +313,17 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     printf '●  STARTUP TRUNCATED - SESSION START HIT ITS %ss RUNTIME BOUND\n' "$SESSION_START_BUDGET"
     printf '●  It stopped during the "%s" stage, so everything above is COMPLETE\n' "$SESSION_START_LAST_STAGE"
     printf '●  only up to that point.\n'
-    printf '●  RECONCILE these stages before acting on anything they would have shown:\n'
-    printf '●    %s\n' "${SESSION_START_PENDING% }"
-    printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
-    printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
-    printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
+    if [ "$SESSION_START_LAST_STAGE" = network-checks ]; then
+      printf '●  Network checks did not finish inside the bound.\n'
+      printf '●  Register a local project without waiting on network checks.\n'
+      printf '●  Read their result later with bin/fm-startup-network.sh report.\n'
+    else
+      printf '●  RECONCILE these stages before acting on anything they would have shown:\n'
+      printf '●    %s\n' "${SESSION_START_PENDING% }"
+      printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
+      printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
+      printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
+    fi
     printf '%s\n' "$BAR"
   fi
   rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
