@@ -6,6 +6,7 @@ scratchpad*
 .lavish/
 .fm-secondmate-home
 .fm-secondmate-parent
+.fm-control-throwaway
 .DS_Store
 __pycache__/
 *.pyc
