@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { prepareClaudeConfig, seedThrowawayHome, matchBlockedAnswer, THROWAWAY_CAPTAIN } from '../lib/session.mjs';
+import { prepareClaudeConfig, seedThrowawayHome, matchBlockedAnswer, PARKED_QUESTION_HINT, THROWAWAY_CAPTAIN } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -424,6 +424,30 @@ describe('fake-herdr end to end', () => {
     assert.ok(r.json.steps[0].ms < 18_000, `did not wait the step budget (${r.json.steps[0].ms} ms)`);
   });
 
+  test('an idle pane parked on treehouse-or-copy is answered from the catalog', () => {
+    const script = join(tmp('script'), 'idle-copy.json');
+    writeFileSync(script, JSON.stringify({
+      'please register': [
+        { delayMs: 150 },
+        { pane: 'Decision needed — pick one:\n1. Install treehouse\n2. Approve a one-off isolated copy\nOnce you say which, the worker starts.' },
+      ],
+      'Option 2. Make a one-off isolated': [
+        { path: 'data/projects.md', content: '- greeter local-only\n' },
+        { mkdir: 'projects/greeter/.git' },
+        { pane: null },
+      ],
+    }));
+    const { dir, env } = fakeEnv({ FM_CONTROL_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-idle-copy', steps: [{ say: 'please register', until: 'projects.registered:greeter', budgetSec: 20 }] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.equal(r.json.pass, true);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    const texts = state.sends.filter((s) => s.text !== undefined).map((s) => s.text);
+    assert.ok(texts.some((t) => t.startsWith('Option 2. Make a one-off isolated')), `catalog answer typed; sends=${JSON.stringify(texts)}`);
+    assert.ok(r.json.steps[0].ms < 18_000, `did not wait the step budget (${r.json.steps[0].ms} ms)`);
+  });
+
   test('an unrecognized parked question fails immediately with the pane text', () => {
     const script = join(tmp('script'), 'unknown-block.json');
     writeFileSync(script, JSON.stringify({
@@ -491,8 +515,11 @@ describe('grafted onboarding config and shell prompts', () => {
   test('matchBlockedAnswer recognizes the tool-install catalog and ignores free-form questions', () => {
     assert.equal(matchBlockedAnswer('MISSING: treehouse (install: curl ...)\nWhich tools should I install?')?.name, 'tool-install');
     assert.equal(matchBlockedAnswer('tools are missing; install tasks-axi?')?.name, 'tool-install');
+    assert.equal(matchBlockedAnswer('Decision needed — pick one:\nApprove a one-off isolated copy')?.name, 'treehouse-or-copy');
     assert.equal(matchBlockedAnswer('What is your favorite color?'), null);
     assert.equal(matchBlockedAnswer(''), null);
+    assert.equal(PARKED_QUESTION_HINT.test('Decision needed — pick one:'), true);
+    assert.equal(PARKED_QUESTION_HINT.test('bypass permissions on'), false);
   });
 
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {

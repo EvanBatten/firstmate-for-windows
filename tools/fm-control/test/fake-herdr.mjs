@@ -20,6 +20,7 @@
 //                      { "commitIn": "projects/greeter", "file": "greet.sh", "content": "..." },  one commit on main
 //                      { "killPrimary": true },           the primary dies (a crash)
 //                      { "block": "<pane text>" },        herdr reports the primary blocked
+//                      { "pane": "<pane text>" },         pane text only; status stays idle
 //                      { "unblock": true } ] }            clear a blocked status
 // Sends are recorded in $FAKE_HERDR_DIR/state.json under sends[].
 
@@ -103,6 +104,10 @@ async function applyWrites(home, writes, sayText) {
       const s = load();
       s.agentStatus = 'blocked';
       s.paneText = typeof w.block === 'string' ? w.block : (w.block.text ?? '');
+      save(s);
+    } else if (w.pane !== undefined) {
+      const s = load();
+      s.paneText = w.pane;
       save(s);
     } else if (w.unblock) {
       const s = load();
