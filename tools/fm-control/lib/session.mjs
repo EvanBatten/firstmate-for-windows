@@ -1,0 +1,306 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { HerdrClient, READY_BANNER, TRUST } from "./herdr.mjs";
+import { interpolateTrace, isReservedSay } from "./trace.mjs";
+import { waitUntil } from "./wait.mjs";
+
+const here = dirname(fileURLToPath(import.meta.url));
+export const REPO_ROOT = join(here, "..", "..", "..");
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function paneEnv() {
+  const env = {};
+  for (const key of ["HOME", "USER", "TERM", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const oath = process.env.CLAUDE_CODE_OATH_TOKEN;
+  if (oauth) env.CLAUDE_CODE_OAUTH_TOKEN = oauth;
+  else if (oath) env.CLAUDE_CODE_OAUTH_TOKEN = oath;
+  const extra = [];
+  if (process.env.HOME) extra.push(join(process.env.HOME, ".local", "bin"));
+  if (process.env.FM_CONTROL_PATH_EXTRA) extra.push(process.env.FM_CONTROL_PATH_EXTRA);
+  if (process.env.VERIFY_PANE_PATH_EXTRA) extra.push(process.env.VERIFY_PANE_PATH_EXTRA);
+  env.PATH = [...extra, process.env.PATH || ""].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+  return env;
+}
+
+function claudeLaunch(model) {
+  const bin = process.platform === "win32" ? "claude.exe" : "claude";
+  return `${bin} --dangerously-skip-permissions --model ${model}`;
+}
+
+export function seedProject(scratch, name = "greeter") {
+  const origin = join(scratch, `${name}.git`);
+  const seed = join(scratch, `${name}-seed`);
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+  execFileSync("git", ["clone", "-q", origin, seed]);
+  git(seed, ["config", "user.email", "verify@example.invalid"]);
+  git(seed, ["config", "user.name", "verification"]);
+  git(seed, ["config", "core.autocrlf", "false"]);
+  try {
+    git(seed, ["checkout", "-q", "-b", "main"]);
+  } catch {
+    /* already on main */
+  }
+  writeFileSync(
+    join(seed, "README.md"),
+    `# ${name}\n\nA throwaway project for a firstmate verification session.\n`,
+  );
+  git(seed, ["add", "-A"]);
+  git(seed, ["commit", "-qm", `start the ${name} project`]);
+  git(seed, ["push", "-q", "-u", "origin", "main"]);
+  const base = git(origin, ["rev-parse", "main"]);
+  rmSync(seed, { recursive: true, force: true });
+  return { origin, base };
+}
+
+export function cloneHome(repoRoot, dest) {
+  const sha = git(repoRoot, ["rev-parse", "HEAD"]);
+  let branch = "HEAD";
+  try {
+    branch = git(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    branch = "HEAD";
+  }
+  if (branch === "HEAD") {
+    execFileSync("git", ["clone", "-q", "-c", "core.symlinks=true", repoRoot, dest]);
+    git(dest, ["checkout", "-q", sha]);
+  } else {
+    execFileSync("git", [
+      "clone",
+      "-q",
+      "-c",
+      "core.symlinks=true",
+      "--branch",
+      branch,
+      repoRoot,
+      dest,
+    ]);
+  }
+  const porcelain = execFileSync("git", ["status", "--porcelain"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (porcelain.trim()) {
+    try {
+      const diff = execFileSync("git", ["diff", "HEAD", "--binary"], { cwd: repoRoot });
+      if (diff.length) {
+        execFileSync("git", ["apply"], { cwd: dest, input: diff });
+      }
+    } catch {
+      /* clone is SHA exactly */
+    }
+  }
+}
+
+export class Session {
+  constructor(opts = {}) {
+    this.feature = opts.feature || "session";
+    this.model = opts.model || process.env.FM_CONTROL_MODEL || process.env.VERIFY_SESSION_MODEL || "sonnet";
+    this.repoRoot = opts.repoRoot || process.env.FM_CONTROL_REPO || REPO_ROOT;
+    this.herdr = opts.herdr || new HerdrClient({ sessionName: `fm-ctl-${process.pid}-${this.feature}` });
+    this.scratch = null;
+    this.home = null;
+    this.workspaceId = null;
+    this.paneId = null;
+    this.createdWorkspace = false;
+    this.projectSeeds = {};
+    this.projectOrigin = null;
+    this.lockAtReady = null;
+    this.lockBeforeRelaunch = null;
+    this.readyAtMs = null;
+    this.closed = false;
+    this.lastDeadCheck = 0;
+  }
+
+  stamps() {
+    return {
+      lockAtReady: this.lockAtReady,
+      lockBeforeRelaunch: this.lockBeforeRelaunch,
+      projectSeeds: this.projectSeeds,
+    };
+  }
+
+  async open() {
+    this.scratch = mkdtempSync(join(tmpdir(), `fm-control-${this.feature}-`));
+    this.home = join(this.scratch, "firstmate");
+    cloneHome(this.repoRoot, this.home);
+    const seeded = seedProject(this.scratch, "greeter");
+    this.projectOrigin = seeded.origin;
+    this.projectSeeds.greeter = seeded.base;
+    await this.herdr.connect();
+    const created = await this.herdr.workspaceCreate({
+      cwd: this.home,
+      label: `fm-control-${this.feature}`,
+      env: paneEnv(),
+    });
+    this.workspaceId = created.workspaceId;
+    this.paneId = created.paneId;
+    this.createdWorkspace = true;
+  }
+
+  async launchClaude() {
+    this.herdr.dead = false;
+    await this.herdr.paneRun(this.paneId, claudeLaunch(this.model));
+  }
+
+  async ready(budgetMs = Number(process.env.FM_CONTROL_READY_MS || 180_000)) {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      let text = "";
+      try {
+        text = await this.herdr.paneRead(this.paneId, 80);
+      } catch {
+        text = "";
+      }
+      if (text.includes(TRUST)) {
+        await this.herdr.paneSendKeys(this.paneId, ["down"]);
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+          const again = await this.herdr.paneRead(this.paneId, 40);
+          if (/❯ *Yes/.test(again) || again.includes("Yes, I trust")) {
+            await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+          }
+        } catch {
+          await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+        }
+      }
+      if (text.includes(READY_BANNER)) {
+        try {
+          this.lockAtReady = readFileSync(join(this.home, "state", ".lock"), "utf8");
+        } catch {
+          this.lockAtReady = this.lockAtReady || `ready-${Date.now()}`;
+        }
+        this.readyAtMs = Date.now();
+        return;
+      }
+      if (this.herdr.atShellPrompt(text) && /claude --dangerously/.test(text)) {
+        throw new Error("primary exited before ready");
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error("primary did not become ready");
+  }
+
+  isDead() {
+    if (this.herdr.dead) return true;
+    const now = Date.now();
+    if (now - this.lastDeadCheck < 2000) return false;
+    this.lastDeadCheck = now;
+    this.herdr.refreshDead(this.paneId).catch(() => {
+      this.herdr.dead = true;
+    });
+    return this.herdr.dead;
+  }
+
+  async say(text) {
+    if (!text) return;
+    if (text === "$relaunch") {
+      await this.relaunch();
+      return;
+    }
+    if (text === "$exit") {
+      await this.exitToPrompt();
+      return;
+    }
+    try {
+      const status = await this.herdr.paneGet(this.paneId);
+      const agent = status?.pane?.agent_status || status?.agent_status;
+      if (agent === "blocked") {
+        await this.herdr.paneSendKeys(this.paneId, ["esc"]);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    } catch {
+      /* type anyway */
+    }
+    try {
+      await this.herdr.workspaceFocus(this.workspaceId);
+    } catch {
+      /* focus is best-effort */
+    }
+    await this.herdr.paneRun(this.paneId, text);
+  }
+
+  async exitToPrompt(budgetMs = 90_000) {
+    await this.herdr.paneRun(this.paneId, "/exit");
+    const deadline = Date.now() + budgetMs;
+    let confirmed = false;
+    while (Date.now() < deadline) {
+      const text = await this.herdr.paneRead(this.paneId, 40);
+      if (this.herdr.atShellPrompt(text)) return;
+      if (!confirmed && text.includes("Background work is running")) {
+        await this.herdr.paneSendKeys(this.paneId, ["enter"]);
+        confirmed = true;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error("primary did not exit on /exit");
+  }
+
+  async relaunch() {
+    try {
+      this.lockBeforeRelaunch = readFileSync(join(this.home, "state", ".lock"), "utf8");
+    } catch {
+      this.lockBeforeRelaunch = this.lockAtReady;
+    }
+    await this.exitToPrompt();
+    this.herdr.dead = false;
+    await this.launchClaude();
+    await this.ready();
+  }
+
+  async wait(until, budgetMs) {
+    return waitUntil({
+      home: this.home,
+      until,
+      budgetMs,
+      stamps: this.stamps(),
+      isDead: () => this.isDead(),
+    });
+  }
+
+  stopWatcher() {
+    try {
+      const pid = readFileSync(join(this.home, "state", ".watch.lock", "pid"), "utf8").trim();
+      if (/^\d+$/.test(pid)) process.kill(Number(pid));
+    } catch {
+      /* none */
+    }
+  }
+
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      if (this.paneId && !this.herdr.atShellPrompt()) {
+        await this.exitToPrompt().catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+    this.stopWatcher();
+    if (this.createdWorkspace && this.workspaceId) {
+      await this.herdr.workspaceClose(this.workspaceId);
+    }
+    await this.herdr.close({ stopSession: this.herdr.startedServer });
+    if (this.scratch && process.env.FM_CONTROL_KEEP !== "1") {
+      rmSync(this.scratch, { recursive: true, force: true });
+    }
+  }
+}
+
+export function defaultBudgetSec(until) {
+  if (until.startsWith("landed") || until.startsWith("git-ahead") || until.startsWith("reported")) {
+    return Number(process.env.FM_CONTROL_UNTIL_SEC || 1200);
+  }
+  if (until === "dispatched" || until.startsWith("meta-count") || until === "promoted") return 900;
+  return 600;
+}
+

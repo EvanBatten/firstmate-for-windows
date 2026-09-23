@@ -1,0 +1,6 @@
+{
+  "feature": "banner",
+  "steps": [
+    { "say": "", "until": "bypass permissions on" }
+  ]
+}

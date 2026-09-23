@@ -1,0 +1,6 @@
+{
+  "feature": "ping",
+  "steps": [
+    { "say": "ping", "until": "pong" }
+  ]
+}

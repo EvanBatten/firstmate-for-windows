@@ -1,0 +1,40 @@
+{
+  "feature": "scout-report",
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then investigate, without changing anything in the project: which subcommands a friendly greeter CLI called greet.sh should have, and what each should print. I want a short written report I can read, not a change. use the opus model. when the report is in, tell me its findings and wait.",
+      "until": "registered",
+      "budgetSec": 600
+    },
+    {
+      "say": "",
+      "until": "kind:scout",
+      "budgetSec": 900
+    },
+    {
+      "say": "",
+      "until": "reported",
+      "budgetSec": 1200
+    },
+    {
+      "say": "good. now implement the first two subcommands your report recommends, one commit on its own branch, verify it by running it, and land it on main; you have my approval. use the same worker rather than starting a second one. tell me when it is landed.",
+      "until": "promoted",
+      "budgetSec": 900
+    },
+    {
+      "say": "",
+      "until": "landed",
+      "budgetSec": 1200
+    },
+    {
+      "say": "",
+      "until": "report-exists",
+      "budgetSec": 600
+    },
+    {
+      "say": "",
+      "until": "cleaned",
+      "budgetSec": 600
+    }
+  ]
+}
