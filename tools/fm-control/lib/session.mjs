@@ -261,6 +261,12 @@ export class Session {
           this.failures.emit("failure", `could not accept Claude theme: ${error.message}`);
         });
       }
+      if (text.includes("Select login method") &&
+          this.environment.CLAUDE_CODE_OAUTH_TOKEN) {
+        this.controller.sendKeys(this.paneId, ["enter"]).catch((error) => {
+          this.failures.emit("failure", `could not select Claude OAuth login: ${error.message}`);
+        });
+      }
       if (text.includes("Yes, I trust this folder")) {
         this.controller.sendKeys(this.paneId, ["down", "enter"]).catch((error) => {
           this.failures.emit("failure", `could not accept folder trust: ${error.message}`);
