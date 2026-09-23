@@ -510,18 +510,20 @@ SH
 # Drop every harness env marker from bin/fm-harness.sh detect_own so the
 # surrounding interactive shell cannot leak past the suite's fake ps harness.
 # Markers today: CLAUDECODE (claude), PI_CODING_AGENT plus FM_PI_HARNESS
-# (Pi family), GROK_AGENT (grok).
+# (Pi family), GROK_AGENT (grok), CURSOR_AGENT and CURSOR_INVOKED_AS (cursor).
 # codex and opencode have no env markers (ancestry only). Without this, a local
 # claude/pi/grok session fails cases that pin a different fake harness while CI
 # (no ambient markers) still passes.
 run_session_start() {
   local home=$1 root=$2 path=$3 pi_harness=${4:-}
   if [ -n "$pi_harness" ]; then
-    env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
+    env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+      PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   else
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   fi
@@ -530,7 +532,8 @@ run_session_start() {
 run_pi_session_start() {  # <home> <root> <path> [fm-session-start args...]
   local home=$1 root=$2 path=$3
   shift 3
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+  env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -540,6 +543,7 @@ run_named_harness_session_start() {  # <harness> <home> <root> <path> [fm-sessio
   local harness=$1 home=$2 root=$3 path=$4
   shift 4
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_FAKE_HARNESS="$harness" FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -1411,7 +1415,9 @@ EOF
   [ -e "$home/state/.lease-task-live" ] || fail "locked start swept a live lease"
 
   # Replay is one-shot: presenting the digest is the delivery, so the next
-  # locked start stays silent about the same outcome.
+  # locked start stays silent about the same outcome. Clear the helm records
+  # so this second pass is a real digest, not the cheap home-operable path.
+  rm -f "$home/state/.home-operable" "$home/state/.session-start-complete"
   out=$(run_pi_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   case "$out" in
     *"BRANCH OUTCOMES"*) fail "second start re-presented already-replayed branch outcomes" ;;
@@ -1977,6 +1983,7 @@ SH
 
   # shellcheck disable=SC2016 # $$ must expand in the launched shell, not here.
   out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     bash -c 'export FM_FAKE_HARNESS_PID=$$; exec "$1" 8 "$2"' _ "$nest" "$SESSION_START")
 
@@ -2013,6 +2020,7 @@ EOF
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
@@ -2249,7 +2257,8 @@ EOF
   # shellcheck source=bin/fm-timing-lib.sh
   . "$ROOT/bin/fm-timing-lib.sh"
   start_ms=$(fm_timing_now_ms)
-  first=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  first=$(FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   end_ms=$(fm_timing_now_ms)
   first_ms=$((end_ms - start_ms))
 
@@ -2273,7 +2282,8 @@ EOF
     "the operable poll did not name the matching lock pid"
 
   start_ms=$(fm_timing_now_ms)
-  second=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  second=$(FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   end_ms=$(fm_timing_now_ms)
   second_ms=$((end_ms - start_ms))
 
@@ -2304,7 +2314,8 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
 
-  first=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  first=$(FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$first" "HOME_OPERABLE: lock=" "incomplete-marker fixture lost the first start"
   lock_pid=$(cat "$home/state/.lock")
   rm -f "$home/state/.session-start-complete"
@@ -2312,7 +2323,8 @@ EOF
   mkdir -p "$home/other-secondmate/state"
   fm_write_secondmate_meta "$home/state/sm-late.meta" "$home/other-secondmate" "firstmate:fm-sm-late" beta
 
-  second=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  second=$(FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$second" "HOME_OPERABLE: lock=$lock_pid elapsed-ms=" \
     "incomplete marker start did not keep the matching marker"
   assert_contains "$second" "FLEET STATE" "incomplete marker start dropped the digest"
@@ -2367,6 +2379,7 @@ EOF
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   # A re-emit skips the sweeps because it ALREADY ran them, not because it lacks
@@ -2382,6 +2395,7 @@ EOF
   printf '%s\n' "$holder_pid" > "$home/state/.lock"
   readonly_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
