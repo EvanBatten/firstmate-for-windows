@@ -180,11 +180,29 @@
 # Hosts without timeout, gtimeout, or perl use the shared pure-Bash watchdog, so
 # the digest never runs without the same hard bound and process-group cleanup.
 #
-# Usage: fm-session-start.sh [--reemit] [--source <source>]
+# HOME-OPERABLE MARKER. Captain work is blocked by the fleet lock and by the
+# local detect-only bootstrap (missing tools, tangle, invalid backend or
+# dispatch profile), not by the rest of this digest. As soon as a lock-owning
+# start finishes that minimum, it writes state/.home-operable with the lock
+# owner's pid. bin/fm-home-operable-lib.sh owns the bytes and the match rule:
+# the marker matches when it and state/.lock are regular files carrying the
+# same numeric pid. Agents and bin/fm-control.sh may start from that match
+# without waiting for state/.session-start-complete or the fleet/context
+# sections. A read-only start never writes the marker.
+# A second start against a matching marker stays cheap: a matching completion
+# record short-circuits after re-verifying the lock, and a matching marker
+# without completion skips mutating sweeps the way --reemit does. The digest
+# prints HOME_OPERABLE: lock=<pid> elapsed-ms=<n> from the lock acquisition
+# so a control trace can measure the marker without reading this script.
+# --home-operable reports the match without taking the lock or printing the
+# digest (exit 0 yes, 1 no).
+#
+# Usage: fm-session-start.sh [--reemit] [--source <source>] [--home-operable]
 #   Prints the full ordered digest to stdout and always exits 0: this is a
 #   reporting command, not a gate. A lock refusal is reported as a loud
 #   banner inline, never a silent failure or a non-zero exit that would make
-#   an agent skip the rest of the digest.
+#   an agent skip the rest of the digest. --home-operable is the exception:
+#   it is a poll, not a digest, and exits 1 when the marker does not match.
 #
 #   --reemit  This process ALREADY took the helm at its own startup and has
 #             only lost its context (a /clear or a compaction). Skip the
@@ -201,6 +219,11 @@
 #             this session's own harness holds as its own, so the re-emit
 #             proceeds, while a lock another live session took meanwhile still
 #             produces the ordinary read-only path.
+#
+#   --home-operable
+#             Poll the early marker only. Exit 0 when state/.home-operable
+#             matches state/.lock; exit 1 otherwise. Does not take the lock,
+#             does not print the digest, and does not walk harness ancestry.
 #
 #   --source  The native session-open source, supplied only by
 #             fm-sessionstart-run.sh. A genuine `startup` that owns the active
@@ -225,11 +248,16 @@ COMPLETION_FILE="$STATE/.session-start-complete"
 AGENTS_BASELINE_FILE="$STATE/.session-start-agents-baseline"
 
 REEMIT=0
+HOME_OPERABLE_QUERY=0
 SESSION_SOURCE=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reemit)
       REEMIT=1
+      shift
+      ;;
+    --home-operable)
+      HOME_OPERABLE_QUERY=1
       shift
       ;;
     --source)
@@ -246,11 +274,26 @@ while [ "$#" -gt 0 ]; do
       ;;
     *)
       printf 'fm-session-start: unknown argument: %s\n' "$1" >&2
-      printf 'usage: fm-session-start.sh [--reemit] [--source <source>]\n' >&2
+      printf 'usage: fm-session-start.sh [--reemit] [--source <source>] [--home-operable]\n' >&2
       exit 2
       ;;
   esac
 done
+
+# shellcheck source=bin/fm-home-operable-lib.sh
+. "$SCRIPT_DIR/fm-home-operable-lib.sh"
+
+# A control-plane poll must not pay for the digest or its runtime bound.
+# The match rule walks no ancestry and reads only the two regular files.
+if [ "$HOME_OPERABLE_QUERY" -eq 1 ]; then
+  if fm_home_operable_matches_lock "$STATE"; then
+    HOME_OPERABLE_PID=$(fm_home_operable_pid "$STATE") || HOME_OPERABLE_PID=
+    printf 'HOME_OPERABLE: yes lock=%s\n' "$HOME_OPERABLE_PID"
+    exit 0
+  fi
+  printf 'HOME_OPERABLE: no\n'
+  exit 1
+fi
 
 # --- 0. runtime bound ---------------------------------------------------------
 # The ordered stage list is the contract behind the truncation banner: the child
@@ -267,6 +310,8 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
@@ -653,27 +698,56 @@ if [ "$LOCK_RC" -ne 0 ]; then
 fi
 print_agents_refresh_if_required
 
+LOCK_HELD_MS=
+HOME_OPERABLE_ALREADY=0
+HOME_OPERABLE_CHEAP=0
+SKIP_MUTATE=$REEMIT
 if [ "$READ_ONLY" -eq 0 ]; then
-  if [ "$REEMIT" -eq 0 ]; then
+  LOCK_HELD_MS=$(fm_timing_now_ms)
+  if fm_home_operable_matches_lock "$STATE"; then
+    HOME_OPERABLE_ALREADY=1
+    SKIP_MUTATE=1
+    if [ "$REEMIT" -eq 0 ] && [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
+      HOME_OPERABLE_COMPLETION_PID=$(cat "$COMPLETION_FILE" 2>/dev/null || true)
+      HOME_OPERABLE_LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
+      if [ -n "$HOME_OPERABLE_COMPLETION_PID" ] \
+        && [ "$HOME_OPERABLE_COMPLETION_PID" = "$HOME_OPERABLE_LOCK_PID" ]; then
+        HOME_OPERABLE_CHEAP=1
+      fi
+    fi
+  fi
+fi
+
+if [ "$HOME_OPERABLE_CHEAP" -eq 1 ]; then
+  HOME_OPERABLE_NOW=$(fm_timing_now_ms)
+  HOME_OPERABLE_ELAPSED=$((HOME_OPERABLE_NOW - LOCK_HELD_MS))
+  HOME_OPERABLE_PID=$(fm_home_operable_pid "$STATE") || HOME_OPERABLE_PID=
+  printf 'HOME_OPERABLE: lock=%s elapsed-ms=%s already-complete\n' \
+    "$HOME_OPERABLE_PID" "$HOME_OPERABLE_ELAPSED"
+  printf 'This session already recorded a matching home-operable marker and a completed digest.\n'
+  printf 'Do not re-run session start to wait for the rest of the digest.\n'
+  exit 0
+fi
+
+if [ "$READ_ONLY" -eq 0 ]; then
+  if [ "$REEMIT" -eq 0 ] && [ "$HOME_OPERABLE_ALREADY" -eq 0 ]; then
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
   fi
   fm_trace_context_session_start "$CONFIG" "$STATE/.trace-context-effective"
-  # A full locked start publishes this home's current structured summary.
-  # Publication is side-band and best-effort, so it can never change the
-  # session-start result. A context re-emit is not another session start.
-  if [ "$REEMIT" -eq 0 ]; then
-    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-  fi
   # Every network call this session start owes is launched HERE, detached and
   # bounded, so it runs concurrently with the whole digest below instead of in
   # front of it. Step 7 harvests whatever it has finished, without ever waiting.
   # --reemit passes --locked 0 for the same reason it runs bootstrap detect-only:
   # this process already ran the mutating sweeps at its own startup, so only the
-  # read-only GitHub-auth probe is owed. A read-only session starts nothing at
-  # all: it holds no mutation authority for the sweeps, and it must not spawn,
-  # steer, or merge anyway, so it has no action left for an auth verdict to gate.
+  # read-only GitHub-auth probe is owed. A matching home-operable marker without
+  # a cheap-complete short-circuit is the same case. A read-only session starts
+  # nothing at all: it holds no mutation authority for the sweeps, and it must
+  # not spawn, steer, or merge anyway, so it has no action left for an auth
+  # verdict to gate.
   NETWORK_STAGE_LOCKED=1
-  [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
+  if [ "$REEMIT" -eq 1 ] || [ "$HOME_OPERABLE_ALREADY" -eq 1 ]; then
+    NETWORK_STAGE_LOCKED=0
+  fi
   "$SCRIPT_DIR/fm-startup-network.sh" start \
     --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
 fi
@@ -682,25 +756,52 @@ fi
 # FM_BOOTSTRAP_NETWORK=skip on every path: bootstrap's own network half is what
 # the deferred stage above is running right now, and running it twice would both
 # re-block this digest and race the worker's sweeps against themselves.
+# Detect-only runs first so the home-operable marker can be published before
+# local mutating sweeps and the rest of the digest.
 stage bootstrap
 subsection "BOOTSTRAP"
 if [ "$READ_ONLY" -eq 1 ]; then
-  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
-    FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
-elif [ "$REEMIT" -eq 1 ]; then
-  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_LOCKED=1 FM_BOOTSTRAP_NETWORK=skip \
+  BOOT_DETECT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
-  BOOT_OUT=$(
+  BOOT_DETECT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_LOCKED=1 FM_BOOTSTRAP_NETWORK=skip \
+    FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
+fi
+if [ -n "$BOOT_DETECT" ]; then
+  printf '%s\n' "$BOOT_DETECT"
+elif [ "$READ_ONLY" -eq 1 ]; then
+  printf '(silent - all good)\n'
+fi
+
+if [ "$READ_ONLY" -eq 0 ]; then
+  HOME_OPERABLE_LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
+  HOME_OPERABLE_NOW=$(fm_timing_now_ms)
+  HOME_OPERABLE_ELAPSED=$((HOME_OPERABLE_NOW - LOCK_HELD_MS))
+  if fm_home_operable_write "$STATE" "$HOME_OPERABLE_LOCK_PID"; then
+    printf 'HOME_OPERABLE: lock=%s elapsed-ms=%s\n' \
+      "$HOME_OPERABLE_LOCK_PID" "$HOME_OPERABLE_ELAPSED"
+  else
+    printf 'HOME_OPERABLE: not recorded\n'
+  fi
+  # A full locked start publishes this home's current structured summary after
+  # the marker, so publication cannot delay captain work. Publication is
+  # side-band and best-effort, so it can never change the session-start result.
+  # A context re-emit or a cheap follow-up start is not another session start.
+  if [ "$REEMIT" -eq 0 ] && [ "$HOME_OPERABLE_ALREADY" -eq 0 ]; then
+    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  fi
+fi
+
+BOOT_MUTATE=
+if [ "$READ_ONLY" -eq 0 ] && [ "$SKIP_MUTATE" -eq 0 ]; then
+  BOOT_MUTATE=$(
     "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
-    FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
-      "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
+    FM_BOOTSTRAP_SKIP_DETECT=1 FM_BOOTSTRAP_NETWORK=skip \
+      FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
   )
 fi
-if [ -n "$BOOT_OUT" ]; then
-  printf '%s\n' "$BOOT_OUT"
-else
-  printf '(silent - all good)\n'
+if [ -n "$BOOT_MUTATE" ]; then
+  printf '%s\n' "$BOOT_MUTATE"
 fi
 
 # --- 3. inactive outcomes + wake-drain -----------------------------------

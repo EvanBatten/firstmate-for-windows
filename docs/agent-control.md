@@ -11,6 +11,12 @@ The split exists because the data plane's marking is exactly right for a message
 A routing-marked `/quit` arrives as ordinary chat - `[fm-from-firstmate] /quit` - which the agent reasons about instead of executing.
 The failure repeated across harnesses and homes, and the workaround (remember to use an unmarked send for agent-control commands, and improvise the right key or command per harness) lived only in agent prose, so it failed again every time a session did not happen to recall it.
 
+## Home operable
+
+Controlled features wait for the early home-operable marker owned by [`bin/fm-session-start.sh`](../bin/fm-session-start.sh), not for the rest of the session-start digest.
+Poll `bin/fm-session-start.sh --home-operable` or match `state/.home-operable` to `state/.lock` as that header specifies.
+A second session start against a matching marker is cheap and must not be used as the wait.
+
 ## What the control plane owns
 
 `bin/fm-control-lib.sh` is the single executable owner of three capability tables, with no side effects, so it can be read as a contract:

@@ -141,6 +141,12 @@
 #          restore a tangled primary checkout itself, while an unlocked one is
 #          told to leave that work to the lock holder. Unset/0 (the default)
 #          keeps detect-only meaning unlocked, exactly as before.
+#          Set FM_BOOTSTRAP_SKIP_DETECT=1 to skip detect_local_tools and
+#          detect_local_config only, leaving the mutating local remainder.
+#          bin/fm-session-start.sh uses it after publishing the home-operable
+#          marker so the detect-only pass is not paid for twice. Unset/0
+#          (the default) keeps today's detect-then-mutate order. Combined with
+#          FM_BOOTSTRAP_DETECT_ONLY=1 the run is a no-op; do not do that.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
 set -u
@@ -1510,13 +1516,17 @@ detect_home_summary_publication() {
 # The stamp variable is named for the library rather than `start` on purpose:
 # fleet_sync and others assign plain names like `start` without `local`, and
 # bash's dynamic scoping would let them overwrite a stamp held by a caller.
-local_phase && detect_local_tools
+if [ "${FM_BOOTSTRAP_SKIP_DETECT:-0}" != 1 ]; then
+  local_phase && detect_local_tools
+fi
 if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
-local_phase && detect_local_config
+if [ "${FM_BOOTSTRAP_SKIP_DETECT:-0}" != 1 ]; then
+  local_phase && detect_local_config
+fi
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
