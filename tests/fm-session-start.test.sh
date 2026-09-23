@@ -29,6 +29,9 @@
 #     surfaces exactly once (inline or as a wake, never both), a read-only
 #     session declares the checks it skipped, and the tasks-axi compatibility
 #     verdict is paid for once per session start
+#   - the explicit fast path for verify/control homes: lock and completion
+#     still publish, bulk digest and deferred network are skipped, a lock
+#     refusal stays read-only, and an ordinary empty home is unchanged
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -507,18 +510,20 @@ SH
 # Drop every harness env marker from bin/fm-harness.sh detect_own so the
 # surrounding interactive shell cannot leak past the suite's fake ps harness.
 # Markers today: CLAUDECODE (claude), PI_CODING_AGENT plus FM_PI_HARNESS
-# (Pi family), GROK_AGENT (grok).
+# (Pi family), GROK_AGENT (grok), CURSOR_AGENT and CURSOR_INVOKED_AS (cursor).
 # codex and opencode have no env markers (ancestry only). Without this, a local
-# claude/pi/grok session fails cases that pin a different fake harness while CI
-# (no ambient markers) still passes.
+# claude/pi/grok/cursor session fails cases that pin a different fake harness
+# while CI (no ambient markers) still passes.
 run_session_start() {
   local home=$1 root=$2 path=$3 pi_harness=${4:-}
   if [ -n "$pi_harness" ]; then
-    env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
+    env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+      PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   else
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   fi
@@ -527,7 +532,8 @@ run_session_start() {
 run_pi_session_start() {  # <home> <root> <path> [fm-session-start args...]
   local home=$1 root=$2 path=$3
   shift 3
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+  env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -537,6 +543,7 @@ run_named_harness_session_start() {  # <harness> <home> <root> <path> [fm-sessio
   local harness=$1 home=$2 root=$3 path=$4
   shift 4
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_FAKE_HARNESS="$harness" FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -1963,6 +1970,7 @@ SH
 
   # shellcheck disable=SC2016 # $$ must expand in the launched shell, not here.
   out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     bash -c 'export FM_FAKE_HARNESS_PID=$$; exec "$1" 8 "$2"' _ "$nest" "$SESSION_START")
 
@@ -1999,6 +2007,7 @@ EOF
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
@@ -2221,6 +2230,7 @@ EOF
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   # A re-emit skips the sweeps because it ALREADY ran them, not because it lacks
@@ -2236,6 +2246,7 @@ EOF
   printf '%s\n' "$holder_pid" > "$home/state/.lock"
   readonly_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
@@ -2264,6 +2275,127 @@ EOF
   assert_contains "$out" "absent" "empty fleet's AFK section did not report absent"
 
   pass "an empty fleet reports (none) for in-flight tasks and an absent AFK flag"
+}
+
+# assert_fast_session_start <out> <home> <reason>
+# Shared checks for every opt-in that selects the cheap verify/control path.
+assert_fast_session_start() {
+  local out=$1 home=$2 reason=$3
+  assert_contains "$out" "FAST SESSION START: verify/control home ($reason)" \
+    "fast path did not name its detection reason ($reason)"
+  assert_contains "$out" "lock acquired: harness pid" \
+    "fast path did not acquire the session lock"
+  assert_contains "$out" "FAST SESSION START: operable (lock held, completion recorded)." \
+    "fast path did not publish an early operable marker"
+  assert_contains "$out" "skipped (fast session start) - no live-task inventory" \
+    "fast path dumped the fleet inventory"
+  assert_contains "$out" "skipped (fast session start) - deferred network stage was not started." \
+    "fast path did not declare the skipped network stage"
+  assert_contains "$out" "skipped (fast session start) - captain memory files remain on disk" \
+    "fast path dumped the context files"
+  assert_contains "$out" "BOOTSTRAP" "fast path dropped detect-only bootstrap"
+  assert_contains "$out" "WAKE QUEUE" "fast path dropped the wake drain"
+  assert_contains "$out" "NEXT STEP" "fast path dropped the closing reminder"
+  assert_not_contains "$out" "data/captain.md" \
+    "fast path printed a context file label it should have skipped"
+  [ -s "$home/state/.lock" ] || fail "fast path left no session lock ($reason)"
+  [ -s "$home/state/.session-start-complete" ] \
+    || fail "fast path left no completion record ($reason)"
+  [ "$(cat "$home/state/.session-start-complete")" = "$(cat "$home/state/.lock")" ] \
+    || fail "fast path completion pid did not match the lock ($reason)"
+  assert_absent "$home/state/home-summary.json" \
+    "fast path published a home-summary ledger ($reason)"
+  assert_absent "$home/state/.startup-network.status" \
+    "fast path started the deferred network stage ($reason)"
+  [ -z "$(ls -A "$home/projects" 2>/dev/null)" ] \
+    || fail "fast path wrote under projects/ ($reason)"
+}
+
+test_fast_session_start_for_verify_homes() {
+  local rec root home fakebin out log probes holder_pid
+
+  rec=$(new_world fast-env)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  log="$home/tasks-axi.log"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n' > "$home/data/backlog.md"
+  append_wake "$home/state" signal verify-task "done: fast path must still drain" \
+    || fail "seed wake for fast path failed"
+
+  out=$(FM_SESSION_START_FAST=1 FM_FAKE_TASKS_AXI_LOG="$log" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_fast_session_start "$out" "$home" FM_SESSION_START_FAST
+  assert_contains "$out" "$(printf 'signal\tverify-task\tdone: fast path must still drain')" \
+    "fast path skipped the wake drain"
+  if [ -f "$log" ]; then
+    probes=$(grep -c -- '--version' "$log" || true)
+    [ "$probes" -eq 0 ] \
+      || fail "fast path still version-probed tasks-axi $probes time(s): $(cat "$log")"
+  fi
+
+  rec=$(new_world fast-verify-env)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  out=$(FM_VERIFY_HOME=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_fast_session_start "$out" "$home" FM_VERIFY_HOME
+
+  rec=$(new_world fast-marker)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/.fm-control-throwaway"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_fast_session_start "$out" "$home" .fm-control-throwaway
+
+  rec=$(new_world fast-symlink-ignored)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/.control-target"
+  ln -s "$home/.control-target" "$home/.fm-control-throwaway"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "FAST SESSION START" \
+    "a symlink marker selected the fast path"
+  [ -f "$home/state/home-summary.json" ] \
+    || fail "an ordinary empty home with a symlink marker skipped home-summary publication"
+
+  rec=$(new_world fast-lock-refusal)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  append_wake "$home/state" signal stay-queued "done: must remain queued on refusal" \
+    || fail "seed wake for fast lock-refusal failed"
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+  out=$(FM_SESSION_START_FAST=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  assert_contains "$out" "READ-ONLY SESSION" \
+    "fast path did not stay read-only when the lock was refused"
+  assert_contains "$out" "skipped (read-only session)" \
+    "fast lock-refusal did not skip the mutating wake drain"
+  assert_absent "$home/state/.session-start-complete" \
+    "fast lock-refusal recorded a completion marker"
+  assert_absent "$home/state/.startup-network.status" \
+    "fast lock-refusal started the deferred network stage"
+  [ -s "$home/state/.wake-queue" ] \
+    || fail "fast lock-refusal drained a queued wake"
+
+  pass "fast session start is opt-in, publishes early completion, and keeps lock-refusal read-only"
 }
 
 test_next_step_sources_x_mode_cadence() {
@@ -2569,6 +2701,7 @@ test_backlog_queued_bound_discloses_its_remainder
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
+test_fast_session_start_for_verify_homes
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
 test_supervision_block_exactly_one_and_pi_diagnostic
