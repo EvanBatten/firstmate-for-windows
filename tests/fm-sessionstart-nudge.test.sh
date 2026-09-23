@@ -1342,11 +1342,31 @@ test_run_unknown_source_takes_the_helm() {
   expect_code 0 "$status" "run wrapper unknown source"
   assert_contains "$out" "$FULL_BANNER$root" "an unrecognized source did not fall through to the full digest"
 
+  # A fresh root: the case above already completed startup, and a second
+  # unflagged digest against that live lock is now the already-complete skip.
+  root="$TMP_ROOT/run-unknown-sourceless"
+  make_run_primary "$root"
   status=0
   out=$(printf '{"hook_event_name":"SessionStart"}' | run_hook "$root") || status=$?
   expect_code 0 "$status" "run wrapper sourceless payload"
   assert_contains "$out" "$FULL_BANNER$root" "a payload with no source did not fall through to the full digest"
   pass "run wrapper: an unrecognized or absent source takes the helm rather than skipping it"
+}
+
+test_run_second_startup_is_already_complete() {
+  local root="$TMP_ROOT/run-second-startup" first second status=0
+  make_run_primary "$root"
+  first=$(run_hook "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper first startup"
+  assert_contains "$first" "$FULL_BANNER$root" "the first startup did not take the helm"
+  status=0
+  second=$(run_hook "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper second startup"
+  assert_contains "$second" "SESSION START ALREADY COMPLETE" \
+    "a second startup against a completed live lock still ran the full digest"
+  assert_not_contains "$second" "$FULL_BANNER$root" \
+    "a second startup against a completed live lock repeated the full banner"
+  pass "run wrapper: a second startup on a completed live lock is the already-complete notice"
 }
 
 test_run_gate_and_scope_are_silent() {
@@ -1452,6 +1472,7 @@ test_run_resume_keeps_the_hook_parent_alive_for_the_nudge
 test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
+test_run_second_startup_is_already_complete
 test_run_gate_and_scope_are_silent
 test_run_reports_a_failed_session_start_as_digest_text
 test_claude_registration_keeps_the_hook_parent_alive

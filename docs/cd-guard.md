@@ -50,6 +50,7 @@ The guard **allows** everything else, including these safe scoped forms that mus
 - The token `cd` appearing as data: quoted text (`echo "cd projects/foo"`), a comment, a substring of another word (`cdk`, `abcd`, `record`), a `printf` payload, or any later argument word.
 
 An absolute-path `cd` is blocked on purpose: the ALLOW carve-out for absolute paths is for commands that address a target by absolute path, not for `cd`, which relocates the shell itself regardless of whether its argument is relative or absolute.
+A `cd <dir> && bin/fm-session-start.sh` or `cd <dir> && bin/fm-watch-arm.sh` list is still a persistent top-level `cd` and is denied here; invoke those scripts by relative or absolute path without moving the shell.
 Blocking a top-level `cd` is safe in the strong sense: the guard's steady state is "always at the home", so a return-to-home `cd` is redundant rather than necessary, and the block never causes a wrong-directory write.
 
 ### Accepted non-goals

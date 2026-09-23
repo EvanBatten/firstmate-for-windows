@@ -6,6 +6,8 @@
 # bin/fm-lock.sh uses it to acquire and inspect state/.lock;
 # bin/fm-claude-stop-autoarm.sh uses it to prove a Stop hook fires inside the
 # lock-owning primary session before it may arm or rewake.
+# fm_session_start_completed is the shared reader of that lock plus
+# state/.session-start-complete, whose writer is bin/fm-session-start.sh.
 # It owns TWO proofs of that one question: the process ancestry, and - only
 # where the ancestry walk dead-ends - the harness session identity recorded
 # beside the lock (see the section at the end of this file).
@@ -197,6 +199,23 @@ fm_session_lock_owned_by_self() {
 $pids
 EOF
   return 1
+}
+
+# True when state dir $1 holds both a lock this process owns and a
+# session-start completion record naming that same lock pid.
+# bin/fm-session-start.sh is the sole writer of state/.session-start-complete;
+# this predicate is the shared reader used by that script and by
+# bin/fm-sessionstart-run.sh so a second unflagged digest cannot race a
+# completed helm.
+fm_session_start_completed() {  # <state>
+  local state=$1 lock_pid completion_pid
+  [ -f "$state/.lock" ] && [ ! -L "$state/.lock" ] || return 1
+  [ -f "$state/.session-start-complete" ] && [ ! -L "$state/.session-start-complete" ] || return 1
+  fm_session_lock_owned_by_self "$state" || return 1
+  lock_pid=$(cat "$state/.lock" 2>/dev/null) || return 1
+  completion_pid=$(cat "$state/.session-start-complete" 2>/dev/null) || return 1
+  case "$lock_pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$completion_pid" = "$lock_pid" ]
 }
 
 # --- session identity: the proof that survives a severed ancestry ------------

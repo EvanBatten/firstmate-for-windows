@@ -759,6 +759,12 @@ test_scout_and_secondmate_scaffold() {
   assert_present "$brief" "secondmate charter was not scaffolded"
   assert_grep "persistent second mate" "$brief" \
     "secondmate charter must declare its role"
+  assert_grep 'never as `cd <dir> && ...`' "$brief" \
+    "secondmate charter must not teach a cd-prefixed session-start"
+  assert_grep "already complete for this lock" "$brief" \
+    "secondmate charter must skip a completed session-start"
+  assert_grep 'blessed `bin/fm-watch-arm.sh`' "$brief" \
+    "secondmate charter must name the blessed watcher-arm entry"
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 

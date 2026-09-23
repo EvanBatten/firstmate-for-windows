@@ -274,7 +274,9 @@ Routine internal supervision, heartbeats, retries, and crewmate churn stay insid
 
 # Definition of done
 You are persistent by default. Do not exit just because your queue is empty.
-On startup and restart, run normal firstmate bootstrap and recovery through \`bin/fm-session-start.sh\` for your own home, but only to RECONCILE work that is already yours: in-flight crewmates, tracked backlog items, and durable watches recorded in this home.
+On startup and restart, run normal firstmate bootstrap and recovery through \`bin/fm-session-start.sh\` or that script's absolute path for your own home, never as \`cd <dir> && ...\`, but only to RECONCILE work that is already yours: in-flight crewmates, tracked backlog items, and durable watches recorded in this home.
+When that digest is already complete for this lock, do not run it again.
+If this home needs a watcher cycle, invoke the blessed \`bin/fm-watch-arm.sh\` standalone or by absolute path, never \`bin/fm-watch.sh\`, never \`bin/fm-watch-arm.sh &\`, and never prefix the arm with \`cd\`.
 When you have no assigned or in-flight work after that reconciliation, go idle and wait silently for the main firstmate to route you a task.
 An empty queue is a healthy resting state, not a cue to invent work: never spawn a survey, audit, or any self-directed "find work" task on your own initiative.
 If this charter cannot be carried out, append \`blocked: {why}\` or \`failed: {why}\` to the main status file and stop.
