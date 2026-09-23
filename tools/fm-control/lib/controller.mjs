@@ -214,6 +214,13 @@ export class HerdrController extends EventEmitter {
         type: "pane.output_matched",
         pane_id: paneId,
         source: "recent_unwrapped",
+        match: { type: "substring", value: "Choose the text style that looks best" },
+        strip_ansi: true,
+      },
+      {
+        type: "pane.output_matched",
+        pane_id: paneId,
+        source: "recent_unwrapped",
         match: { type: "substring", value: "Yes, I trust this folder" },
         strip_ansi: true,
       },

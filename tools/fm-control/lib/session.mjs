@@ -256,6 +256,11 @@ export class Session {
   handleEvent(event) {
     if (event.event === "pane.output_matched") {
       const text = eventText(event);
+      if (text.includes("Choose the text style that looks best")) {
+        this.controller.sendKeys(this.paneId, ["enter"]).catch((error) => {
+          this.failures.emit("failure", `could not accept Claude theme: ${error.message}`);
+        });
+      }
       if (text.includes("Yes, I trust this folder")) {
         this.controller.sendKeys(this.paneId, ["down", "enter"]).catch((error) => {
           this.failures.emit("failure", `could not accept folder trust: ${error.message}`);
