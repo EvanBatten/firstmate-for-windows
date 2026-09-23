@@ -35,6 +35,7 @@ export async function run(tracePath, environment = process.env) {
           until: step.until,
           ms: Date.now() - stepStarted,
           ok: outcome.ok === true,
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
         });
         if (!outcome.ok) break;
       } catch (error) {
@@ -42,6 +43,7 @@ export async function run(tracePath, environment = process.env) {
           until: step.until,
           ms: Date.now() - stepStarted,
           ok: false,
+          reason: error.message,
         });
         runtimeError = error;
         break;

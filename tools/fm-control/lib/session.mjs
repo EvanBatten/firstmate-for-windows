@@ -59,12 +59,12 @@ function seedBareProject(path) {
   return commit;
 }
 
-function prepareCopiedHome(feature) {
+export function prepareCopiedHome(feature) {
   const scratch = mkdtempSync(join(tmpdir(), `fm-control-${feature}-`));
   const home = join(scratch, "firstmate");
   cpSync(REPO_ROOT, home, {
     recursive: true,
-    verbatimSymlinks: true,
+    dereference: true,
     filter(source) {
       const rel = relative(REPO_ROOT, source);
       if (!rel) return true;
@@ -77,6 +77,28 @@ function prepareCopiedHome(feature) {
   }
   writeFileSync(join(home, ".fm-control-throwaway"), "created by fm-control\n");
   return { scratch, home, owned: true };
+}
+
+function prepareClaudeConfig(home) {
+  const config = join(home, ".fm-control-claude");
+  mkdirSync(config, { recursive: true });
+  writeFileSync(
+    join(config, ".claude.json"),
+    `${JSON.stringify({
+      hasCompletedOnboarding: true,
+      bypassPermissionsModeAccepted: true,
+      projects: {
+        [home]: { hasTrustDialogAccepted: true },
+      },
+    })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(config, "settings.json"),
+    `${JSON.stringify({ theme: "dark" })}\n`,
+    { mode: 0o600 },
+  );
+  return config;
 }
 
 function prepareHome(feature, environment) {
@@ -95,7 +117,11 @@ function paneEnvironment(home, environment) {
   const localBin = join(homedir(), ".local", "bin");
   const tools = join(home, ".tools", "node_modules", ".bin");
   const path = [tools, localBin, environment.PATH || ""].filter(Boolean).join(delimiter);
-  const result = { PATH: path };
+  const result = {
+    PATH: path,
+    FM_HOME: home,
+    CLAUDE_CONFIG_DIR: prepareClaudeConfig(home),
+  };
   const oauth = environment.CLAUDE_CODE_OAUTH_TOKEN ||
     environment.CLAUDE_CODE_OATH_TOKEN;
   if (oauth) result.CLAUDE_CODE_OAUTH_TOKEN = oauth;
@@ -135,6 +161,7 @@ export class Session {
     this.relaunching = false;
     this.relaunchStarted = false;
     this.running = false;
+    this.primaryBlocked = false;
     this.closed = false;
     this.projectSeeds = {};
   }
@@ -256,22 +283,6 @@ export class Session {
   handleEvent(event) {
     if (event.event === "pane.output_matched") {
       const text = eventText(event);
-      if (text.includes("Choose the text style that looks best")) {
-        this.controller.sendKeys(this.paneId, ["enter"]).catch((error) => {
-          this.failures.emit("failure", `could not accept Claude theme: ${error.message}`);
-        });
-      }
-      if (text.includes("Select login method") &&
-          this.environment.CLAUDE_CODE_OAUTH_TOKEN) {
-        this.controller.sendKeys(this.paneId, ["enter"]).catch((error) => {
-          this.failures.emit("failure", `could not select Claude OAuth login: ${error.message}`);
-        });
-      }
-      if (text.includes("Yes, I trust this folder")) {
-        this.controller.sendKeys(this.paneId, ["down", "enter"]).catch((error) => {
-          this.failures.emit("failure", `could not accept folder trust: ${error.message}`);
-        });
-      }
       if (text.includes("Background work is running") && this.relaunching) {
         this.controller.sendKeys(this.paneId, ["enter"]).catch((error) => {
           this.failures.emit("failure", `could not confirm primary exit: ${error.message}`);
@@ -290,6 +301,7 @@ export class Session {
     }
     if (event.event !== "pane.agent_status_changed") return;
     const status = event?.data?.agent_status;
+    this.primaryBlocked = status === "blocked";
     if (this.relaunching && status === "unknown") {
       this.restartAtPrompt().catch((error) => {
         this.failures.emit("failure", `could not restart primary: ${error.message}`);
@@ -336,7 +348,12 @@ export class Session {
     clearTimeout(this.readyTimer);
     this.readyWatcher?.close();
     try {
-      if (this.paneId) await this.controller?.sendInput(this.paneId, "/exit");
+      if (this.paneId) {
+        if (this.primaryBlocked) {
+          await this.controller?.sendKeys(this.paneId, ["escape"]);
+        }
+        await this.controller?.sendInput(this.paneId, "/exit");
+      }
     } catch {}
     const pid = this.prepared ? watcherPid(this.prepared.home) : null;
     if (pid) {

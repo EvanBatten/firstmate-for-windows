@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { evaluatePredicate, snapshotHome } from "./lib/home.mjs";
+import { prepareCopiedHome } from "./lib/session.mjs";
 import { parseUntil } from "./lib/trace.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -100,6 +103,51 @@ test("home predicates return literal booleans over fixtures", () => {
   }
 });
 
+test("copied homes materialize the tracked skill link", () => {
+  const prepared = prepareCopiedHome("copy-portable");
+  try {
+    const skills = join(prepared.home, ".claude", "skills");
+    assert.equal(lstatSync(skills).isDirectory(), true);
+    assert.equal(lstatSync(skills).isSymbolicLink(), false);
+    assert.equal(
+      lstatSync(join(skills, "control-firstmate", "SKILL.md")).isFile(),
+      true,
+    );
+  } finally {
+    rmSync(prepared.scratch, { recursive: true, force: true });
+  }
+});
+
+test("blocked decisions fail with a reason and cleanup cancels them", () => {
+  const { root, home } = temporaryHome("fm-control-blocked-");
+  const trace = join(root, "trace.json");
+  const log = join(root, "fake.log");
+  writeFileSync(trace, JSON.stringify({
+    feature: "blocked",
+    steps: [{ say: "trigger a decision", until: "project-registered:greeter" }],
+  }));
+  const result = runDriver(trace, {
+    FM_CONTROL_HOME: home,
+    FM_CONTROL_FAKE_HERDR: FAKE,
+    FM_CONTROL_FAKE_LOG: log,
+    FM_CONTROL_FAKE_BLOCKED: "1",
+    FM_CONTROL_READY_MS: "5000",
+  });
+  assert.equal(result.status, 1, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(output.steps.map((step) => ({
+    until: step.until,
+    ok: step.ok,
+    reason: step.reason,
+  })), [{
+    until: "project-registered:greeter",
+    ok: false,
+    reason: "primary stopped for an unanswered decision",
+  }]);
+  const sent = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+  assert.deepEqual(sent, ["trigger a decision", "$decision-cancelled"]);
+});
+
 test("fake Herdr drives restart trace and sends each captain say once", () => {
   const { root, home } = temporaryHome("fm-control-e2e-");
   const log = join(root, "fake.log");
@@ -108,6 +156,7 @@ test("fake Herdr drives restart trace and sends each captain say once", () => {
     FM_CONTROL_FAKE_HERDR: FAKE,
     FM_CONTROL_FAKE_LOG: log,
     FM_CONTROL_READY_MS: "5000",
+    CLAUDE_CODE_OAUTH_TOKEN: "not-a-real-token",
   });
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
@@ -129,4 +178,21 @@ test("fake Herdr drives restart trace and sends each captain say once", () => {
   const sent = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
   assert.deepEqual(sent, expected);
   assert.equal(sent.includes("$relaunch"), false);
+
+  const config = join(home, ".fm-control-claude");
+  const global = JSON.parse(readFileSync(join(config, ".claude.json"), "utf8"));
+  const settings = JSON.parse(readFileSync(join(config, "settings.json"), "utf8"));
+  assert.deepEqual(global, {
+    hasCompletedOnboarding: true,
+    bypassPermissionsModeAccepted: true,
+    projects: {
+      [home]: { hasTrustDialogAccepted: true },
+    },
+  });
+  assert.deepEqual(settings, { theme: "dark" });
+  assert.equal(
+    `${readFileSync(join(config, ".claude.json"))}${readFileSync(join(config, "settings.json"))}`
+      .includes("not-a-real-token"),
+    false,
+  );
 });

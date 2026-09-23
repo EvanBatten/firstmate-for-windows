@@ -12,6 +12,8 @@ import { createInterface } from "node:readline";
 const home = process.env.FM_CONTROL_HOME;
 const log = process.env.FM_CONTROL_FAKE_LOG;
 let launches = 0;
+let paneEnvironment = {};
+let decisionOpen = false;
 
 function reply(id, result) {
   process.stdout.write(`${JSON.stringify({ id, result })}\n`);
@@ -26,7 +28,29 @@ function setLock(identity) {
   writeFileSync(join(home, "state", ".lock"), `${identity}\n`);
 }
 
+function claudeProfileIsReady() {
+  const config = paneEnvironment.CLAUDE_CONFIG_DIR;
+  if (!config || paneEnvironment.FM_HOME !== home) return false;
+  try {
+    const global = JSON.parse(readFileSync(join(config, ".claude.json"), "utf8"));
+    const settings = JSON.parse(readFileSync(join(config, "settings.json"), "utf8"));
+    return global.hasCompletedOnboarding === true &&
+      global.bypassPermissionsModeAccepted === true &&
+      global.projects?.[home]?.hasTrustDialogAccepted === true &&
+      settings.theme === "dark";
+  } catch {
+    return false;
+  }
+}
+
 function launch() {
+  if (!claudeProfileIsReady()) {
+    event("pane.output_matched", {
+      pane_id: "w1:p1",
+      matched_line: "Select login method",
+    });
+    return;
+  }
   launches += 1;
   setLock(`fake-lock-${launches}`);
   queueMicrotask(() => {
@@ -74,6 +98,9 @@ function handleInput(text) {
     return;
   }
   if (text === "/exit") {
+    if (decisionOpen && log) {
+      appendFileSync(log, `${JSON.stringify("$decision-answered")}\n`);
+    }
     queueMicrotask(() => {
       event("pane.agent_status_changed", {
         pane_id: "w1:p1",
@@ -89,6 +116,18 @@ function handleInput(text) {
     return;
   }
   if (log) appendFileSync(log, `${JSON.stringify(text)}\n`);
+  if (process.env.FM_CONTROL_FAKE_BLOCKED === "1") {
+    decisionOpen = true;
+    setTimeout(() => {
+      event("pane.agent_status_changed", {
+        pane_id: "w1:p1",
+        workspace_id: "w1",
+        agent_status: "blocked",
+        agent: "claude",
+      });
+    }, 10);
+    return;
+  }
   if (text.includes("add my project")) registerProject(text);
   if (text.includes("I'm back")) finishProject();
 }
@@ -97,6 +136,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   switch (request.method) {
     case "workspace.create":
+      paneEnvironment = request.params.env || {};
       reply(request.id, {
         type: "workspace_created",
         workspace: { workspace_id: "w1" },
@@ -111,6 +151,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       handleInput(request.params.text || "");
       break;
     case "pane.send_keys":
+      if (decisionOpen && request.params.keys?.includes("escape")) {
+        decisionOpen = false;
+        if (log) appendFileSync(log, `${JSON.stringify("$decision-cancelled")}\n`);
+      }
+      reply(request.id, { type: "ok" });
+      break;
     case "workspace.focus":
     case "workspace.close":
       reply(request.id, { type: "ok" });

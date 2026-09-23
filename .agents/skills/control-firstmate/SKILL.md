@@ -13,6 +13,16 @@ metadata:
 Use this skill for the real-session portion of `verify-firstmate`.
 The driver creates its own throwaway home and Herdr workspace, starts a real Claude primary, types each captain message once, and closes only resources it created.
 
+The driver gives Claude an isolated `CLAUDE_CONFIG_DIR` inside the throwaway home.
+It marks onboarding, folder trust, and the bypass-permissions disclaimer complete and selects a theme before launch, then passes `CLAUDE_CODE_OAUTH_TOKEN` only through the pane environment.
+Never persist, print, or add that token to result evidence.
+Do not replace this setup with prompt keystrokes.
+
+Repository copies dereference the tracked `.claude/skills` link so the throwaway home does not require Windows symlink privileges.
+Herdr 0.7.4 protocol 16 accepts one request per control connection, so the driver opens a fresh connection for each request and keeps only the event subscription open.
+On Windows, Herdr 0.8.2 implements local IPC with protected named pipes instead of AF_UNIX.
+Linux results do not prove that Node can consume the Windows `status.server.socket` value; rerun the same trace on a Windows host before recording Windows support as proven.
+
 Write a trace as:
 
 ```json
