@@ -111,8 +111,12 @@ session_open() {  # <workspace label>
   [ -n "$SESSION_WS" ] && [ -n "$SESSION_PANE" ] || { bad "Herdr created a workspace but reported no pane for it"; verify_done; }
   quoted=${bash_win//\'/\'\'}
   # pwsh expands these in the pane, not this shell.
+  # Git Bash --login keeps an inherited ORIGINAL_PATH and ignores the PATH just
+  # assigned, so the toolchain injection never arrives. A Cursor worker also
+  # leaks CURSOR_AGENT into this pane, and harness detection trusts that marker
+  # ahead of the claude process this session starts.
   # shellcheck disable=SC2016
-  session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1
+  session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; Remove-Item Env:ORIGINAL_PATH,Env:CURSOR_AGENT,Env:CURSOR_INVOKED_AS -ErrorAction SilentlyContinue; '"& '$quoted' --login" >/dev/null 2>&1
   # wait-output's regex runs on the whole buffer and session_herdr kills it
   # at 30s, so a visible `$` still failed this claim. Read the last lines.
   prompted=0
