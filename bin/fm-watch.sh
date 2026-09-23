@@ -1092,6 +1092,7 @@ event_wait_or_sleep() {
 
   # Memoized capability probe (fm_backend_events_capable runs a heavy schema
   # read); re-probed only when the backend/session key changes.
+  watcher_beat
   if [ "$_event_cap_key" != "$first_backend:$first_session" ]; then
     _event_cap_key="$first_backend:$first_session"
     if fm_backend_events_capable "$first_backend" "$first_session"; then
@@ -1205,7 +1206,47 @@ home_summary_refresh_detached() {
 }
 
 watcher_cleanup() {
-  local cleanup_status=0 owns_lock=0 transition=release-lock
+  local cleanup_status=0 owns_lock=0 transition=release-lock i refresh_lock holder ownerdir lockdir
+  # The detached home-summary refresh holds the refresh lock, and a stale
+  # holder makes it take the steal mutex. Stopping this watcher without
+  # letting that child finish leaves the steal behind, and a home then looks
+  # like it has a lock takeover. Wait, then signal it so its own cleanup runs.
+  if [ -n "${HOME_SUMMARY_PID:-}" ]; then
+    i=0
+    while [ "$i" -lt 300 ] && kill -0 "$HOME_SUMMARY_PID" 2>/dev/null; do
+      sleep 0.2
+      i=$((i + 1))
+    done
+    if kill -0 "$HOME_SUMMARY_PID" 2>/dev/null; then
+      kill "$HOME_SUMMARY_PID" 2>/dev/null || true
+      wait "$HOME_SUMMARY_PID" 2>/dev/null || true
+    fi
+    HOME_SUMMARY_PID=
+  fi
+  # A killed refresh can leave its lock owner behind when its own release does
+  # not run. Drop that lock only when the recorded holder is already dead.
+  refresh_lock="$STATE/.home-summary-refresh.lock"
+  for lockdir in "$refresh_lock" "$refresh_lock.steal"; do
+    [ -e "$lockdir" ] || [ -L "$lockdir" ] || continue
+    holder=
+    if [ -L "$lockdir" ]; then
+      ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+      holder=$(cat "${ownerdir:-$lockdir}/pid" 2>/dev/null || true)
+    else
+      holder=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fi
+    if ! fm_pid_alive "$holder"; then
+      fm_lock_remove_path "$lockdir" || true
+    fi
+  done
+  for ownerdir in "$STATE"/.home-summary-refresh.lock.owner.* "$STATE"/.home-summary-refresh.lock.steal.owner.*; do
+    [ -d "$ownerdir" ] && [ ! -L "$ownerdir" ] || continue
+    holder=$(cat "$ownerdir/pid" 2>/dev/null || true)
+    if fm_pid_alive "$holder" && { fm_lock_points_to_owner "$refresh_lock" "$ownerdir" || fm_lock_points_to_owner "$refresh_lock.steal" "$ownerdir"; }; then
+      continue
+    fi
+    fm_lock_discard_owner "$ownerdir" || true
+  done
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
     owns_lock=1
     if [ "${WATCHER_RECOVERY_PENDING:-0}" -eq 1 ] \
@@ -1225,6 +1266,13 @@ watcher_cleanup() {
 }
 trap watcher_cleanup EXIT
 trap 'exit 1' HUP INT TERM
+# The loop top is this process's liveness beat. A Git Bash cycle spent about
+# 350s between those tops, past the 300s freshness bound, while this process
+# was alive and delivering a wake. Beat again around the slow steps. A helper
+# must not beat for us (docs/watcher-continuity.md).
+watcher_beat() {
+  touch "$STATE/.last-watcher-beat" 2>/dev/null || true
+}
 # This watcher's own pid, as recorded in the lock by fm_lock_claim (which writes
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
@@ -1235,6 +1283,7 @@ printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 FM_WATCH_DELIVERY_PID=$WATCHER_PID
 FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
 printf '%s\n' "$FM_WATCH_DELIVERY_IDENTITY" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
+watcher_beat
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
@@ -1290,7 +1339,7 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  watcher_beat
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
@@ -1337,6 +1386,7 @@ while :; do
   else
     triage_log "inactive-outcome reconciliation unavailable"
   fi
+  watcher_beat
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
@@ -1542,6 +1592,7 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
+    watcher_beat
     tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     hf="$STATE/.hash-$key"
@@ -1752,5 +1803,6 @@ EOF
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.
+  watcher_beat
   event_wait_or_sleep
 done

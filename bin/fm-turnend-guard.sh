@@ -63,9 +63,14 @@
 #      FM_CLAUDE_AUTOARM_SYNC_WAIT_MS (default 800ms) is its floor, twice the
 #      home's slowest measured time-to-claim (state/.claude-autoarm-claim-ms,
 #      written by bin/fm-claude-stop-autoarm.sh) widens it, and
-#      FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS (default 15000ms) bounds that
-#      widening, and a home that has never claimed gets that bound once,
-#      because its first claim is the slow one - the loop below owns why;
+#      FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS (default 120000ms) bounds that
+#      widening. A recorded 41400ms claim was cut to the old 15000ms cap, so
+#      the guard treated a live auto-arm as absent. A home that has never
+#      claimed waits FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS once, because its
+#      first claim is the slow one and that bound is not the measured cap.
+#      The default is 15000ms, and 90000ms on Git Bash, where a fresh home
+#      claimed in 37769ms and the 15s bound blocked the turn. The loop below
+#      owns why;
 #   3. only when neither materializes is the auto-arm genuinely absent: re-block
 #      with the repair banner, bounded to FM_CLAUDE_TURNEND_BLOCK_BUDGET
 #      (default 3) consecutive blocks per session - safely below Claude Code's
@@ -83,11 +88,19 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 CLAUDE_MODE=0
 CURSOR_MODE=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
-SYNC_WAIT_MAX_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS:-15000}
+SYNC_WAIT_MAX_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS:-120000}
+# A fresh Git Bash home's first claim measured 37769ms. The 15s bound expired
+# first and the guard blocked a turn the auto-arm was still claiming.
+case "${OSTYPE:-}" in
+  msys*|mingw*|cygwin*) FIRST_CLAIM_WAIT_DEFAULT=90000 ;;
+  *) FIRST_CLAIM_WAIT_DEFAULT=15000 ;;
+esac
+FIRST_CLAIM_WAIT_MS=${FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS:-$FIRST_CLAIM_WAIT_DEFAULT}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
 case "$SYNC_WAIT_MS" in ''|*[!0-9]*) SYNC_WAIT_MS=800 ;; *) SYNC_WAIT_MS=$((10#$SYNC_WAIT_MS)) ;; esac
-case "$SYNC_WAIT_MAX_MS" in ''|*[!0-9]*) SYNC_WAIT_MAX_MS=15000 ;; *) SYNC_WAIT_MAX_MS=$((10#$SYNC_WAIT_MAX_MS)) ;; esac
+case "$SYNC_WAIT_MAX_MS" in ''|*[!0-9]*) SYNC_WAIT_MAX_MS=120000 ;; *) SYNC_WAIT_MAX_MS=$((10#$SYNC_WAIT_MAX_MS)) ;; esac
+case "$FIRST_CLAIM_WAIT_MS" in ''|*[!0-9]*|0) FIRST_CLAIM_WAIT_MS=$FIRST_CLAIM_WAIT_DEFAULT ;; *) FIRST_CLAIM_WAIT_MS=$((10#$FIRST_CLAIM_WAIT_MS)) ;; esac
 case "$EPOCH_FRESH" in ''|*[!0-9]*|0) EPOCH_FRESH=15 ;; esac
 case "$BLOCK_BUDGET" in ''|*[!0-9]*|0) BLOCK_BUDGET=3 ;; esac
 
@@ -414,8 +427,8 @@ failure_episode_verified() {
 # its nominal 800 ms and still missed the auto-arm's first claim, which needs
 # about 5.1 s there: every first Stop of a session ended in one forced
 # continuation (docs/windows/measurement.md, issue #6).
-# Raising the constant instead would hold every turn on a slow host for a budget
-# no host has been shown to need, so the window is sized from what THIS home has
+# Raising the floor would hold every turn on a slow host for a budget no host
+# has been shown to need, so the window is sized from what THIS home has
 # measured: twice the slowest time-to-claim bin/fm-claude-stop-autoarm.sh has
 # recorded, bounded by SYNC_WAIT_MAX_MS and never below SYNC_WAIT_MS. A missing
 # or malformed record leaves the window at SYNC_WAIT_MS, so the CONFIGURED
@@ -443,12 +456,13 @@ if [ "$CLAIM_MS" -gt 0 ]; then
 fi
 # A home that has never claimed has no measurement to size the window from,
 # and its first claim is the slow one: 12650 ms in a fresh Git Bash home
-# (issue #86), against an 800 ms floor. Blocking that first Stop is not one
-# forced continuation, because the primary then polls its workers for the
-# rest of the session instead of ending a turn again. So a never-claimed home
-# gets the whole bound once; the loop still exits the moment the claim lands.
-if [ "$CLAIM_MS" -eq 0 ] && [ ! -e "$STATE/.claude-autoarm-claim-ms" ] && [ ! -e "$STATE/.claude-autoarm-epoch" ] && [ "$SYNC_WAIT_MAX_MS" -gt "$WINDOW_MS" ]; then
-  WINDOW_MS=$SYNC_WAIT_MAX_MS
+# (issue #86), and 37769 ms in a later one, against an 800 ms floor.
+# Blocking that first Stop is not one forced continuation, because the
+# primary then polls its workers for the rest of the session instead of
+# ending a turn again. So a never-claimed home gets FIRST_CLAIM_WAIT_MS
+# once, not the measured cap; the loop still exits the moment the claim lands.
+if [ "$CLAIM_MS" -eq 0 ] && [ ! -e "$STATE/.claude-autoarm-claim-ms" ] && [ ! -e "$STATE/.claude-autoarm-epoch" ] && [ "$FIRST_CLAIM_WAIT_MS" -gt "$WINDOW_MS" ]; then
+  WINDOW_MS=$FIRST_CLAIM_WAIT_MS
 fi
 DEADLINE_MS=$(( $(fm_timing_now_ms) + WINDOW_MS ))
 while [ "$(fm_timing_now_ms)" -lt "$DEADLINE_MS" ]; do

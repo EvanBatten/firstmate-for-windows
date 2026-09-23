@@ -26,7 +26,19 @@ captain_says "ahoy! add my project from $PROJECT_ORIGIN as a local-only project 
 
 registered() { grep -q '^- greeter ' "$SESSION_HOME/data/projects.md" && [ -d "$SESSION_HOME/projects/greeter/.git" ]; }
 session_wait "the project is registered and cloned into the home" 600 registered
-dispatched() { [ "$(session_task_ids | wc -l | tr -d ' ')" -ge 1 ]; }
+# The task record is written while the worker pane is still starting. Leaving
+# at that moment exits the primary before it can accept the folder-trust
+# dialog, and the worker then sits on that dialog for the rest of the run.
+dispatched() {
+  local id pane text
+  [ "$(session_task_ids | wc -l | tr -d ' ')" -ge 1 ] || return 1
+  id=$(session_task_ids | head -1)
+  pane=$(session_meta "$id" herdr_pane_id)
+  [ -n "$pane" ] || return 1
+  text=$(session_pane_text "$pane" 80)
+  printf '%s\n' "$text" | grep -q 'Yes, I trust this folder' && return 1
+  printf '%s\n' "$text" | grep -q 'bypass permissions'
+}
 session_wait "a worker is dispatched" 900 dispatched
 ID=$(session_task_ids | head -1)
 PANE=$(session_meta "$ID" herdr_pane_id)

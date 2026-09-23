@@ -72,8 +72,11 @@ GRACE=${FM_GUARD_GRACE:-300}
 # How long to wait for a freshly forked watcher to acquire the lock and beat.
 # Git Bash/MSYS pays a much higher fork cost while the watcher completes its
 # required pre-lock migration, so its bounded default covers that cold start.
+# A cold start there first touched the beacon at 51s, and the next one at
+# 76s. The old 30s bound killed the watcher with confirmation-timeout
+# before any beacon existed.
 case "${OSTYPE:-}" in
-  msys*|mingw*|cygwin*) ARM_CONFIRM_DEFAULT=30 ;;
+  msys*|mingw*|cygwin*) ARM_CONFIRM_DEFAULT=120 ;;
   *) ARM_CONFIRM_DEFAULT=10 ;;
 esac
 CONFIRM_TIMEOUT=${FM_ARM_CONFIRM_TIMEOUT:-$ARM_CONFIRM_DEFAULT}

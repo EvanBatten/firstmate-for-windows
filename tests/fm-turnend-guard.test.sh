@@ -10,6 +10,11 @@
 # All hermetic over temp dirs; no real agent session is invoked.
 set -u
 
+# Pin the first-claim bound. Git Bash's unset default is 90s, and a fresh
+# home that never claims would otherwise spend that whole bound on every
+# block this file expects to be short.
+export FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS=15000
+
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -294,7 +299,9 @@ test_hook_non_claude_health_ignores_claude_budget_contention() {
   dir=$(make_primary_dir "$TMP_ROOT/hook-non-claude-budget-contention")
   home=$(cd "$dir" && pwd)
   : > "$dir/state/task1.meta"
-  sleep 60 &
+  # Seven guard invocations follow. One invocation sources the guard in about
+  # 12s on a slow Git Bash, so a 60s holder dies before the last harness.
+  sleep 180 &
   pid=$!
   identity=$(watcher_identity "$dir" "$pid") || {
     kill "$pid" 2>/dev/null || true
@@ -306,7 +313,7 @@ test_hook_non_claude_health_ignores_claude_budget_contention() {
   printf 'session=claude-episode\ncount=3\nepoch=9\n' > "$dir/state/.turnend-claude-blocks"
   printf 'notice-state\n' > "$dir/state/.claude-autoarm-failure-notified"
   printf 'alarm-state\n' > "$dir/state/.claude-autoarm-failure-alarmed"
-  sleep 60 &
+  sleep 180 &
   holder=$!
   mkdir -p "$dir/state/.turnend-claude-blocks.lock"
   printf '%s\n' "$holder" > "$dir/state/.turnend-claude-blocks.lock/pid"
@@ -1790,7 +1797,7 @@ test_hook_claude_mode_window_is_a_wall_clock_deadline() {
   : > "$dir/state/task1.meta"
   assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
   late_claim_publish "$dir" 8
-  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=3000 run_hook_claude "$dir" false); status=$?
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=3000 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=3000 FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS=3000 run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
   expect_code 2 "$status" "a 3000 ms window must expire on the clock, not after 30 polls of whatever the host charges"
   assert_contains "$out" "TURN WOULD END BLIND" "the expired window must still carry the blind-turn banner"
@@ -1830,6 +1837,32 @@ test_hook_claude_mode_never_claimed_home_waits_the_bound() {
   pass "fm-turnend-guard --claude: a home that has never claimed waits the whole bound on its first turn end"
 }
 
+# Git Bash's unset default is 90s. A claim at 16s used to miss the 15s bound
+# and force a continuation on a fresh home.
+test_hook_claude_mode_git_bash_first_claim_default_covers_a_slow_claim() {
+  local dir out status
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*) ;;
+    *)
+      pass "fm-turnend-guard --claude: Git Bash first-claim default is not this host"
+      return
+      ;;
+  esac
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-git-bash-first")
+  : > "$dir/state/task1.meta"
+  assert_absent "$dir/state/.claude-autoarm-epoch" "this case must start with no claim ledger"
+  assert_absent "$dir/state/.claude-autoarm-claim-ms" "this case must start with no recorded time-to-claim"
+  late_claim_publish "$dir" 16
+  out=$(
+    unset FM_CLAUDE_AUTOARM_FIRST_CLAIM_WAIT_MS
+    FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false
+  ); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "Git Bash must still be waiting at 16 s for a first claim"
+  [ -z "$out" ] || fail "the Git Bash first claim produced output: $out"
+  pass "fm-turnend-guard --claude: a fresh Git Bash home waits past 15 s for its first claim"
+}
+
 test_hook_claude_mode_malformed_record_keeps_the_floor() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-malformed-record")
@@ -1865,9 +1898,24 @@ test_hook_claude_mode_caps_the_widened_window() {
   late_claim_publish "$dir" 8
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
-  expect_code 0 "$status" "the default 15 s cap must still hold an 8 s claim inside the window"
+  expect_code 0 "$status" "the default measured cap must still hold an 8 s claim inside the window"
   [ -z "$out" ] || fail "the default-cap allow produced output: $out"
   pass "fm-turnend-guard --claude: the cap bounds what a measurement may widen the window to"
+}
+
+# A recorded 41400 ms claim used to be cut to the 15 s measured cap, so the
+# guard decided the auto-arm was absent while the claim was still in flight.
+test_hook_claude_mode_recorded_slow_claim_outlasts_the_old_fifteen_second_cap() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-slow-claim")
+  : > "$dir/state/task1.meta"
+  printf '41400\n' > "$dir/state/.claude-autoarm-claim-ms"
+  late_claim_publish "$dir" 16
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" false); status=$?
+  late_claim_cleanup "$dir"
+  expect_code 0 "$status" "a recorded 41400 ms claim must widen the window past 15 s so a claim at 16 s is honored"
+  [ -z "$out" ] || fail "the slow recorded claim produced output: $out"
+  pass "fm-turnend-guard --claude: a recorded slow claim is not cut back to 15 s"
 }
 
 # The same 60 s measurement and the same 8 s claim under a malformed cap: the
@@ -1884,7 +1932,7 @@ test_hook_claude_mode_malformed_cap_falls_back_to_the_default() {
   late_claim_publish "$dir" 8
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 FM_CLAUDE_AUTOARM_SYNC_WAIT_MAX_MS=not-a-number run_hook_claude "$dir" false); status=$?
   late_claim_cleanup "$dir"
-  expect_code 0 "$status" "a malformed cap must fall back to the 15 s default, which still holds an 8 s claim"
+  expect_code 0 "$status" "a malformed cap must fall back to the default measured cap, which still holds an 8 s claim"
   [ -z "$out" ] || fail "the malformed-cap fallback produced output: $out"
   pass "fm-turnend-guard --claude: a malformed cap falls back to the default rather than to no window or an error"
 }
@@ -1960,6 +2008,8 @@ test_hook_claude_mode_leading_zero_window_bounds_are_decimal() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-floor-leading-zero")
   : > "$dir/state/task1.meta"
+  printf 'epoch=1 owner_pid=1 outcome=rewake updated_at=1\n' > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
   assert_absent "$dir/state/.claude-autoarm-claim-ms" "the floor cases must size the window from the floor alone"
   late_claim_publish "$dir" 7
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=010000 run_hook_claude "$dir" false); status=$?
@@ -1969,6 +2019,8 @@ test_hook_claude_mode_leading_zero_window_bounds_are_decimal() {
 
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-floor-leading-zero-nonoctal")
   : > "$dir/state/task1.meta"
+  printf 'epoch=1 owner_pid=1 outcome=rewake updated_at=1\n' > "$dir/state/.claude-autoarm-epoch"
+  touch -t 202001010000 "$dir/state/.claude-autoarm-epoch"
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=09 run_hook_claude "$dir" false); status=$?
   expect_code 2 "$status" "a floor of 09 must be 9 ms of window and still reach the guard's own Stop decision"
   assert_contains "$out" "TURN WOULD END BLIND" "a zero-padded floor must still carry the blind-turn banner"
@@ -2082,8 +2134,10 @@ test_hook_claude_mode_waits_for_late_claim
 test_hook_claude_mode_window_is_a_wall_clock_deadline
 test_hook_claude_mode_recorded_claim_widens_the_window
 test_hook_claude_mode_never_claimed_home_waits_the_bound
+test_hook_claude_mode_git_bash_first_claim_default_covers_a_slow_claim
 test_hook_claude_mode_malformed_record_keeps_the_floor
 test_hook_claude_mode_caps_the_widened_window
+test_hook_claude_mode_recorded_slow_claim_outlasts_the_old_fifteen_second_cap
 test_hook_claude_mode_malformed_cap_falls_back_to_the_default
 test_hook_claude_mode_malformed_claim_record_keeps_the_default_window
 test_hook_claude_mode_leading_zero_claim_record_is_decimal
