@@ -353,6 +353,28 @@ test_prefilter_is_strict_superset() {
 
 # --- fail-open ----------------------------------------------------------------
 
+test_open_stdin_returns_without_waiting_for_the_harness_timeout() {
+  local script hook waited status
+  for script in fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-subagent-pretool-check.sh; do
+    waited=0
+    status=0
+    sleep 30 | "$ROOT/bin/$script" --claude >/dev/null 2>&1 &
+    hook=$!
+    while kill -0 "$hook" 2>/dev/null && [ "$waited" -lt 8 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$hook" 2>/dev/null; then
+      kill "$hook" 2>/dev/null || true
+      wait "$hook" 2>/dev/null || true
+      fail "$script kept reading an open stdin for ${waited}s"
+    fi
+    wait "$hook" 2>/dev/null || status=$?
+    [ "$status" -eq 0 ] || fail "$script exited $status on an open stdin"
+  done
+  pass "an open stdin returns instead of waiting out the harness hook timeout"
+}
+
 test_failopen_empty_stdin() {
   local rc
   printf '' | "$CHECK" >/dev/null 2>&1
@@ -447,6 +469,7 @@ test_shellcheck_clean() {
   pass "bin/fm-arm-pretool-check.sh is clean under bin/fm-lint.sh"
 }
 
+test_open_stdin_returns_without_waiting_for_the_harness_timeout
 test_full_acceptance_matrix
 test_direct_policy_contract
 test_command_equals_form

@@ -69,3 +69,17 @@ fm_hook_payload_string() {  # <payload> <jq-filter>
   esac
   printf '%s' "$payload" | jq -r "$filter" 2>/dev/null
 }
+
+# Read one hook payload from stdin into PAYLOAD.
+# A closed pipe returns immediately. An open pipe with no EOF returns after 3s
+# so a PreToolUse hook cannot sit until the harness's own hook timeout.
+fm_hook_read_payload() {
+  local chunk
+  PAYLOAD=
+  IFS= read -r -t 3 chunk || return 0
+  PAYLOAD=$chunk
+  while IFS= read -r -t 0.2 chunk; do
+    PAYLOAD="${PAYLOAD}"$'\n'"$chunk"
+  done
+  return 0
+}

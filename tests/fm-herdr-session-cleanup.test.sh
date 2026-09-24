@@ -334,6 +334,7 @@ FM_HOME="$INTEGRATION_ROOT/home" FM_ROOT_OVERRIDE="$INTEGRATION_ROOT" \
   || fail "lock-owning session start did not run cleanup for its exact home"
 
 : > "$TRACE"
+rm -f "$INTEGRATION_ROOT/home/state/.session-start-complete"
 cat > "$INTEGRATION_ROOT/bin/fm-lock.sh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' 'error: another live firstmate session holds the lock' >&2

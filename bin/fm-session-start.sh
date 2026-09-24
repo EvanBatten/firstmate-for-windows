@@ -22,6 +22,39 @@
 # bootstrap running its detect-only diagnostics without its six mutating
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
+# The fast path below is a second local seam: after a successful lock it
+# records completion and exits. It does not run detect-only bootstrap,
+# wake-drain, TANGLE/guard, or the rest of the digest, and it does not
+# start the deferred network stage.
+#
+# FAST SESSION START (throwaway / verify / control homes):
+# An explicit opt-in so a verification or control home can become operable
+# without the full captain digest. Detection is owned here, not inferred
+# from an empty fleet: a brand-new real captain home and the existing
+# empty test worlds look the same, and both still need the ordinary path.
+# Any one of these selects the fast path:
+#   - FM_SESSION_START_FAST=1 (true/yes/on also accepted)
+#   - FM_VERIFY_HOME=1 (same accepted values)
+#   - a regular, non-symlink file FM_HOME/.fm-control-throwaway
+# A real captain home that sets none of them is unchanged: full digest,
+# deferred network stage, home-summary publication, and mutating local
+# bootstrap sweeps still run.
+# Fast path still acquires the session lock, still refuses to write
+# projects/, and still starts no teardown. The lock uses this same opt-in
+# to record this process's pid without the Win32 ancestry walk, which on
+# Git Bash does not find a native harness and is what exhausted the 120s
+# bound. After a successful lock it
+# records state/.session-start-complete immediately so a waiter can
+# proceed, then exits. It skips harness detection, digest library load,
+# detect-only bootstrap, wake-queue drain, TANGLE/guard, home-summary
+# refresh, Herdr projection cleanup, the deferred network stage,
+# inactive-outcome reconciliation, tasks-axi compatibility probing, the
+# supervision block, and the bulk fleet/context file dumps. A lock
+# refusal stays read-only and never records completion. A later hook in
+# the same home (Claude SessionStart after a driver pre-start) must not
+# spend the 120s timeout child proving session identity; if completion
+# is already on disk it lock-and-exits or leaves the recorded helm.
+# --reemit on a fast home still reprints context and drains wakes.
 #
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
 # was bootstrap-then-lock):
@@ -46,12 +79,17 @@
 #   6. fleet digest   - a compact data/backlog.md identity/metadata listing,
 #                       every state/*.meta, a bounded state/*.status tail,
 #                       state/.afk, and a cheap per-task endpoint-liveness read:
-#                       read-only, always runs.
+#                       read-only; a successful fast start exits before this
+#                       section. A fast lock-refusal keeps the header and
+#                       skips the bulk dump.
 #   7. network checks - the result of the deferred network stage started back at
-#                       step 1, harvested WITHOUT waiting for it.
+#                       step 1, harvested WITHOUT waiting for it. The fast path
+#                       never starts that stage and says so here.
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
-#                       data/captain-shared.md, data/learnings.md: read-only,
-#                       always safe, always runs.
+#                       data/captain-shared.md, data/learnings.md: read-only and
+#                       always safe; a successful fast start exits before this
+#                       section. A fast lock-refusal keeps the header and
+#                       skips the file dumps.
 #   9. closing reminder - prints the context-specific watcher next step; this
 #                       script points back to the emitted harness supervision
 #                       block and deliberately never arms the watcher itself.
@@ -120,6 +158,8 @@
 # presentation are skipped.
 # The context and fleet-state digests
 # below are always read-only, so they run unconditionally in both modes.
+# A successful fast start exits before those sections. A fast lock-refusal
+# keeps the headers and shrinks their bodies.
 #
 # BACKLOG DIGEST: the startup listing is a RECOVERY input, not a reporting
 # surface, so it carries what this turn can act on and nothing else.
@@ -185,6 +225,11 @@
 #   reporting command, not a gate. A lock refusal is reported as a loud
 #   banner inline, never a silent failure or a non-zero exit that would make
 #   an agent skip the rest of the digest.
+#
+#   A second unflagged invocation while this session still holds the lock and
+#   state/.session-start-complete names that same lock pid prints a short
+#   already-complete notice and exits 0 without repeating startup sweeps or
+#   the bulky digest. --reemit remains the path that reprints context.
 #
 #   --reemit  This process ALREADY took the helm at its own startup and has
 #             only lost its context (a /clear or a compaction). Skip the
@@ -263,10 +308,106 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   printf '%s\n' "$1" > "$FM_SESSION_START_STAGE_FILE" 2>/dev/null || true
 }
 
-# shellcheck source=bin/fm-timeout-lib.sh
-. "$SCRIPT_DIR/fm-timeout-lib.sh"
+# Same selectors as fm_session_fast_home, inlined so a first fast start
+# can lock and exit without sourcing the lock library first.
+session_start_fast_home() {
+  case "${FM_SESSION_START_FAST:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  case "${FM_VERIFY_HOME:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  [ -n "$FM_HOME" ] || return 1
+  [ -f "$FM_HOME/.fm-control-throwaway" ] && [ ! -L "$FM_HOME/.fm-control-throwaway" ]
+}
+
+FAST=0
+FAST_REASON=
+if session_start_fast_home; then
+  FAST=1
+  case "${FM_SESSION_START_FAST:-}" in
+    1|true|yes|TRUE|YES|on|ON) FAST_REASON=FM_SESSION_START_FAST ;;
+  esac
+  if [ -z "$FAST_REASON" ]; then
+    case "${FM_VERIFY_HOME:-}" in
+      1|true|yes|TRUE|YES|on|ON) FAST_REASON=FM_VERIFY_HOME ;;
+    esac
+  fi
+  [ -n "$FAST_REASON" ] || FAST_REASON=.fm-control-throwaway
+fi
+
+if [ "$FAST" -eq 1 ] && [ "$REEMIT" -eq 0 ] \
+  && [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
+  # Parent only. Never spawn the 120s timeout child on a fast home.
+  # Same-session retry exits here. A new session (Claude's hook after
+  # pre-start, or a relaunch) lock-and-exits. A lock refusal still
+  # exits when completion is already on disk so the hook cannot sit
+  # through wake-queue / ancestry for the register budget.
+  RULE='================================================================================'
+  SUBRULE='--------------------------------------------------------------------------------'
+  if [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
+    # Throwaway helm is already on disk. Do not re-acquire the lock: a
+    # dead prestart pid makes fm-lock wait out the register budget.
+    printf 'FAST SESSION START: remaining digest skipped (helm already recorded).\n'
+    exit 0
+  fi
+  printf '\n%s\nSESSION START - %s\n%s\n' "$RULE" "$FM_HOME" "$RULE"
+  printf 'FAST SESSION START: verify/control home (%s); bulk fleet/context digest and deferred network are skipped.\n' \
+    "$FAST_REASON"
+  printf '\nLOCK\n%s\n' "$SUBRULE"
+  LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
+  LOCK_RC=$?
+  printf '%s\n' "$LOCK_OUT"
+  if [ "$LOCK_RC" -eq 0 ]; then
+    rm -f "$COMPLETION_FILE" 2>/dev/null || true
+    COMPLETION_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
+    case "$COMPLETION_PID" in
+      ''|*[!0-9]*)
+        printf 'SESSION_START_COMPLETION: not recorded - the next clear or compact will run a full startup.\n'
+        ;;
+      *)
+        completion_tmp=$(mktemp "$STATE/.session-start-complete.XXXXXX" 2>/dev/null || true)
+        if [ -n "$completion_tmp" ] \
+          && printf '%s\n' "$COMPLETION_PID" > "$completion_tmp" 2>/dev/null \
+          && mv -f "$completion_tmp" "$COMPLETION_FILE" 2>/dev/null; then
+          printf 'FAST SESSION START: operable (lock held, completion recorded).\n'
+        else
+          rm -f "$completion_tmp" 2>/dev/null || true
+          printf 'SESSION_START_COMPLETION: not recorded - the next clear or compact will run a full startup.\n'
+        fi
+        ;;
+    esac
+    printf 'FAST SESSION START: remaining digest skipped.\n'
+    exit 0
+  fi
+  if [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
+    printf 'FAST SESSION START: remaining digest skipped (helm already recorded).\n'
+    exit 0
+  fi
+fi
+
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+
+# Cheap parent-process exit: SessionStart already finished for this lock, so a
+# later unflagged retry (including the one after a persistent-cd deny) must not
+# spend another full digest. --reemit still reprints context on purpose.
+if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ] && [ "$REEMIT" -eq 0 ] \
+  && fm_session_start_completed "$STATE"; then
+  cat <<'EOF'
+================================================================================
+SESSION START ALREADY COMPLETE
+================================================================================
+This lock's digest already finished.
+The SessionStart digest already in this session is the authoritative startup input.
+Do not re-run bin/fm-session-start.sh, and do not re-read the sources that digest printed.
+If this session lost that digest, rerun with --reemit.
+EOF
+  exit 0
+fi
+
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
@@ -313,40 +454,57 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     printf '●  STARTUP TRUNCATED - SESSION START HIT ITS %ss RUNTIME BOUND\n' "$SESSION_START_BUDGET"
     printf '●  It stopped during the "%s" stage, so everything above is COMPLETE\n' "$SESSION_START_LAST_STAGE"
     printf '●  only up to that point.\n'
-    printf '●  RECONCILE these stages before acting on anything they would have shown:\n'
-    printf '●    %s\n' "${SESSION_START_PENDING% }"
-    printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
-    printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
-    printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
+    if [ "$SESSION_START_LAST_STAGE" = network-checks ]; then
+      printf '●  Network checks did not finish inside the bound.\n'
+      printf '●  Register a local project without waiting on network checks.\n'
+      printf '●  Read their result later with bin/fm-startup-network.sh report.\n'
+    else
+      printf '●  RECONCILE these stages before acting on anything they would have shown:\n'
+      printf '●    %s\n' "${SESSION_START_PENDING% }"
+      printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
+      printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
+      printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
+    fi
     printf '%s\n' "$BAR"
   fi
   rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
   exit 0
 fi
 
-PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
+# Digest libraries and harness detection are for the bulky digest. A
+# successful fast start never reaches that digest.
+session_start_load_digest_libs() {
+  PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
+  # shellcheck source=bin/fm-backend.sh
+  . "$SCRIPT_DIR/fm-backend.sh"
+  # shellcheck source=bin/fm-tasks-axi-lib.sh
+  . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+  # shellcheck source=bin/fm-public-followup-lib.sh
+  . "$SCRIPT_DIR/fm-public-followup-lib.sh"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  # shellcheck source=bin/fm-line-cap-lib.sh
+  . "$SCRIPT_DIR/fm-line-cap-lib.sh"
+}
 
-# shellcheck source=bin/fm-backend.sh
-. "$SCRIPT_DIR/fm-backend.sh"
-# shellcheck source=bin/fm-tasks-axi-lib.sh
-. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
-# shellcheck source=bin/fm-public-followup-lib.sh
-. "$SCRIPT_DIR/fm-public-followup-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
-# shellcheck source=bin/fm-wake-lib.sh
-. "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-line-cap-lib.sh
-. "$SCRIPT_DIR/fm-line-cap-lib.sh"
 
-# One tasks-axi compatibility verdict per session start. The probe costs three
-# tasks-axi subprocesses and this digest needs the same answer twice - here for
-# the backlog listing and again inside the fm-bootstrap.sh child, which reports
-# an incompatible build as MISSING. Computing it once and handing it to that
-# child collapses six subprocesses to three. fm-tasks-axi-lib.sh owns both reuse
-# layers and the one-hop consumption rule that keeps the verdict out of any
-# agent's environment.
-if fm_tasks_axi_compatible; then TASKS_AXI_COMPATIBLE=1; else TASKS_AXI_COMPATIBLE=0; fi
+PRIMARY_HARNESS=unknown
+TASKS_AXI_COMPATIBLE=0
+DIGEST_LIBS_LOADED=0
+if [ "$FAST" -eq 1 ] && [ "$REEMIT" -eq 0 ]; then
+  :
+else
+  session_start_load_digest_libs
+  DIGEST_LIBS_LOADED=1
+  # One tasks-axi compatibility verdict per session start. The probe costs
+  # three tasks-axi subprocesses and this digest needs the same answer twice.
+  # The fast path never lists the backlog, so it skips the probe.
+  if [ "$FAST" -eq 0 ]; then
+    if fm_tasks_axi_compatible; then TASKS_AXI_COMPATIBLE=1; else TASKS_AXI_COMPATIBLE=0; fi
+  fi
+fi
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -564,6 +722,26 @@ write_agents_baseline() {  # <lock-pid> <agents-hash>
   return 1
 }
 
+# Publish state/.session-start-complete from the current lock pid.
+# The fast path calls this immediately after lock acquisition so a waiter
+# can proceed, then exits. The ordinary path still publishes once at the
+# end. COMPLETION_PID is set for the agents baseline.
+publish_session_start_completion() {
+  local completion_tmp
+  COMPLETION_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
+  case "$COMPLETION_PID" in
+    ''|*[!0-9]*) COMPLETION_PID=; return 1 ;;
+  esac
+  completion_tmp=$(mktemp "$STATE/.session-start-complete.XXXXXX" 2>/dev/null || true)
+  [ -n "$completion_tmp" ] || return 1
+  if printf '%s\n' "$COMPLETION_PID" > "$completion_tmp" 2>/dev/null \
+    && mv -f "$completion_tmp" "$COMPLETION_FILE" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$completion_tmp" 2>/dev/null || true
+  return 1
+}
+
 agents_baseline_drifted() {  # <rebuilding-session-pid>
   local lock_pid=$1 baseline_pid baseline_hash current_hash
   [ -f "$AGENTS_BASELINE_FILE" ] && [ ! -L "$AGENTS_BASELINE_FILE" ] || return 0
@@ -628,6 +806,10 @@ if [ "$REEMIT" -eq 1 ]; then
 else
   section "SESSION START - $FM_HOME"
 fi
+if [ "$FAST" -eq 1 ]; then
+  printf 'FAST SESSION START: verify/control home (%s); bulk fleet/context digest and deferred network are skipped.\n' \
+    "$FAST_REASON"
+fi
 # --- 1. lock -----------------------------------------------------------
 stage lock
 subsection "LOCK"
@@ -651,6 +833,27 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
   }
 fi
+if [ "$READ_ONLY" -eq 0 ] && [ "$FAST" -eq 1 ] && [ "$REEMIT" -eq 0 ]; then
+  rm -f "$COMPLETION_FILE" 2>/dev/null || true
+  fm_trace_context_session_start "$CONFIG" "$STATE/.trace-context-effective"
+  if publish_session_start_completion; then
+    printf 'FAST SESSION START: operable (lock held, completion recorded).\n'
+    if [ "$SESSION_SOURCE" = startup ] && [ -n "$AGENTS_START_HASH" ]; then
+      if ! write_agents_baseline "$COMPLETION_PID" "$AGENTS_START_HASH"; then
+        printf 'SESSION_START_AGENTS_BASELINE: not recorded - a later supported rebuild will re-emit AGENTS.md.\n'
+      fi
+    fi
+  else
+    printf 'SESSION_START_COMPLETION: not recorded - the next clear or compact will run a full startup.\n'
+  fi
+  printf 'FAST SESSION START: remaining digest skipped.\n'
+  exit 0
+fi
+
+if [ "$DIGEST_LIBS_LOADED" -eq 0 ]; then
+  session_start_load_digest_libs
+  DIGEST_LIBS_LOADED=1
+fi
 print_agents_refresh_if_required
 
 if [ "$READ_ONLY" -eq 0 ]; then
@@ -661,7 +864,7 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # A full locked start publishes this home's current structured summary.
   # Publication is side-band and best-effort, so it can never change the
   # session-start result. A context re-emit is not another session start.
-  if [ "$REEMIT" -eq 0 ]; then
+  if [ "$REEMIT" -eq 0 ] && [ "$FAST" -eq 0 ]; then
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
   fi
   # Every network call this session start owes is launched HERE, detached and
@@ -672,10 +875,12 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # read-only GitHub-auth probe is owed. A read-only session starts nothing at
   # all: it holds no mutation authority for the sweeps, and it must not spawn,
   # steer, or merge anyway, so it has no action left for an auth verdict to gate.
-  NETWORK_STAGE_LOCKED=1
-  [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
-  "$SCRIPT_DIR/fm-startup-network.sh" start \
-    --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
+  if [ "$FAST" -eq 0 ]; then
+    NETWORK_STAGE_LOCKED=1
+    [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
+    "$SCRIPT_DIR/fm-startup-network.sh" start \
+      --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- 2. bootstrap --------------------------------------------------------
@@ -687,7 +892,10 @@ subsection "BOOTSTRAP"
 if [ "$READ_ONLY" -eq 1 ]; then
   BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
-elif [ "$REEMIT" -eq 1 ]; then
+elif [ "$REEMIT" -eq 1 ] || [ "$FAST" -eq 1 ]; then
+  # Re-emit and the fast path both skip mutating sweeps. Fast path has no
+  # secondmates, clones, or X-mode artifacts those sweeps can help, and it
+  # also skips Herdr projection cleanup.
   BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_LOCKED=1 FM_BOOTSTRAP_NETWORK=skip \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
@@ -725,8 +933,11 @@ if [ "$READ_ONLY" -eq 1 ]; then
   GUARD_OUT=$(FM_GUARD_READ_ONLY=1 "$SCRIPT_DIR/fm-guard.sh" 2>&1)
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
-  INACTIVE_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$SCRIPT_DIR/fm-inactive-reconcile.sh" scan --startup 2>&1) || INACTIVE_OUT=
+  INACTIVE_OUT=
+  if [ "$FAST" -eq 0 ]; then
+    INACTIVE_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+      "$SCRIPT_DIR/fm-inactive-reconcile.sh" scan --startup 2>&1) || INACTIVE_OUT=
+  fi
   if [ -n "$INACTIVE_OUT" ]; then
     printf 'inactive outcome reconciliation: %s\n' "$INACTIVE_OUT"
   fi
@@ -735,7 +946,7 @@ else
   # that never reached main (docs/pi-supervision-branch.md). Gated to the
   # pi/pi-signed primary so a non-Pi home runs neither step - homes on any
   # other harness stay entirely untouched (captain-decided criterion).
-  if [ "$PRIMARY_HARNESS" = pi ] || [ "$PRIMARY_HARNESS" = pi-signed ]; then
+  if [ "$FAST" -eq 0 ] && { [ "$PRIMARY_HARNESS" = pi ] || [ "$PRIMARY_HARNESS" = pi-signed ]; }; then
     FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-lease.sh" sweep 2>/dev/null || true
     BRANCH_REPLAY_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
       "$SCRIPT_DIR/fm-branch-outcome.sh" startup-replay 2>&1) || BRANCH_REPLAY_OUT=
@@ -787,6 +998,17 @@ fi
 # a stage that never ran, which the truncation banner names by stage.
 stage read-once
 section "READ-ONCE CONTRACT"
+if [ "$FAST" -eq 1 ]; then
+cat <<'EOF'
+This is a fast session start for a verify or control home.
+The bulk fleet and context dumps below were skipped. Memory files remain on
+disk and may be read on demand. Deferred network checks were not started.
+Do not treat an omitted section as proof the file is absent.
+
+Go to a source directly when this turn needs it, or when a STARTUP TRUNCATED
+banner named the stage that would have printed it.
+EOF
+else
 cat <<'EOF'
 Everything below is printed in full for this session start: every state/*.meta,
 a compact data/backlog.md listing, a bounded tail of every state/*.status,
@@ -809,12 +1031,16 @@ Go to a source directly only when:
   - or a STARTUP TRUNCATED banner named the stage that would have printed it, in
     which case that stage's sources were never emitted and must be reconciled.
 EOF
+fi
 
 # --- 6. fleet-state digest ---------------------------------------------
 # Before CONTEXT: see this file's ORDERING note. Live fleet identity is what a
 # truncated tail must never take.
 stage fleet-state
 section "FLEET STATE"
+if [ "$FAST" -eq 1 ]; then
+  printf 'skipped (fast session start) - no live-task inventory, backlog listing, or endpoint scan.\n'
+else
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
 
 subsection "Work under way (state/*.meta)"
@@ -884,6 +1110,7 @@ if fm_pf_relay_active "$FM_HOME" \
     printf '%s/bin/fm-public-followup.sh retire <id> --reason "...". Load fmx-respond for the procedure.\n' "$FM_ROOT"
   fi
 fi
+fi
 
 # --- 7. network checks ------------------------------------------------------
 # Deliberately here and not later: these lines are actionable (a stuck clone, a
@@ -900,6 +1127,9 @@ if [ "$READ_ONLY" -eq 1 ]; then
   printf 'secondmate liveness and convergence, and pending handoff delivery were not run.\n'
   printf 'They need the fleet lock, and this session must not spawn, steer, or merge, so it\n'
   printf 'has no action they would gate. The session holding the lock runs them.\n'
+elif [ "$FAST" -eq 1 ]; then
+  printf 'skipped (fast session start) - deferred network stage was not started.\n'
+  printf 'A throwaway home has no remotes, clones, or secondmates those checks can help.\n'
 else
   "$SCRIPT_DIR/fm-startup-network.sh" harvest --pid $$ 2>&1 || true
 fi
@@ -911,11 +1141,15 @@ fi
 # take (see this file's ORDERING note).
 stage context
 section "CONTEXT"
-print_file_or_absent "$DATA/projects.md" "data/projects.md"
-print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
-print_file_or_absent "$DATA/captain.md" "data/captain.md"
-print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
-print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+if [ "$FAST" -eq 1 ]; then
+  printf 'skipped (fast session start) - captain memory files remain on disk and were not dumped.\n'
+else
+  print_file_or_absent "$DATA/projects.md" "data/projects.md"
+  print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
+  print_file_or_absent "$DATA/captain.md" "data/captain.md"
+  print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
+  print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+fi
 
 # --- 9. closing reminder -----------------------------------------------
 stage next-step
@@ -955,17 +1189,12 @@ EOF
 
 if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
   COMPLETION_RECORDED=0
-  COMPLETION_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
-  case "$COMPLETION_PID" in
-    ''|*[!0-9]*) COMPLETION_PID= ;;
-  esac
-  COMPLETION_TMP=$(mktemp "$STATE/.session-start-complete.XXXXXX" 2>/dev/null || true)
-  if [ -n "$COMPLETION_PID" ] && [ -n "$COMPLETION_TMP" ] \
-    && printf '%s\n' "$COMPLETION_PID" > "$COMPLETION_TMP" 2>/dev/null \
-    && mv -f "$COMPLETION_TMP" "$COMPLETION_FILE" 2>/dev/null; then
+  if [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
+    COMPLETION_RECORDED=1
+    COMPLETION_PID=$(cat "$COMPLETION_FILE" 2>/dev/null || true)
+  elif publish_session_start_completion; then
     COMPLETION_RECORDED=1
   else
-    [ -z "$COMPLETION_TMP" ] || rm -f "$COMPLETION_TMP" 2>/dev/null || true
     printf '\nSESSION_START_COMPLETION: not recorded - the next clear or compact will run a full startup.\n'
   fi
   if [ "$SESSION_SOURCE" = startup ] && [ "$COMPLETION_RECORDED" -eq 1 ] && [ -n "$AGENTS_START_HASH" ]; then

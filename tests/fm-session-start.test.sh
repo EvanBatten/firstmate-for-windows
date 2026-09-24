@@ -29,6 +29,15 @@
 #     surfaces exactly once (inline or as a wake, never both), a read-only
 #     session declares the checks it skipped, and the tasks-axi compatibility
 #     verdict is paid for once per session start
+#   - a second unflagged invocation against a completed live lock prints the
+#     already-complete notice and does not repeat bootstrap; a denied
+#     `cd <home> && bin/fm-session-start.sh` still leaves captain-home
+#     persistent-cd protection intact; --reemit and a stale completion still
+#     take their existing paths
+#   - the explicit fast path for verify/control homes: lock and completion
+#     still publish, then the digest exits; detect-only bootstrap, wake
+#     drain, and the bulk sections are skipped; a lock refusal stays
+#     read-only; an ordinary empty home is unchanged
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -507,18 +516,20 @@ SH
 # Drop every harness env marker from bin/fm-harness.sh detect_own so the
 # surrounding interactive shell cannot leak past the suite's fake ps harness.
 # Markers today: CLAUDECODE (claude), PI_CODING_AGENT plus FM_PI_HARNESS
-# (Pi family), GROK_AGENT (grok).
+# (Pi family), GROK_AGENT (grok), CURSOR_AGENT and CURSOR_INVOKED_AS (cursor).
 # codex and opencode have no env markers (ancestry only). Without this, a local
-# claude/pi/grok session fails cases that pin a different fake harness while CI
-# (no ambient markers) still passes.
+# claude/pi/grok/cursor session fails cases that pin a different fake harness
+# while CI (no ambient markers) still passes.
 run_session_start() {
   local home=$1 root=$2 path=$3 pi_harness=${4:-}
   if [ -n "$pi_harness" ]; then
-    env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
+    env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+      PI_CODING_AGENT=true FM_PI_HARNESS="$pi_harness" \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   else
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
       FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
       "$SESSION_START"
   fi
@@ -527,7 +538,8 @@ run_session_start() {
 run_pi_session_start() {  # <home> <root> <path> [fm-session-start args...]
   local home=$1 root=$2 path=$3
   shift 3
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
+  env -u CLAUDECODE -u GROK_AGENT -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
+    PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -537,6 +549,7 @@ run_named_harness_session_start() {  # <harness> <home> <root> <path> [fm-sessio
   local harness=$1 home=$2 root=$3 path=$4
   shift 4
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_FAKE_HARNESS="$harness" FM_FAKE_HARNESS_PID="$SESSION_START_TEST_HARNESS_PID" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
     "$SESSION_START" "$@"
@@ -843,6 +856,7 @@ EOF
     || fail "session start must freeze an env-off override over a present config flag"
 
   rm "$home/config/trace-context"
+  rm -f "$home/state/.session-start-complete"
   FM_TRACE_CONTEXT=on run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
   [ "$(awk '{print $2}' "$home/state/.trace-context-effective")" = on ] \
     || fail "a new session start must freeze an env-on override over an absent config flag"
@@ -1086,6 +1100,7 @@ EOF
   assert_contains "$out" "$home/state/task-a.status" "digest did not print the full status log path for a deeper read"
   assert_contains "$out" "a bounded tail of every state/*.status" "read-once contract does not distinguish bounded status tails"
 
+  rm -f "$home/state/.session-start-complete"
   out=$(FM_SESSION_START_STATUS_TAIL=2 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "working: step 7" "FM_SESSION_START_STATUS_TAIL=2 tail missing the most recent line"
   assert_not_contains "$out" "working: step 5" "FM_SESSION_START_STATUS_TAIL=2 did not bound the tail to 2 lines"
@@ -1963,6 +1978,7 @@ SH
 
   # shellcheck disable=SC2016 # $$ must expand in the launched shell, not here.
   out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     bash -c 'export FM_FAKE_HARNESS_PID=$$; exec "$1" 8 "$2"' _ "$nest" "$SESSION_START")
 
@@ -1975,6 +1991,135 @@ SH
 }
 
 # --- context re-emit (--reemit) ----------------------------------------------
+
+test_second_invocation_skips_when_this_lock_already_completed() {
+  local rec root home fakebin first second completion_before completion_after
+  rec=$(new_world already-complete)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  first=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$first" "SESSION START - $home" "the first invocation did not run the full digest"
+  assert_contains "$first" "BOOTSTRAP" "the first invocation skipped bootstrap"
+  assert_present "$home/state/.session-start-complete" "the first invocation did not record completion"
+  completion_before=$(cat "$home/state/.session-start-complete")
+
+  second=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$second" "SESSION START ALREADY COMPLETE" \
+    "a second unflagged invocation did not take the already-complete path"
+  assert_not_contains "$second" "SESSION START - $home" \
+    "a second unflagged invocation repeated the full digest"
+  assert_not_contains "$second" "BOOTSTRAP" \
+    "a second unflagged invocation repeated bootstrap"
+  completion_after=$(cat "$home/state/.session-start-complete")
+  [ "$completion_before" = "$completion_after" ] \
+    || fail "the skip path rewrote the completion record"
+
+  pass "a completed live lock's second unflagged session-start skips the full digest"
+}
+
+test_denied_cd_retry_does_not_repeat_a_completed_digest() {
+  local rec root home fakebin first second deny_out deny_rc=0 captain_out captain_rc=0
+  rec=$(new_world deny-retry)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$root/AGENTS.md"
+  mkdir -p "$root/bin" "$root/projects/foo"
+  cp "$ROOT/bin/fm-cd-pretool-check.sh" "$root/bin/fm-cd-pretool-check.sh"
+  cp "$ROOT/bin/fm-hook-host-lib.sh" "$root/bin/fm-hook-host-lib.sh"
+  cp "$ROOT/bin/fm-cd-command-policy.mjs" "$root/bin/fm-cd-command-policy.mjs"
+  cp "$ROOT/bin/fm-arm-command-policy.mjs" "$root/bin/fm-arm-command-policy.mjs"
+  chmod +x "$root/bin/fm-cd-pretool-check.sh"
+
+  # wake-helpers.sh exports a throwaway FM_ROOT_OVERRIDE so this suite cannot trip the live tangle guard.
+  # The copied checker must see this fixture as its primary, or it stays inert and the deny proof vanishes.
+  deny_out=$(FM_ROOT_OVERRIDE="$root" "$root/bin/fm-cd-pretool-check.sh" --claude \
+    --command "cd $home && bin/fm-session-start.sh" 2>&1) || deny_rc=$?
+  expect_code 2 "$deny_rc" "cd <verify-home> && bin/fm-session-start.sh must still be denied"
+  assert_contains "$deny_out" "[persistent-cd]" \
+    "the verify-home cd form lost the persistent-cd reason"
+
+  captain_out=$(FM_ROOT_OVERRIDE="$root" "$root/bin/fm-cd-pretool-check.sh" --claude \
+    --command 'cd projects/foo && bin/fm-session-start.sh' 2>&1) || captain_rc=$?
+  expect_code 2 "$captain_rc" "cd projects/foo && bin/fm-session-start.sh must stay denied on a captain-shaped home"
+  assert_contains "$captain_out" "[persistent-cd]" \
+    "captain-home project cd lost the persistent-cd reason"
+
+  first=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$first" "SESSION START - $home" "the post-deny retry setup did not take the helm"
+  second=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$second" "SESSION START ALREADY COMPLETE" \
+    "the no-cd retry after a persistent-cd deny repeated the full digest"
+  assert_not_contains "$second" "BOOTSTRAP" \
+    "the no-cd retry after a persistent-cd deny repeated bootstrap"
+
+  pass "a denied cd-home session-start still protects captain homes; the no-cd retry is the already-complete skip"
+}
+
+test_stale_completion_still_runs_the_full_digest() {
+  local rec root home fakebin out previous_pid
+  rec=$(new_world stale-complete)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  sleep 0 &
+  previous_pid=$!
+  wait "$previous_pid"
+  printf '%s\n' "$previous_pid" > "$home/state/.lock"
+  printf '%s\n' "$previous_pid" > "$home/state/.session-start-complete"
+
+  out=$(FM_FAKE_HARNESS_PID=$$ run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "SESSION START - $home" \
+    "a previous owner's completion skipped the full digest"
+  assert_not_contains "$out" "SESSION START ALREADY COMPLETE" \
+    "a previous owner's completion was treated as this lock"
+  [ "$(cat "$home/state/.lock")" != "$previous_pid" ] \
+    || fail "a stale completion left the previous owner's lock in place"
+
+  pass "a previous session's completion record does not skip this session's full digest"
+}
+
+test_throwaway_same_session_skips_without_harness_ancestry() {
+  local rec root home fakebin first second third sid
+  rec=$(new_world throwaway-session-skip)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  : > "$home/.fm-control-throwaway"
+  sid=7a1c9e40-3b52-4d16-9f83-2c6e5b8d0a47
+
+  first=$(CLAUDE_CODE_SESSION_ID="$sid" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$first" "SESSION START - $home" "the throwaway first start did not take the helm"
+  assert_present "$home/state/.lock.session" "the throwaway first start did not record session identity"
+
+  second=$(CLAUDE_CODE_SESSION_ID="$sid" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$second" "SESSION START ALREADY COMPLETE" \
+    "a same-session throwaway retry did not take the already-complete path"
+  assert_not_contains "$second" "BOOTSTRAP" \
+    "a same-session throwaway retry repeated bootstrap"
+
+  third=$(CLAUDE_CODE_SESSION_ID=0e1f2a3b-4c5d-6e7f-8091-a2b3c4d5e6f7 \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$third" "SESSION START - $home" \
+    "a new throwaway session id skipped the full digest"
+  assert_not_contains "$third" "SESSION START ALREADY COMPLETE" \
+    "a new throwaway session id was treated as the previous session"
+  assert_not_contains "$third" "BOOTSTRAP" \
+    "a new throwaway session id still ran detect-only bootstrap"
+  assert_not_contains "$third" "WAKE QUEUE" \
+    "a new throwaway session id still drained the wake queue"
+
+  pass "a throwaway same-session retry skips without harness ancestry; a new id takes the helm"
+}
 
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain() {
   local rec root home fakebin network_report reemit sequence generation
@@ -1999,6 +2144,7 @@ EOF
   append_wake "$home/state" signal task-r "done: queued after the re-emit too" || fail "seed second wake failed"
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
@@ -2221,6 +2367,7 @@ EOF
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
 
   # A re-emit skips the sweeps because it ALREADY ran them, not because it lacks
@@ -2236,6 +2383,7 @@ EOF
   printf '%s\n' "$holder_pid" > "$home/state/.lock"
   readonly_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u CURSOR_AGENT -u CURSOR_INVOKED_AS \
     "$SESSION_START" --reemit)
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
@@ -2264,6 +2412,128 @@ EOF
   assert_contains "$out" "absent" "empty fleet's AFK section did not report absent"
 
   pass "an empty fleet reports (none) for in-flight tasks and an absent AFK flag"
+}
+
+# assert_fast_session_start <out> <home> <reason>
+# Shared checks for every opt-in that selects the cheap verify/control path.
+assert_fast_session_start() {
+  local out=$1 home=$2 reason=$3
+  assert_contains "$out" "FAST SESSION START: verify/control home ($reason)" \
+    "fast path did not name its detection reason ($reason)"
+  assert_contains "$out" "lock acquired: harness pid" \
+    "fast path did not acquire the session lock"
+  assert_contains "$out" "FAST SESSION START: operable (lock held, completion recorded)." \
+    "fast path did not publish an early operable marker"
+  assert_contains "$out" "FAST SESSION START: remaining digest skipped." \
+    "fast path did not exit after the lock"
+  assert_not_contains "$out" "BOOTSTRAP" "fast path still ran detect-only bootstrap"
+  assert_not_contains "$out" "WAKE QUEUE" "fast path still drained the wake queue"
+  assert_not_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS" \
+    "fast path still printed the supervision block"
+  assert_not_contains "$out" "FLEET STATE" "fast path still printed the fleet digest"
+  assert_not_contains "$out" "NETWORK CHECKS" "fast path still printed network checks"
+  assert_not_contains "$out" "CONTEXT" "fast path still printed the context digest"
+  assert_not_contains "$out" "NEXT STEP" "fast path still printed the closing reminder"
+  assert_not_contains "$out" "data/captain.md" \
+    "fast path printed a context file label it should have skipped"
+  [ -s "$home/state/.lock" ] || fail "fast path left no session lock ($reason)"
+  [ -s "$home/state/.session-start-complete" ] \
+    || fail "fast path left no completion record ($reason)"
+  [ "$(cat "$home/state/.session-start-complete")" = "$(cat "$home/state/.lock")" ] \
+    || fail "fast path completion pid did not match the lock ($reason)"
+  assert_absent "$home/state/home-summary.json" \
+    "fast path published a home-summary ledger ($reason)"
+  assert_absent "$home/state/.startup-network.status" \
+    "fast path started the deferred network stage ($reason)"
+  [ -z "$(ls -A "$home/projects" 2>/dev/null)" ] \
+    || fail "fast path wrote under projects/ ($reason)"
+}
+
+test_fast_session_start_for_verify_homes() {
+  local rec root home fakebin out log probes holder_pid
+
+  rec=$(new_world fast-env)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  log="$home/tasks-axi.log"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n' > "$home/data/backlog.md"
+  append_wake "$home/state" signal verify-task "done: fast path must leave this queued" \
+    || fail "seed wake for fast path failed"
+
+  out=$(FM_SESSION_START_FAST=1 FM_FAKE_TASKS_AXI_LOG="$log" \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_fast_session_start "$out" "$home" FM_SESSION_START_FAST
+  [ -s "$home/state/.wake-queue" ] \
+    || fail "fast path drained a queued wake"
+  if [ -f "$log" ]; then
+    probes=$(grep -c -- '--version' "$log" || true)
+    [ "$probes" -eq 0 ] \
+      || fail "fast path still version-probed tasks-axi $probes time(s): $(cat "$log")"
+  fi
+
+  rec=$(new_world fast-verify-env)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  out=$(FM_VERIFY_HOME=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_fast_session_start "$out" "$home" FM_VERIFY_HOME
+
+  rec=$(new_world fast-marker)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/.fm-control-throwaway"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_fast_session_start "$out" "$home" .fm-control-throwaway
+
+  rec=$(new_world fast-symlink-ignored)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/.control-target"
+  ln -s "$home/.control-target" "$home/.fm-control-throwaway"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "FAST SESSION START" \
+    "a symlink marker selected the fast path"
+  [ -f "$home/state/home-summary.json" ] \
+    || fail "an ordinary empty home with a symlink marker skipped home-summary publication"
+
+  rec=$(new_world fast-lock-refusal)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  append_wake "$home/state" signal stay-queued "done: must remain queued on refusal" \
+    || fail "seed wake for fast lock-refusal failed"
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+  out=$(FM_SESSION_START_FAST=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  assert_contains "$out" "READ-ONLY SESSION" \
+    "fast path did not stay read-only when the lock was refused"
+  assert_contains "$out" "skipped (read-only session)" \
+    "fast lock-refusal did not skip the mutating wake drain"
+  assert_absent "$home/state/.session-start-complete" \
+    "fast lock-refusal recorded a completion marker"
+  assert_absent "$home/state/.startup-network.status" \
+    "fast lock-refusal started the deferred network stage"
+  [ -s "$home/state/.wake-queue" ] \
+    || fail "fast lock-refusal drained a queued wake"
+
+  pass "fast session start is opt-in, publishes early completion, and keeps lock-refusal read-only"
 }
 
 test_next_step_sources_x_mode_cadence() {
@@ -2462,6 +2732,82 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+test_digest_truncated_in_network_checks_does_not_order_a_rerun_before_local_registration() {
+  local rec root home fakebin work out status=0 bare seed mode f
+  rec=$(new_world network-truncation-register)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  work="${root%/root}/bin-copy"
+  mkdir -p "$work"
+  for f in "$ROOT"/bin/*; do
+    ln -s "$f" "$work/$(basename "$f")"
+  done
+  rm -f "$work/fm-session-start.sh" "$work/fm-startup-network.sh" \
+    "$work/fm-lock.sh" "$work/fm-bootstrap.sh" "$work/fm-herdr-session-cleanup.sh" \
+    "$work/fm-home-summary-refresh.sh" "$work/fm-inactive-reconcile.sh" \
+    "$work/fm-wake-drain.sh" "$work/fm-supervision-instructions.sh" "$work/fm-harness.sh"
+  cp "$ROOT/bin/fm-session-start.sh" "$work/fm-session-start.sh"
+  chmod +x "$work/fm-session-start.sh"
+  cat > "$work/fm-lock.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'lock acquired: harness pid 1\n'
+SH
+  cat > "$work/fm-harness.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'claude\n'
+SH
+  printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in harvest) sleep 120 ;; esac' 'exit 0' \
+    > "$work/fm-startup-network.sh"
+  for f in fm-bootstrap.sh fm-herdr-session-cleanup.sh fm-home-summary-refresh.sh \
+    fm-inactive-reconcile.sh fm-wake-drain.sh fm-supervision-instructions.sh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$work/$f"
+  done
+  chmod +x "$work"/*.sh
+
+  out=$(FM_SESSION_START_TIMEOUT=90 \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+      FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+      "$work/fm-session-start.sh") || status=$?
+
+  expect_code 0 "$status" "a digest truncated during network checks must still exit 0"
+  assert_contains "$out" 'stopped during the "network-checks" stage' \
+    "the digest did not stop during network checks"
+  assert_not_contains "$out" "Rerun bin/fm-session-start.sh now" \
+    "a digest truncated during network checks ordered a rerun before local registration"
+  assert_contains "$out" "Register a local project without waiting on network checks." \
+    "a digest truncated during network checks did not release local registration"
+
+  bare="${root%/root}/demo.git"
+  seed="${root%/root}/demo-seed"
+  git init -q --bare -b main "$bare"
+  git clone -q "$bare" "$seed"
+  git -C "$seed" config user.email verify@example.invalid
+  git -C "$seed" config user.name verification
+  printf 'hello\n' > "$seed/README.md"
+  git -C "$seed" add README.md
+  git -C "$seed" commit -qm "start demo"
+  git -C "$seed" push -q origin main
+  mkdir -p "$home/projects" "$home/data"
+  git_bin=$(command -v git)
+  git_dir=$(dirname "$git_bin")
+  if [ -x "$git_dir/gh" ] || [ -x "$git_dir/gh.exe" ]; then
+    fail "git and gh share $git_dir, so this registration cannot hide gh"
+  fi
+  env PATH="$git_dir:/usr/bin:/bin" "$git_bin" clone -q "$bare" "$home/projects/demo"
+  if env PATH="$git_dir:/usr/bin:/bin" command -v gh >/dev/null 2>&1; then
+    fail "the local registration path could see gh"
+  fi
+  printf '%s\n' '- demo [local-only] - local bare repo (added 2026-09-22)' >> "$home/data/projects.md"
+  mode=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$ROOT/bin/fm-project-mode.sh" --raw demo 2>/dev/null)
+  [ "$mode" = "local-only off" ] || fail "the local bare repo did not register as local-only: $mode"
+  [ -d "$home/projects/demo/.git" ] || fail "the local bare repo was not cloned into the home"
+  pass "a digest truncated in network checks lets a local bare repo register without GitHub auth"
+}
+
+test_digest_truncated_in_network_checks_does_not_order_a_rerun_before_local_registration
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
@@ -2493,6 +2839,7 @@ test_backlog_queued_bound_discloses_its_remainder
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
+test_fast_session_start_for_verify_homes
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
 test_supervision_block_exactly_one_and_pi_diagnostic
@@ -2505,6 +2852,10 @@ test_runtime_bound_truncates_loudly_and_exits_zero
 test_portable_timeout_escalates_term_resistant_process
 test_runtime_bound_leaves_a_healthy_digest_untouched
 test_runtime_bound_leaves_harness_ancestry_headroom
+test_second_invocation_skips_when_this_lock_already_completed
+test_denied_cd_retry_does_not_repeat_a_completed_digest
+test_stale_completion_still_runs_the_full_digest
+test_throwaway_same_session_skips_without_harness_ancestry
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity

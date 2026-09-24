@@ -6,6 +6,8 @@
 # bin/fm-lock.sh uses it to acquire and inspect state/.lock;
 # bin/fm-claude-stop-autoarm.sh uses it to prove a Stop hook fires inside the
 # lock-owning primary session before it may arm or rewake.
+# fm_session_start_completed is the shared reader of that lock plus
+# state/.session-start-complete, whose writer is bin/fm-session-start.sh.
 # It owns TWO proofs of that one question: the process ancestry, and - only
 # where the ancestry walk dead-ends - the harness session identity recorded
 # beside the lock (see the section at the end of this file).
@@ -138,6 +140,63 @@ fm_harness_ancestry_pids() {
   [ "$printed" -eq 1 ]
 }
 
+# True when this home opted into the throwaway/verify/control session-start
+# path. Same three selectors bin/fm-session-start.sh documents. A symlink
+# marker is ignored so a confused link cannot opt a real captain home in.
+fm_session_fast_home() {
+  local home=${1:-${FM_HOME:-}}
+  case "${FM_SESSION_START_FAST:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  case "${FM_VERIFY_HOME:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  [ -n "$home" ] || return 1
+  [ -f "$home/.fm-control-throwaway" ] && [ ! -L "$home/.fm-control-throwaway" ]
+}
+
+# Print a lock pid for a throwaway home without walking Win32 ancestry.
+# On MSYS that is this process's winpid, which fm_pid_alive can probe
+# with ps -W. Elsewhere it is $$. Captain homes must not call this.
+fm_throwaway_lock_pid() {
+  local win
+  if [ "${FM_PROC_OS:-}" = msys ]; then
+    win=$(_fm_proc_msys_winpid "$$" 2>/dev/null) || true
+    case "$win" in
+      ''|*[!0-9]*) ;;
+      *) printf '%s\n' "$win"; return 0 ;;
+    esac
+  fi
+  printf '%s\n' "$$"
+}
+
+# The pid written into state/.lock for this acquire. A throwaway home
+# skips the PowerShell ancestry walk: Git Bash started by a native
+# harness has MSYS ppid 1 and Get-Process .Parent 0, so that walk never
+# names the harness and the 120s session-start bound expires at lock.
+# The recorded pid is this tool process, live for the digest, and a
+# later acquire treats a still-live recorded pid as the holder even
+# though it is not a harness. Captain homes still fail closed on
+# ancestry.
+fm_session_lock_acquire_pid() {
+  if fm_session_fast_home; then
+    fm_throwaway_lock_pid
+    return
+  fi
+  fm_harness_ancestry_pid
+}
+
+# True when pid $1 still blocks another acquirer. Captain homes require
+# a live harness. Throwaway homes require only a live recorded pid,
+# because their lock names the tool process.
+fm_session_lock_holder_live() {
+  if fm_session_fast_home; then
+    fm_pid_alive "$1"
+    return
+  fi
+  fm_harness_pid_alive "$1"
+}
+
 # Print the one pid that identifies this session when the session lock is being
 # WRITTEN: the outermost pid of the contiguous run. That is the pid that lives as
 # long as the session - a Claude worker several levels in is reaped when its hook
@@ -197,6 +256,41 @@ fm_session_lock_owned_by_self() {
 $pids
 EOF
   return 1
+}
+
+# True when state dir $1 holds both a lock this process owns and a
+# session-start completion record naming that same lock pid.
+# bin/fm-session-start.sh is the sole writer of state/.session-start-complete;
+# this predicate is the shared reader used by that script and by
+# bin/fm-sessionstart-run.sh so a second unflagged digest cannot race a
+# completed helm.
+fm_session_start_completed() {  # <state>
+  local state=$1 lock_pid completion_pid id file line recorded_pid recorded_id
+  [ -f "$state/.lock" ] && [ ! -L "$state/.lock" ] || return 1
+  [ -f "$state/.session-start-complete" ] && [ ! -L "$state/.session-start-complete" ] || return 1
+  lock_pid=$(cat "$state/.lock" 2>/dev/null) || return 1
+  completion_pid=$(cat "$state/.session-start-complete" 2>/dev/null) || return 1
+  case "$lock_pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$completion_pid" = "$lock_pid" ] || return 1
+  if fm_session_lock_owned_by_self "$state"; then
+    return 0
+  fi
+  # A throwaway lock names the tool process, so a same-session retry cannot
+  # prove ownership by harness ancestry. Session identity is the ancestry-free
+  # proof. A relaunch carries a new id and misses, so it takes the helm again.
+  fm_session_fast_home || return 1
+  id=$(fm_harness_session_id) || return 1
+  file="$state/${FM_SESSION_LOCK_SIDECAR:-.lock.session}"
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  IFS= read -r line < "$file" 2>/dev/null || return 1
+  case "$line" in
+    *' '*) : ;;
+    *) return 1 ;;
+  esac
+  recorded_pid=${line%% *}
+  recorded_id=${line#* }
+  [ "$recorded_pid" = "$lock_pid" ] || return 1
+  [ "$recorded_id" = "$id" ]
 }
 
 # --- session identity: the proof that survives a severed ancestry ------------

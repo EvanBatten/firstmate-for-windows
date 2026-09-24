@@ -22,7 +22,7 @@ WAIT=${VERIFY_SESSION_WAIT:-1200}
 project_seed greeter
 session_start "fm-verify-scout"
 
-captain_says "ahoy! add my project from $PROJECT_ORIGIN as a local-only project called greeter. then investigate, without changing anything in the project: which subcommands a friendly greeter CLI called greet.sh should have, and what each should print. I want a short written report I can read, not a change. use the opus model. once the investigation is dispatched, end your turn and let your monitoring wake you; when the report is in, tell me its findings and wait."
+captain_says "ahoy! add my project from $PROJECT_ORIGIN as a local-only project called greeter. then investigate, without changing anything in the project: which subcommands a friendly greeter CLI called greet.sh should have, and what each should print. I want a short written report I can read, not a change. use the opus model. when the report is in, tell me its findings and wait."
 
 registered() { grep -q '^- greeter ' "$SESSION_HOME/data/projects.md" && [ -d "$SESSION_HOME/projects/greeter/.git" ]; }
 session_wait "the project is registered and cloned into the home" 600 registered

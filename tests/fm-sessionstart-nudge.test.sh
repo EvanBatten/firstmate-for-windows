@@ -317,6 +317,24 @@ test_run_startup_runs_the_full_digest() {
   pass "run wrapper: startup runs the full digest and never also nudges"
 }
 
+test_run_startup_skips_when_a_throwaway_home_already_has_the_helm() {
+  local root="$TMP_ROOT/run-throwaway-prestarted" out status=0
+  make_run_primary "$root"
+  : > "$root/.fm-control-throwaway"
+  printf '1\n' > "$root/state/.lock"
+  out=$(run_hook "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper startup on a pre-started throwaway home"
+  assert_contains "$out" "FAST SESSION START: hook skipped (helm already taken)." \
+    "a pre-started throwaway home still ran the digest"
+  assert_not_contains "$out" "$FULL_BANNER" \
+    "a pre-started throwaway home still printed the session-start banner"
+  assert_not_contains "$out" "NEXT STEP" \
+    "a pre-started throwaway home still printed the bulky digest"
+  [ "$(cat "$root/state/.lock")" = "1" ] \
+    || fail "the skip replaced the recorded helm"
+  pass "run wrapper: a throwaway home that already has the helm skips the hook digest"
+}
+
 # MSYS cannot implement POSIX exec, so a hook reached through a registration's
 # `exec` has a dead Win32 parent and an MSYS ppid of 1: the walk bin/fm-lock.sh
 # needs can never name a harness there, and the digest this wrapper would run is
@@ -1342,11 +1360,31 @@ test_run_unknown_source_takes_the_helm() {
   expect_code 0 "$status" "run wrapper unknown source"
   assert_contains "$out" "$FULL_BANNER$root" "an unrecognized source did not fall through to the full digest"
 
+  # A fresh root: the case above already completed startup, and a second
+  # unflagged digest against that live lock is now the already-complete skip.
+  root="$TMP_ROOT/run-unknown-sourceless"
+  make_run_primary "$root"
   status=0
   out=$(printf '{"hook_event_name":"SessionStart"}' | run_hook "$root") || status=$?
   expect_code 0 "$status" "run wrapper sourceless payload"
   assert_contains "$out" "$FULL_BANNER$root" "a payload with no source did not fall through to the full digest"
   pass "run wrapper: an unrecognized or absent source takes the helm rather than skipping it"
+}
+
+test_run_second_startup_is_already_complete() {
+  local root="$TMP_ROOT/run-second-startup" first second status=0
+  make_run_primary "$root"
+  first=$(run_hook "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper first startup"
+  assert_contains "$first" "$FULL_BANNER$root" "the first startup did not take the helm"
+  status=0
+  second=$(run_hook "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper second startup"
+  assert_contains "$second" "SESSION START ALREADY COMPLETE" \
+    "a second startup against a completed live lock still ran the full digest"
+  assert_not_contains "$second" "$FULL_BANNER$root" \
+    "a second startup against a completed live lock repeated the full banner"
+  pass "run wrapper: a second startup on a completed live lock is the already-complete notice"
 }
 
 test_run_gate_and_scope_are_silent() {
@@ -1437,6 +1475,7 @@ test_missing_state_is_silent
 test_owned_lock_is_silent
 test_opencode_plugin_delivers_exact_nudge_once
 test_run_startup_runs_the_full_digest
+test_run_startup_skips_when_a_throwaway_home_already_has_the_helm
 test_run_on_an_msys_userland_nudges_instead_of_the_digest
 test_run_on_a_posix_userland_still_runs_the_digest
 test_run_on_an_msys_userland_with_a_live_harness_still_reemits
@@ -1452,6 +1491,7 @@ test_run_resume_keeps_the_hook_parent_alive_for_the_nudge
 test_run_diverted_msys_open_with_a_live_foreign_lock_walks_once
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
+test_run_second_startup_is_already_complete
 test_run_gate_and_scope_are_silent
 test_run_reports_a_failed_session_start_as_digest_text
 test_claude_registration_keeps_the_hook_parent_alive

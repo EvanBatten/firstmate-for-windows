@@ -55,8 +55,16 @@
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter and experimental
 #   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
-#   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
-#   session provider only, exactly like herdr/zellij, so it does. An
+#   terminal, so ship/scout Orca spawns do not run treehouse get. A herdr
+#   ship/scout acquires the worktree in-process with `treehouse get --lease`
+#   and opens the pane already in that directory, because typing `treehouse
+#   get` into a Windows pane and polling cwd for 60s never published meta
+#   before the caller budget died. A throwaway or FM_SESSION_START_FAST home
+#   then publishes state/<id>.meta and moves the backlog row to In flight as
+#   soon as that leased pane validates, skipping the watcher guard, worktree
+#   freshen, and home-summary refresh that otherwise sat between lease and a
+#   visible task record. cmux and zellij still type `treehouse get`
+#   into the pane, as tmux does. An
 #   auto-detected herdr or cmux spawn prints a loud stderr notice;
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
@@ -265,6 +273,15 @@ resolve_directory_input() {
 }
 
 FM_HOME=$(resolve_directory_input FM_HOME "$FM_HOME") || exit 1
+# Throwaway / verify / control homes opt out of the watcher-tangle guard and
+# publish the task record as soon as the leased herdr pane validates, so a
+# later freshen or hook-wiring stall cannot hide the worker from the caller.
+spawn_fast_home() {
+  case "${FM_SESSION_START_FAST:-}" in
+    1|true|yes|TRUE|YES|on|ON) return 0 ;;
+  esac
+  [ -f "$FM_HOME/.fm-control-throwaway" ] && [ ! -L "$FM_HOME/.fm-control-throwaway" ]
+}
 if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
   FM_STATE_OVERRIDE=$(resolve_directory_input FM_STATE_OVERRIDE "$FM_STATE_OVERRIDE") || exit 1
 fi
@@ -320,7 +337,9 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 fm_refuse_if_gate_agent
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
-[ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
+if [ -z "${FM_SPAWN_NO_GUARD:-}" ] && ! spawn_fast_home; then
+  "$FM_ROOT/bin/fm-guard.sh" || true
+fi
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
@@ -741,6 +760,100 @@ RELAUNCH_FRESH_ENDPOINT_CLEANUP=0
 RELAUNCH_FRESH_ENDPOINT_TARGET=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
+SPAWN_LEASED_WT=
+SPAWN_PANE_CWD=
+SPAWN_META_PUBLISHED=0
+
+# Optional post-lease timing log. Set FM_SPAWN_TIMING to a file path.
+spawn_tick() {
+  [ -n "${FM_SPAWN_TIMING:-}" ] || return 0
+  printf '%s %s\n' "${EPOCHREALTIME:-$(date +%s)}" "$1" >> "$FM_SPAWN_TIMING" || true
+}
+
+spawn_commit_backlog_transition() {
+  [ "$BACKLOG_TRANSITION" = 1 ] || return 0
+  fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"
+}
+
+# Write state/<id>.meta once the endpoint and worktree are known. A throwaway
+# herdr spawn calls this before freshen and hook wiring so a later stall still
+# leaves a task record the caller can see.
+spawn_publish_fresh_meta() {
+  [ "$SPAWN_META_PUBLISHED" != 1 ] || return 0
+  TASK_TMP="${TASK_TMP:-/tmp/fm-$ID}"
+  mkdir -p "$TASK_TMP/gotmp"
+  META_WINDOW=$T
+  [ "$BACKEND" = orca ] && META_WINDOW=$W
+  SPAWN_GEN="${SPAWN_GEN:-s$(date +%s).${BASHPID:-$$}.$RANDOM}"
+  if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
+    SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || return 1
+    fm_lock_acquire_wait "$SPAWN_META_LOCK"
+    SPAWN_META_LOCK_HELD=1
+  fi
+  if [ "$RELAUNCH" -eq 1 ]; then
+    SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
+  else
+    SPAWN_META_TMP="$STATE/.$ID.meta.spawn.${BASHPID:-$$}"
+    SPAWN_FRESH_COMMIT_PENDING=1
+  fi
+  {
+    echo "window=$META_WINDOW"
+    echo "endpoint_task_id=$ID"
+    echo "worktree=$WT"
+    echo "project=$PROJ_ABS"
+    echo "harness=$HARNESS"
+    echo "kind=$KIND"
+    [ -z "$MODE" ] || echo "mode=$MODE"
+    [ -z "$YOLO" ] || echo "yolo=$YOLO"
+    echo "tasktmp=$TASK_TMP"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+    [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
+    echo "spawn_gen=$SPAWN_GEN"
+    [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+    if [ "$BACKEND" = herdr ]; then
+      echo "herdr_session=$HERDR_SES"
+      echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
+      echo "herdr_tab_id=$HERDR_TAB_ID"
+      echo "herdr_pane_id=$HERDR_PANE_ID"
+    fi
+    if [ "$BACKEND" = zellij ]; then
+      echo "zellij_session=$ZELLIJ_SES"
+      echo "zellij_tab_id=$ZELLIJ_TAB_ID"
+      echo "zellij_pane_id=$ZELLIJ_PANE_ID"
+    fi
+    if [ "$BACKEND" = orca ]; then
+      echo "orca_worktree_id=$ORCA_WORKTREE_ID"
+      echo "terminal=$ORCA_TERMINAL"
+    fi
+    if [ "$BACKEND" = cmux ]; then
+      echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
+      echo "cmux_surface_id=$CMUX_SURFACE_ID"
+    fi
+    if [ "$KIND" = secondmate ]; then
+      echo "home=$PROJ_ABS"
+      echo "projects=$SECONDMATE_PROJECTS"
+    fi
+    if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
+      echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
+    fi
+  } > "$SPAWN_META_TMP" || {
+    echo "error: task record for $ID could not be prepared at $SPAWN_META_TMP" >&2
+    return 1
+  }
+  spawn_tick meta-publish-start
+  if ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
+    echo "error: task record for $ID could not be published ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+    return 1
+  fi
+  spawn_tick meta-publish-done
+  SPAWN_META_TMP=
+  SPAWN_META_PUBLISHED=1
+  if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+    SPAWN_TASK_SET_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TASK_SET_LOCK"
+  fi
+}
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -866,6 +979,14 @@ spawn_abort_cleanup() {
         fi
       fi
     fi
+  fi
+  if [ -n "${SPAWN_LEASED_WT:-}" ] && [ "$SPAWN_META_PUBLISH_STARTED" != 1 ]; then
+    if [ -n "${PROJ_ABS:-}" ] && command -v treehouse >/dev/null 2>&1; then
+      if ! ( cd "$PROJ_ABS" && treehouse return --force "$SPAWN_LEASED_WT" >/dev/null 2>&1 ); then
+        echo "warning: could not return leased worktree $SPAWN_LEASED_WT after aborted spawn of $ID" >&2
+      fi
+    fi
+    SPAWN_LEASED_WT=
   fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
@@ -1872,6 +1993,36 @@ real_path_or_raw() {  # <path>
   fi
 }
 
+# In-process durable acquire for herdr. Prints nothing; sets WT and
+# SPAWN_LEASED_WT. Banners stay on stderr. A Windows path is folded to POSIX
+# so later `cd` and isolation checks use one form.
+spawn_acquire_leased_worktree() {
+  local raw posix
+  command -v treehouse >/dev/null 2>&1 || {
+    echo "error: treehouse command not found; cannot lease a worktree for $ID" >&2
+    return 1
+  }
+  raw=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || {
+    echo "error: treehouse get --lease failed for $ID under $PROJ_ABS" >&2
+    return 1
+  }
+  raw=$(printf '%s\n' "$raw" | tail -n 1)
+  [ -n "$raw" ] || {
+    echo "error: treehouse get --lease did not print a worktree path for $ID" >&2
+    return 1
+  }
+  posix=$raw
+  if command -v cygpath >/dev/null 2>&1; then
+    posix=$(cygpath -u "$raw" 2>/dev/null) || posix=$raw
+  fi
+  WT=$(real_path_or_raw "$posix")
+  [ -d "$WT" ] || {
+    echo "error: treehouse get --lease reported '$raw' (resolved '$WT'), which is not a directory" >&2
+    return 1
+  }
+  SPAWN_LEASED_WT=$WT
+}
+
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
 # a herdr spawn goes through the version-gated, workspace-per-HOME,
@@ -2112,6 +2263,14 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
   exit 1
 fi
 
+SPAWN_PANE_CWD=$PROJ_ABS
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" = herdr ]; then
+  spawn_tick lease-start
+  spawn_acquire_leased_worktree || exit 1
+  spawn_tick lease-done
+  SPAWN_PANE_CWD=$WT
+fi
+
 W="fm-$ID"
 if [ "$RELAUNCH" -eq 1 ]; then
   # A secondmate's home already resolved WT above through the same validation a
@@ -2169,6 +2328,7 @@ case "$BACKEND" in
     fi
     HERDR_PRESENTATION_JOURNAL=$(fm_backend_herdr_projection_journal_path "$STATE" "$ID")
     HERDR_PROJECTED=0
+    spawn_tick pane-start
     if [ "$KIND" != secondmate ] && fm_backend_herdr_presentation_enabled "$CONFIG" "$STATE"; then
       HERDR_SES=$(fm_backend_herdr_session)
       HERDR_PARENT_LABEL=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_workspace_label)
@@ -2245,7 +2405,7 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$SPAWN_PANE_CWD" "$HERDR_PROJECTION_LABEL" "$W"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -2298,7 +2458,7 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$SPAWN_PANE_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -2308,6 +2468,7 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    spawn_tick pane-done
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
@@ -2519,6 +2680,18 @@ elif [ "$RELAUNCH_FRESH_ENDPOINT" -eq 1 ] && [ "$KIND" != secondmate ]; then
     exit 1
   fi
   validate_spawn_worktree "relaunch" "task $ID's recorded worktree"
+elif [ -n "${SPAWN_LEASED_WT:-}" ]; then
+  WT=$SPAWN_LEASED_WT
+  spawn_tick validate-start
+  validate_spawn_worktree "treehouse get --lease" "$T"
+  spawn_tick validate-done
+  if spawn_fast_home; then
+    spawn_publish_fresh_meta || exit 1
+    if ! spawn_commit_backlog_transition; then
+      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      exit 1
+    fi
+  fi
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
@@ -2569,7 +2742,13 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   validate_spawn_worktree "treehouse get" "$T"
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
-  freshen_spawn_worktree_base "$WT" || exit 1
+  if spawn_fast_home; then
+    spawn_tick freshen-skip
+  else
+    spawn_tick freshen-start
+    freshen_spawn_worktree_base "$WT" || exit 1
+    spawn_tick freshen-done
+  fi
 fi
 
 # Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
@@ -2610,6 +2789,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   RELAUNCH_REPLACEMENT_WT=$WT
 fi
 if [ "$KIND" != secondmate ]; then
+  spawn_tick wiring-start
   # Arm the semantic busy-state contract (bin/fm-busy-lib.sh) for every
   # adapter with a verified semantic source. The launch brief sent below IS a
   # submitted turn, so the seed record is busy/fm-spawn. The minted gen is
@@ -2882,6 +3062,7 @@ EOF
       exclude_path '.fm-kimi-turnend'
       ;;
   esac
+  spawn_tick wiring-done
 fi
 
 # Delivery posture recorded in meta so fm-teardown's safety check and the
@@ -2928,9 +3109,12 @@ else
   fi
 fi
 
+if [ "$RELAUNCH" -eq 0 ] && [ "$SPAWN_META_PUBLISHED" = 1 ]; then
+  spawn_tick meta-already-published
+fi
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
-SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
+SPAWN_GEN="${SPAWN_GEN:-s$(date +%s).${BASHPID:-$$}.$RANDOM}"
 SPAWN_META_PATH="$STATE/$ID.meta"
 if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
   SPAWN_META_LOCK=$(fm_meta_lock_path "$STATE/$ID.meta") || exit 1
@@ -2939,11 +3123,12 @@ if [ "$SPAWN_META_LOCK_HELD" != 1 ]; then
 fi
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_TMP="$STATE/.$ID.meta.relaunch.${BASHPID:-$$}"
-else
+elif [ "$SPAWN_META_PUBLISHED" != 1 ]; then
   SPAWN_META_TMP="$STATE/.$ID.meta.spawn.${BASHPID:-$$}"
   SPAWN_FRESH_COMMIT_PENDING=1
 fi
-SPAWN_META_PATH=$SPAWN_META_TMP
+SPAWN_META_PATH=${SPAWN_META_TMP:-$STATE/$ID.meta}
+if [ "$RELAUNCH" -eq 1 ] || [ "$SPAWN_META_PUBLISHED" != 1 ]; then
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
@@ -3006,22 +3191,16 @@ preserve_relaunch_meta() {
   exit 1
 }
 if [ "$RELAUNCH" -eq 0 ]; then
-  if ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
-    echo "error: task record for $ID could not be published ($FM_BACKLOG_TRANSITION_ERROR)" >&2
-    exit 1
+    spawn_tick meta-publish-start
+    if ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
+      echo "error: task record for $ID could not be published ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      exit 1
+    fi
+    spawn_tick meta-publish-done
+    SPAWN_META_TMP=
+    SPAWN_META_PUBLISHED=1
   fi
-  SPAWN_META_TMP=
 fi
-
-# Fuse the backlog In-flight transition into the publication that just created
-# the record (bin/fm-backlog-transition-lib.sh owns the invariant). It runs under
-# this task's own meta lock, so a steer or teardown racing the same id stays
-# serialized exactly as before. The call itself is deferred to the final commit
-# point below so every earlier launch-delivery failure remains unwindable.
-spawn_commit_backlog_transition() {
-  [ "$BACKLOG_TRANSITION" = 1 ] || return 0
-  fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"
-}
 
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_META_PUBLISH_STARTED=1
@@ -3047,7 +3226,13 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+if spawn_fast_home; then
+  spawn_tick home-summary-skip
+else
+  spawn_tick home-summary-start
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  spawn_tick home-summary-done
+fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
@@ -3158,7 +3343,9 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
   fi
 fi
 sleep 0.3
+spawn_tick launch-send-start
 spawn_send_literal "$T" "$LAUNCH"
+spawn_tick launch-send-done
 sleep 0.3
 if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   HERDR_PROJECTION_ABORT_CLEANUP=0
@@ -3214,6 +3401,7 @@ if [ "$BACKLOG_TRANSITION" = 1 ]; then
   trap 'SPAWN_DEFERRED_SIGNAL=TERM' TERM
 fi
 SPAWN_BACKLOG_COMMIT_STATUS=0
+spawn_tick backlog-commit-start
 if spawn_commit_backlog_transition; then
   SPAWN_FRESH_COMMIT_PENDING=0
 else
