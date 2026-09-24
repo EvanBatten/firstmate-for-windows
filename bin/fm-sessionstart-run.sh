@@ -38,6 +38,10 @@
 #                           silent) and a plain instruction is enough when a new
 #                           process resumed an old session (the nudge fires).
 #
+# A throwaway control home that already holds state/.lock or
+# state/.session-start-complete exits 0 with no digest. Driver pre-start
+# already took the helm. Captain homes have no marker and are unchanged.
+#
 # Every ordinary transport path exits 0, exactly like the nudge wrapper: a
 # Claude SessionStart exit 2 blocks session initialization, so a failed session
 # start must reach the agent as digest text it can act on, never as a refusal to
@@ -91,6 +95,16 @@ stand_down() {
 # without mistaking it for a failed eligible attempt that needs the manual nudge.
 fm_is_gate_agent "$FM_ROOT" && stand_down
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || stand_down
+
+# Pre-start already took the helm. A second digest here spends the
+# register budget. Captain homes have no marker and fall through.
+if fm_session_fast_home "$FM_HOME"; then
+  if { [ -f "$STATE/.lock" ] && [ ! -L "$STATE/.lock" ]; } \
+    || { [ -f "$STATE/.session-start-complete" ] && [ ! -L "$STATE/.session-start-complete" ]; }; then
+    printf 'FAST SESSION START: hook skipped (helm already taken).\n'
+    exit 0
+  fi
+fi
 
 session_start_completed() {
   fm_session_start_completed "$STATE"
@@ -161,6 +175,11 @@ fi
 # fork reach the same nudge whatever it answers, so asking there would buy a
 # session open nothing but the delay - and the nudge repeats the walk itself.
 msys_severed_ancestry_delegates() {
+  # Throwaway homes already have a helm from pre-start. The ancestry walk
+  # is the Windows 120s actor and must not run before the cheap digest.
+  if fm_session_fast_home; then
+    return 0
+  fi
   case "${OSTYPE:-}" in
     msys*|mingw*|cygwin*) ;;
     *) return 0 ;;

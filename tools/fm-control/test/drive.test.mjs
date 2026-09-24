@@ -289,6 +289,8 @@ describe('fake-herdr end to end', () => {
     assert.equal(st.isFile(), true);
     assert.equal(st.isSymbolicLink(), false);
     assert.equal(readFileSync(marker, 'utf8'), '');
+    const captain = readFileSync(join(session.home, 'data', 'captain.md'), 'utf8');
+    assert.match(captain, /Do not load project-management/);
   });
 
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {
@@ -676,11 +678,15 @@ describe('operable home gate', () => {
     assert.equal(isThrowawayControlHome(home), true);
   });
 
-  test('stripThrowawaySessionStartHooks removes only SessionStart on a marked home', () => {
+  test('stripThrowawaySessionStartHooks removes SessionStart and PreToolUse on a marked home', () => {
     const home = tmp('strip-hooks');
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), `${JSON.stringify({
-      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'fm-sessionstart-run.sh' }] }], Stop: [{ hooks: [{ type: 'command', command: 'fm-turnend-guard.sh' }] }] },
+      hooks: {
+        SessionStart: [{ hooks: [{ type: 'command', command: 'fm-sessionstart-run.sh' }] }],
+        PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'fm-cd-pretool-check.sh' }] }],
+        Stop: [{ hooks: [{ type: 'command', command: 'fm-turnend-guard.sh' }] }],
+      },
     })}\n`);
     assert.equal(stripThrowawaySessionStartHooks(home).skipped, 'not-throwaway');
     assert.ok(JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks.SessionStart);
@@ -688,6 +694,7 @@ describe('operable home gate', () => {
     assert.equal(stripThrowawaySessionStartHooks(home).skipped, false);
     const hooks = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks;
     assert.equal(hooks.SessionStart, undefined);
+    assert.equal(hooks.PreToolUse, undefined);
     assert.ok(hooks.Stop);
   });
 

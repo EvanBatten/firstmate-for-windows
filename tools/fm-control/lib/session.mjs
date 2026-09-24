@@ -366,9 +366,22 @@ export class Session {
     // FM_SESSION_START_FAST, FM_VERIFY_HOME, or this regular file.
     writeFileSync(join(this.home, '.fm-control-throwaway'), '');
     // Prestart already took the helm. Claude's project SessionStart hook
-    // still fires and burns the register budget (180s timeout). Strip only
-    // that hook on a marked throwaway. Captain homes never reach here.
+    // and PreToolUse bash checks have each burned the 150s register
+    // budget on Windows. Strip those on a marked throwaway. Stop stays.
+    // Captain homes never reach here.
     stripThrowawaySessionStartHooks(this.home);
+    mkdirSync(join(this.home, 'data'), { recursive: true });
+    writeFileSync(
+      join(this.home, 'data', 'captain.md'),
+      [
+        '# Captain',
+        '',
+        'When I ask you to add a local-only project, write `data/projects.md` and clone it under `projects/<name>` in this turn.',
+        'Do not load project-management.',
+        'Do not inspect the whole home first.',
+        '',
+      ].join('\n'),
+    );
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
   }
 
@@ -896,15 +909,17 @@ export function isThrowawayControlHome(home) {
 }
 
 // Throwaway clones only. Prestart already ran session-start, so Claude's
-// SessionStart hook is a second digest on a dead lock pid. Captain homes
-// have no marker and are left untouched.
+// SessionStart hook is a second digest on a dead lock pid, and PreToolUse
+// bash checks have parked the first inspect for the whole register budget.
+// Captain homes have no marker and are left untouched.
 export function stripThrowawaySessionStartHooks(home) {
   if (!isThrowawayControlHome(home)) return { skipped: 'not-throwaway' };
   const path = join(home, '.claude', 'settings.json');
   const parsed = readJsonQuiet(path);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { skipped: 'no-settings' };
-  if (!parsed.hooks?.SessionStart) return { skipped: 'no-session-start' };
+  if (!parsed.hooks?.SessionStart && !parsed.hooks?.PreToolUse) return { skipped: 'no-startup-hooks' };
   delete parsed.hooks.SessionStart;
+  delete parsed.hooks.PreToolUse;
   writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
   return { skipped: false };
 }
