@@ -365,6 +365,10 @@ export class Session {
     // SessionStart's cheap path is opt-in. A real captain home has none of
     // FM_SESSION_START_FAST, FM_VERIFY_HOME, or this regular file.
     writeFileSync(join(this.home, '.fm-control-throwaway'), '');
+    // Prestart already took the helm. Claude's project SessionStart hook
+    // still fires and burns the register budget (180s timeout). Strip only
+    // that hook on a marked throwaway. Captain homes never reach here.
+    stripThrowawaySessionStartHooks(this.home);
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
   }
 
@@ -889,6 +893,20 @@ function readHomeStateFile(home, name) {
 export function isThrowawayControlHome(home) {
   const marker = join(home, '.fm-control-throwaway');
   try { return existsSync(marker) && !lstatSync(marker).isSymbolicLink(); } catch { return false; }
+}
+
+// Throwaway clones only. Prestart already ran session-start, so Claude's
+// SessionStart hook is a second digest on a dead lock pid. Captain homes
+// have no marker and are left untouched.
+export function stripThrowawaySessionStartHooks(home) {
+  if (!isThrowawayControlHome(home)) return { skipped: 'not-throwaway' };
+  const path = join(home, '.claude', 'settings.json');
+  const parsed = readJsonQuiet(path);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { skipped: 'no-settings' };
+  if (!parsed.hooks?.SessionStart) return { skipped: 'no-session-start' };
+  delete parsed.hooks.SessionStart;
+  writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
+  return { skipped: false };
 }
 
 export function controlBashPath(env = process.env) {

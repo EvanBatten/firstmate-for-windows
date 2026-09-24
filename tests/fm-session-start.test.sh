@@ -2113,6 +2113,10 @@ EOF
     "a new throwaway session id skipped the full digest"
   assert_not_contains "$third" "SESSION START ALREADY COMPLETE" \
     "a new throwaway session id was treated as the previous session"
+  assert_not_contains "$third" "BOOTSTRAP" \
+    "a new throwaway session id still ran detect-only bootstrap"
+  assert_not_contains "$third" "WAKE QUEUE" \
+    "a new throwaway session id still drained the wake queue"
 
   pass "a throwaway same-session retry skips without harness ancestry; a new id takes the helm"
 }

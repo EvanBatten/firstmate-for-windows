@@ -50,8 +50,10 @@
 # refresh, Herdr projection cleanup, the deferred network stage,
 # inactive-outcome reconciliation, tasks-axi compatibility probing, the
 # supervision block, and the bulk fleet/context file dumps. A lock
-# refusal stays read-only and never records completion; it then loads
-# those libraries and the remaining read-only-safe digest still runs.
+# refusal stays read-only and never records completion. A later hook in
+# the same home (Claude SessionStart after a driver pre-start) must not
+# spend the 120s timeout child proving session identity; if completion
+# is already on disk it lock-and-exits or leaves the recorded helm.
 # --reemit on a fast home still reprints context and drains wakes.
 #
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
@@ -335,12 +337,30 @@ if session_start_fast_home; then
 fi
 
 if [ "$FAST" -eq 1 ] && [ "$REEMIT" -eq 0 ] \
-  && [ -z "${FM_SESSION_START_STAGE_FILE:-}" ] \
-  && { [ ! -f "$COMPLETION_FILE" ] || [ -L "$COMPLETION_FILE" ]; }; then
-  # First fast start: lock and exit before sourcing the lock library,
-  # the timeout child, or the digest. A lock refusal falls through.
+  && [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
+  # Parent only. Never spawn the 120s timeout child on a fast home.
+  # Same-session retry exits here. A new session (Claude's hook after
+  # pre-start, or a relaunch) lock-and-exits. A lock refusal still
+  # exits when completion is already on disk so the hook cannot sit
+  # through wake-queue / ancestry for the register budget.
   RULE='================================================================================'
   SUBRULE='--------------------------------------------------------------------------------'
+  if [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
+    # shellcheck source=bin/fm-session-lock-lib.sh
+    . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+    if fm_session_start_completed "$STATE"; then
+      cat <<'EOF'
+================================================================================
+SESSION START ALREADY COMPLETE
+================================================================================
+This lock's digest already finished.
+The SessionStart digest already in this session is the authoritative startup input.
+Do not re-run bin/fm-session-start.sh, and do not re-read the sources that digest printed.
+If this session lost that digest, rerun with --reemit.
+EOF
+      exit 0
+    fi
+  fi
   printf '\n%s\nSESSION START - %s\n%s\n' "$RULE" "$FM_HOME" "$RULE"
   printf 'FAST SESSION START: verify/control home (%s); bulk fleet/context digest and deferred network are skipped.\n' \
     "$FAST_REASON"
@@ -368,6 +388,10 @@ if [ "$FAST" -eq 1 ] && [ "$REEMIT" -eq 0 ] \
         ;;
     esac
     printf 'FAST SESSION START: remaining digest skipped.\n'
+    exit 0
+  fi
+  if [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
+    printf 'FAST SESSION START: remaining digest skipped (helm already recorded).\n'
     exit 0
   fi
 fi

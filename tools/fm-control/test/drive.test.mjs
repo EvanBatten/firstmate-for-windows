@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
+import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys, stripThrowawaySessionStartHooks } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -674,6 +674,21 @@ describe('operable home gate', () => {
     assert.equal(isThrowawayControlHome(home), false);
     writeFileSync(join(home, '.fm-control-throwaway'), '');
     assert.equal(isThrowawayControlHome(home), true);
+  });
+
+  test('stripThrowawaySessionStartHooks removes only SessionStart on a marked home', () => {
+    const home = tmp('strip-hooks');
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), `${JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'fm-sessionstart-run.sh' }] }], Stop: [{ hooks: [{ type: 'command', command: 'fm-turnend-guard.sh' }] }] },
+    })}\n`);
+    assert.equal(stripThrowawaySessionStartHooks(home).skipped, 'not-throwaway');
+    assert.ok(JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks.SessionStart);
+    writeFileSync(join(home, '.fm-control-throwaway'), '');
+    assert.equal(stripThrowawaySessionStartHooks(home).skipped, false);
+    const hooks = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks;
+    assert.equal(hooks.SessionStart, undefined);
+    assert.ok(hooks.Stop);
   });
 
   test('controlBashPath honors FM_CONTROL_BASH', () => {
