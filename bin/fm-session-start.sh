@@ -346,20 +346,10 @@ if [ "$FAST" -eq 1 ] && [ "$REEMIT" -eq 0 ] \
   RULE='================================================================================'
   SUBRULE='--------------------------------------------------------------------------------'
   if [ -f "$COMPLETION_FILE" ] && [ ! -L "$COMPLETION_FILE" ]; then
-    # shellcheck source=bin/fm-session-lock-lib.sh
-    . "$SCRIPT_DIR/fm-session-lock-lib.sh"
-    if fm_session_start_completed "$STATE"; then
-      cat <<'EOF'
-================================================================================
-SESSION START ALREADY COMPLETE
-================================================================================
-This lock's digest already finished.
-The SessionStart digest already in this session is the authoritative startup input.
-Do not re-run bin/fm-session-start.sh, and do not re-read the sources that digest printed.
-If this session lost that digest, rerun with --reemit.
-EOF
-      exit 0
-    fi
+    # Throwaway helm is already on disk. Do not re-acquire the lock: a
+    # dead prestart pid makes fm-lock wait out the register budget.
+    printf 'FAST SESSION START: remaining digest skipped (helm already recorded).\n'
+    exit 0
   fi
   printf '\n%s\nSESSION START - %s\n%s\n' "$RULE" "$FM_HOME" "$RULE"
   printf 'FAST SESSION START: verify/control home (%s); bulk fleet/context digest and deferred network are skipped.\n' \
