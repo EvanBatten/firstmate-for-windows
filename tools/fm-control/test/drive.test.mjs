@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys, stripThrowawaySessionStartHooks } from '../lib/session.mjs';
+import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys, stripThrowawaySessionStartHooks, throwawayPaneSessionEnv } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -292,6 +292,16 @@ describe('fake-herdr end to end', () => {
     const captain = readFileSync(join(session.home, 'data', 'captain.md'), 'utf8');
     assert.match(captain, /Do not load project-management/);
     assert.match(captain, /Do not run bin\/fm-session-start\.sh/);
+  });
+
+  test('throwawayPaneSessionEnv pins the fast session-start opt-in', () => {
+    const home = tmp('pane-fast-env');
+    assert.deepEqual(throwawayPaneSessionEnv(home), {});
+    writeFileSync(join(home, '.fm-control-throwaway'), '');
+    const env = throwawayPaneSessionEnv(home);
+    assert.equal(env.FM_SESSION_START_FAST, '1');
+    assert.equal(env.FM_HOME, env.FM_ROOT_OVERRIDE);
+    assert.ok(env.FM_HOME);
   });
 
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {

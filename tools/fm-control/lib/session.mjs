@@ -279,6 +279,7 @@ export class Session {
     if (this.claudeConfigDir) paneEnv.CLAUDE_CONFIG_DIR = this.claudeConfigDir;
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+    Object.assign(paneEnv, throwawayPaneSessionEnv(this.home));
     const created = await this.herdr.call('workspace.create', { cwd: this.home, label: `fm-control-${this.trace.feature}`, focus: false, env: paneEnv });
     this.workspaceId = created.workspace?.workspace_id;
     this.paneId = created.root_pane?.pane_id;
@@ -907,6 +908,20 @@ function readHomeStateFile(home, name) {
 export function isThrowawayControlHome(home) {
   const marker = join(home, '.fm-control-throwaway');
   try { return existsSync(marker) && !lstatSync(marker).isSymbolicLink(); } catch { return false; }
+}
+
+// Claude's bash does not inherit the driver's pre-start env. Without these
+// the model's `bin/fm-session-start.sh` misses the throwaway opt-in and
+// spends the register budget on a captain digest. Captain homes have no
+// marker and get an empty object.
+export function throwawayPaneSessionEnv(home) {
+  if (!isThrowawayControlHome(home)) return {};
+  const posix = toPosixPath(home);
+  return {
+    FM_SESSION_START_FAST: '1',
+    FM_HOME: posix,
+    FM_ROOT_OVERRIDE: posix,
+  };
 }
 
 // Throwaway clones only. Prestart already ran session-start, so Claude's
