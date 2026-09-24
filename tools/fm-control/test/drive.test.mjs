@@ -291,6 +291,7 @@ describe('fake-herdr end to end', () => {
     assert.equal(readFileSync(marker, 'utf8'), '');
     const captain = readFileSync(join(session.home, 'data', 'captain.md'), 'utf8');
     assert.match(captain, /Do not load project-management/);
+    assert.match(captain, /Do not run bin\/fm-session-start\.sh/);
   });
 
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {

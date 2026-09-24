@@ -379,6 +379,7 @@ export class Session {
         'When I ask you to add a local-only project, write `data/projects.md` and clone it under `projects/<name>` in this turn.',
         'Do not load project-management.',
         'Do not inspect the whole home first.',
+        'Session start already finished. Do not run bin/fm-session-start.sh.',
         '',
       ].join('\n'),
     );
