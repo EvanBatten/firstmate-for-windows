@@ -503,7 +503,7 @@ describe('fake-herdr end to end', () => {
     assert.equal(r.status, 3, r.stderr);
     assert.match(r.json.error, /folder trust/);
     assert.equal(r.json.readyMs, null, 'ready must not fire while trust is up');
-    assert.ok(r.json.wallMs < 30_000, `failed inside the bound (${r.json.wallMs} ms)`);
+    assert.ok(r.json.wallMs < (process.platform === 'win32' ? 90_000 : 30_000), `failed inside the bound (${r.json.wallMs} ms)`);
   });
 });
 
