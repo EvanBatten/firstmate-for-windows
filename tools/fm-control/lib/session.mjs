@@ -928,43 +928,15 @@ export function isThrowawayControlHome(home) {
   try { return existsSync(marker) && !lstatSync(marker).isSymbolicLink(); } catch { return false; }
 }
 
-// Copy treehouse into the throwaway home's .tools so Claude's Bash can find
-// it even when herdr drops PATH or Git Bash cannot resolve treehouse.exe by
-// bare name. Captain homes never reach here.
+// Do not copy treehouse.exe into .tools. Git Bash treats a chmod'd copy as a
+// shell script and hangs for minutes on --version and get. Throwaway PATH
+// already pins ~/.local/bin, where the host binary runs as a real PE.
+// Captain homes never reach here.
 export function ensureThrowawayTools(home, env = process.env) {
   if (!isThrowawayControlHome(home)) return { skipped: 'not-throwaway' };
   const tools = join(home, '.tools');
   mkdirSync(tools, { recursive: true });
-  const hostBin = join(userHome(env), '.local', 'bin');
-  const candidates = [];
-  for (const dir of [hostBin, ...String(env.PATH || '').split(delimiter)]) {
-    if (!dir) continue;
-    candidates.push(join(dir, 'treehouse.exe'), join(dir, 'treehouse'));
-  }
-  let src = null;
-  for (const c of candidates) {
-    try {
-      if (existsSync(c) && lstatSync(c).isFile()) {
-        // Prefer a real binary over the MSYS shim script.
-        if (c.endsWith('.exe') || process.platform !== 'win32') { src = c; break; }
-        if (!src) src = c;
-      }
-    } catch { /* skip */ }
-  }
-  if (!src) return { skipped: 'no-treehouse', tools };
-  const destExe = join(tools, process.platform === 'win32' ? 'treehouse.exe' : 'treehouse');
-  if (!existsSync(destExe)) {
-    try { copyFileSync(src, destExe); }
-    catch { return { skipped: 'copy-failed', tools }; }
-  }
-  if (process.platform === 'win32') {
-    writeFileSync(
-      join(tools, 'treehouse'),
-      '#!/bin/sh\ndir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)\nexec "$dir/treehouse.exe" "$@"\n',
-    );
-  }
-  try { chmodSync(destExe, 0o755); } catch { /* Windows ignores mode */ }
-  return { skipped: false, tools };
+  return { skipped: 'host-path', tools };
 }
 
 // Claude's bash does not inherit the driver's pre-start env. Without these

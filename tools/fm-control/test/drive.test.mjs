@@ -306,7 +306,7 @@ describe('fake-herdr end to end', () => {
     assert.ok(env.FM_HOME);
   });
 
-  test('ensureThrowawayTools copies treehouse into .tools', () => {
+  test('ensureThrowawayTools does not copy treehouse into .tools', () => {
     const home = tmp('tools-home');
     const hostBin = tmp('host-bin');
     const fake = join(hostBin, process.platform === 'win32' ? 'treehouse.exe' : 'treehouse');
@@ -314,11 +314,8 @@ describe('fake-herdr end to end', () => {
     assert.deepEqual(ensureThrowawayTools(home, { ...process.env, PATH: hostBin }), { skipped: 'not-throwaway' });
     writeFileSync(join(home, '.fm-control-throwaway'), '');
     const result = ensureThrowawayTools(home, { ...process.env, PATH: hostBin, USERPROFILE: dirname(hostBin), HOME: dirname(hostBin) });
-    assert.equal(result.skipped, false);
-    assert.ok(existsSync(join(home, '.tools', process.platform === 'win32' ? 'treehouse.exe' : 'treehouse')));
-    if (process.platform === 'win32') {
-      assert.match(readFileSync(join(home, '.tools', 'treehouse'), 'utf8'), /treehouse\.exe/);
-    }
+    assert.equal(result.skipped, 'host-path');
+    assert.equal(existsSync(join(home, '.tools', process.platform === 'win32' ? 'treehouse.exe' : 'treehouse')), false);
   });
 
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {

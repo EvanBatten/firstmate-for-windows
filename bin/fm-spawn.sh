@@ -55,8 +55,12 @@
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter and experimental
 #   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
-#   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
-#   session provider only, exactly like herdr/zellij, so it does. An
+#   terminal, so ship/scout Orca spawns do not run treehouse get. A herdr
+#   ship/scout acquires the worktree in-process with `treehouse get --lease`
+#   and opens the pane already in that directory, because typing `treehouse
+#   get` into a Windows pane and polling cwd for 60s never published meta
+#   before the caller budget died. cmux and zellij still type `treehouse get`
+#   into the pane, as tmux does. An
 #   auto-detected herdr or cmux spawn prints a loud stderr notice;
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
@@ -741,6 +745,8 @@ RELAUNCH_FRESH_ENDPOINT_CLEANUP=0
 RELAUNCH_FRESH_ENDPOINT_TARGET=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
+SPAWN_LEASED_WT=
+SPAWN_PANE_CWD=
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -866,6 +872,14 @@ spawn_abort_cleanup() {
         fi
       fi
     fi
+  fi
+  if [ -n "${SPAWN_LEASED_WT:-}" ] && [ "$SPAWN_META_PUBLISH_STARTED" != 1 ]; then
+    if [ -n "${PROJ_ABS:-}" ] && command -v treehouse >/dev/null 2>&1; then
+      if ! ( cd "$PROJ_ABS" && treehouse return --force "$SPAWN_LEASED_WT" >/dev/null 2>&1 ); then
+        echo "warning: could not return leased worktree $SPAWN_LEASED_WT after aborted spawn of $ID" >&2
+      fi
+    fi
+    SPAWN_LEASED_WT=
   fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
@@ -1872,6 +1886,36 @@ real_path_or_raw() {  # <path>
   fi
 }
 
+# In-process durable acquire for herdr. Prints nothing; sets WT and
+# SPAWN_LEASED_WT. Banners stay on stderr. A Windows path is folded to POSIX
+# so later `cd` and isolation checks use one form.
+spawn_acquire_leased_worktree() {
+  local raw posix
+  command -v treehouse >/dev/null 2>&1 || {
+    echo "error: treehouse command not found; cannot lease a worktree for $ID" >&2
+    return 1
+  }
+  raw=$(cd "$PROJ_ABS" && treehouse get --lease --lease-holder "$ID") || {
+    echo "error: treehouse get --lease failed for $ID under $PROJ_ABS" >&2
+    return 1
+  }
+  raw=$(printf '%s\n' "$raw" | tail -n 1)
+  [ -n "$raw" ] || {
+    echo "error: treehouse get --lease did not print a worktree path for $ID" >&2
+    return 1
+  }
+  posix=$raw
+  if command -v cygpath >/dev/null 2>&1; then
+    posix=$(cygpath -u "$raw" 2>/dev/null) || posix=$raw
+  fi
+  WT=$(real_path_or_raw "$posix")
+  [ -d "$WT" ] || {
+    echo "error: treehouse get --lease reported '$raw' (resolved '$WT'), which is not a directory" >&2
+    return 1
+  }
+  SPAWN_LEASED_WT=$WT
+}
+
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
 # left it (same session-name / new-window sequence, see bin/backends/tmux.sh);
 # a herdr spawn goes through the version-gated, workspace-per-HOME,
@@ -2112,6 +2156,12 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
   exit 1
 fi
 
+SPAWN_PANE_CWD=$PROJ_ABS
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" = herdr ]; then
+  spawn_acquire_leased_worktree || exit 1
+  SPAWN_PANE_CWD=$WT
+fi
+
 W="fm-$ID"
 if [ "$RELAUNCH" -eq 1 ]; then
   # A secondmate's home already resolved WT above through the same validation a
@@ -2245,7 +2295,7 @@ case "$BACKEND" in
             HERDR_PROJECTION_ID=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
             HERDR_PROJECTION_LABEL=$(fm_backend_herdr_projection_workspace_label "$ID" "$HERDR_PROJECTION_ID")
             if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
-              "$PROJ_ABS" "$HERDR_PROJECTION_LABEL" "$W"; then
+              "$SPAWN_PANE_CWD" "$HERDR_PROJECTION_LABEL" "$W"; then
               if [ "${FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE:-0}" = 1 ]; then
                 HERDR_PROJECTION_ABORT_CLEANUP=1
                 HERDR_PROJECTION_ABORT_SESSION=$FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -2298,7 +2348,7 @@ case "$BACKEND" in
       HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
       HERDR_SES=${CONTAINER%%:*}
       HERDR_WORKSPACE_ID=${CONTAINER#*:}
-      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+      HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$SPAWN_PANE_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
       read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -2519,6 +2569,9 @@ elif [ "$RELAUNCH_FRESH_ENDPOINT" -eq 1 ] && [ "$KIND" != secondmate ]; then
     exit 1
   fi
   validate_spawn_worktree "relaunch" "task $ID's recorded worktree"
+elif [ -n "${SPAWN_LEASED_WT:-}" ]; then
+  WT=$SPAWN_LEASED_WT
+  validate_spawn_worktree "treehouse get --lease" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
