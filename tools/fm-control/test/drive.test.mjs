@@ -294,6 +294,10 @@ describe('fake-herdr end to end', () => {
     assert.match(captain, /Do not run bin\/fm-session-start\.sh/);
     assert.match(captain, /Do not load harness-adapters before spawn/);
     assert.match(captain, /bin\/fm-spawn\.sh/);
+    assert.equal(
+      readFileSync(join(session.home, 'config', 'herdr-presentation-spaces'), 'utf8').trim(),
+      'off',
+    );
   });
 
   test('throwawayPaneSessionEnv pins the fast session-start opt-in', () => {

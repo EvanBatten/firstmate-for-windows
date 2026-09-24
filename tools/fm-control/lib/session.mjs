@@ -387,6 +387,10 @@ export class Session {
     // Captain homes never reach here.
     stripThrowawaySessionStartHooks(this.home);
     ensureThrowawayTools(this.home, this.env);
+    mkdirSync(join(this.home, 'config'), { recursive: true });
+    // Default-on Herdr presentation projection races spawn on Windows and
+    // can hold the focus lock past the dispatch budget. Throwaways opt out.
+    writeFileSync(join(this.home, 'config', 'herdr-presentation-spaces'), 'off\n');
     mkdirSync(join(this.home, 'data'), { recursive: true });
     writeFileSync(
       join(this.home, 'data', 'captain.md'),
