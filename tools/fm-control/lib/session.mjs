@@ -380,7 +380,9 @@ export class Session {
         'When I ask you to add a local-only project, write `data/projects.md` and clone it under `projects/<name>` in this turn.',
         'Do not load project-management.',
         'Do not inspect the whole home first.',
-        'Session start already finished. Do not run bin/fm-session-start.sh.',
+        'Session start already finished. state/.lock and state/.session-start-complete are the helm.',
+        'Do not run bin/fm-session-start.sh. Do not load harness-adapters before spawn.',
+        'To ship: tasks-axi add, bin/fm-brief.sh, bin/fm-spawn.sh in the same turn. Spawn is the done signal.',
         '',
       ].join('\n'),
     );

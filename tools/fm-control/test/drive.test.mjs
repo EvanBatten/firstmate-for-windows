@@ -292,6 +292,8 @@ describe('fake-herdr end to end', () => {
     const captain = readFileSync(join(session.home, 'data', 'captain.md'), 'utf8');
     assert.match(captain, /Do not load project-management/);
     assert.match(captain, /Do not run bin\/fm-session-start\.sh/);
+    assert.match(captain, /Do not load harness-adapters before spawn/);
+    assert.match(captain, /bin\/fm-spawn\.sh/);
   });
 
   test('throwawayPaneSessionEnv pins the fast session-start opt-in', () => {
