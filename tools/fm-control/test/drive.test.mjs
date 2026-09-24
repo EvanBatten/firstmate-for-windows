@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys, stripThrowawaySessionStartHooks, throwawayPaneSessionEnv } from '../lib/session.mjs';
+import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys, stripThrowawaySessionStartHooks, throwawayPaneSessionEnv, ensureThrowawayTools } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -304,6 +304,21 @@ describe('fake-herdr end to end', () => {
     assert.equal(env.FM_SESSION_START_FAST, '1');
     assert.equal(env.FM_HOME, env.FM_ROOT_OVERRIDE);
     assert.ok(env.FM_HOME);
+  });
+
+  test('ensureThrowawayTools copies treehouse into .tools', () => {
+    const home = tmp('tools-home');
+    const hostBin = tmp('host-bin');
+    const fake = join(hostBin, process.platform === 'win32' ? 'treehouse.exe' : 'treehouse');
+    writeFileSync(fake, '#!/bin/sh\necho fake-treehouse\n');
+    assert.deepEqual(ensureThrowawayTools(home, { ...process.env, PATH: hostBin }), { skipped: 'not-throwaway' });
+    writeFileSync(join(home, '.fm-control-throwaway'), '');
+    const result = ensureThrowawayTools(home, { ...process.env, PATH: hostBin, USERPROFILE: dirname(hostBin), HOME: dirname(hostBin) });
+    assert.equal(result.skipped, false);
+    assert.ok(existsSync(join(home, '.tools', process.platform === 'win32' ? 'treehouse.exe' : 'treehouse')));
+    if (process.platform === 'win32') {
+      assert.match(readFileSync(join(home, '.tools', 'treehouse'), 'utf8'), /treehouse\.exe/);
+    }
   });
 
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {

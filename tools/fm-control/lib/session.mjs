@@ -99,9 +99,20 @@ export function prepareClaudeConfig(home, env = process.env) {
     })}\n`,
     { mode: 0o600 },
   );
+  const pathValue = [
+    join(home, '.tools'),
+    join(userHome(env), '.local', 'bin'),
+    env.PATH || '',
+  ].filter(Boolean).join(delimiter);
   writeFileSync(
     join(config, 'settings.json'),
-    `${JSON.stringify({ theme: 'dark' })}\n`,
+    `${JSON.stringify({
+      theme: 'dark',
+      env: {
+        PATH: pathValue,
+        FM_PANE_PATH: pathValue,
+      },
+    })}\n`,
     { mode: 0o600 },
   );
   inheritHostCredentials(config, env);
@@ -294,7 +305,11 @@ export class Session {
   }
 
   panePath() {
-    const parts = [join(this.home, '.tools', 'node_modules', '.bin')];
+    const parts = [
+      join(this.home, '.tools'),
+      join(this.home, '.tools', 'node_modules', '.bin'),
+      join(userHome(this.env), '.local', 'bin'),
+    ];
     if (this.env.FM_CONTROL_PANE_PATH_EXTRA) parts.push(this.env.FM_CONTROL_PANE_PATH_EXTRA);
     parts.push(this.env.PATH || '');
     return parts.filter(Boolean).join(delimiter);
@@ -371,6 +386,7 @@ export class Session {
     // budget on Windows. Strip those on a marked throwaway. Stop stays.
     // Captain homes never reach here.
     stripThrowawaySessionStartHooks(this.home);
+    ensureThrowawayTools(this.home, this.env);
     mkdirSync(join(this.home, 'data'), { recursive: true });
     writeFileSync(
       join(this.home, 'data', 'captain.md'),
@@ -910,6 +926,45 @@ function readHomeStateFile(home, name) {
 export function isThrowawayControlHome(home) {
   const marker = join(home, '.fm-control-throwaway');
   try { return existsSync(marker) && !lstatSync(marker).isSymbolicLink(); } catch { return false; }
+}
+
+// Copy treehouse into the throwaway home's .tools so Claude's Bash can find
+// it even when herdr drops PATH or Git Bash cannot resolve treehouse.exe by
+// bare name. Captain homes never reach here.
+export function ensureThrowawayTools(home, env = process.env) {
+  if (!isThrowawayControlHome(home)) return { skipped: 'not-throwaway' };
+  const tools = join(home, '.tools');
+  mkdirSync(tools, { recursive: true });
+  const hostBin = join(userHome(env), '.local', 'bin');
+  const candidates = [];
+  for (const dir of [hostBin, ...String(env.PATH || '').split(delimiter)]) {
+    if (!dir) continue;
+    candidates.push(join(dir, 'treehouse.exe'), join(dir, 'treehouse'));
+  }
+  let src = null;
+  for (const c of candidates) {
+    try {
+      if (existsSync(c) && lstatSync(c).isFile()) {
+        // Prefer a real binary over the MSYS shim script.
+        if (c.endsWith('.exe') || process.platform !== 'win32') { src = c; break; }
+        if (!src) src = c;
+      }
+    } catch { /* skip */ }
+  }
+  if (!src) return { skipped: 'no-treehouse', tools };
+  const destExe = join(tools, process.platform === 'win32' ? 'treehouse.exe' : 'treehouse');
+  if (!existsSync(destExe)) {
+    try { copyFileSync(src, destExe); }
+    catch { return { skipped: 'copy-failed', tools }; }
+  }
+  if (process.platform === 'win32') {
+    writeFileSync(
+      join(tools, 'treehouse'),
+      '#!/bin/sh\ndir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)\nexec "$dir/treehouse.exe" "$@"\n',
+    );
+  }
+  try { chmodSync(destExe, 0o755); } catch { /* Windows ignores mode */ }
+  return { skipped: false, tools };
 }
 
 // Claude's bash does not inherit the driver's pre-start env. Without these
