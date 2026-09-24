@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome } from '../lib/session.mjs';
+import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -468,6 +468,43 @@ describe('fake-herdr end to end', () => {
     const escapes = state.sends.filter((s) => Array.isArray(s.keys) && s.keys.includes('escape'));
     assert.equal(escapes.length, 0, 'Escape was not sent for a session-start persistent-cd denial');
   });
+
+  test('a folder-trust dialog is accepted with Down then Enter', () => {
+    const { dir, env } = fakeEnv({
+      FM_CONTROL_ROOT: root,
+      FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
+      FAKE_HERDR_TRUST: '1',
+      FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run'),
+    });
+    const trace = {
+      feature: 'e2e-trust',
+      steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, r.stderr);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    const keys = state.sends.filter((s) => Array.isArray(s.keys)).flatMap((s) => s.keys);
+    const downAt = keys.indexOf('down');
+    const enterAt = keys.indexOf('enter');
+    assert.ok(downAt >= 0, 'Down moved the cursor off No, exit');
+    assert.ok(enterAt > downAt, 'Enter confirmed Yes after Down');
+  });
+
+  test('a stuck folder-trust dialog fails the run inside the trust bound', () => {
+    const { env } = fakeEnv({
+      FM_CONTROL_ROOT: root,
+      FAKE_HERDR_PANE: ' ❯ No, exit\n   Yes, I trust this folder\n',
+      FM_CONTROL_TRUST_MS: '2500',
+      FM_CONTROL_READY_MS: '20000',
+      FM_CONTROL_EVIDENCE: join(tmp('evidence'), 'run'),
+    });
+    const trace = { feature: 'e2e-trust-stuck', steps: [{ say: 'ahoy', until: 'projects.registered:greeter', budgetSec: 60 }] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 3, r.stderr);
+    assert.match(r.json.error, /folder trust/);
+    assert.equal(r.json.readyMs, null, 'ready must not fire while trust is up');
+    assert.ok(r.json.wallMs < 30_000, `failed inside the bound (${r.json.wallMs} ms)`);
+  });
 });
 
 // ---- 4. cli transport mapping ----------------------------------------------
@@ -491,6 +528,10 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.equal(cfg.hasCompletedOnboarding, true);
     assert.equal(cfg.bypassPermissionsModeAccepted, true);
     assert.equal(cfg.projects[home].hasTrustDialogAccepted, true);
+    assert.equal(cfg.projects[home.replace(/\\/g, '/')].hasTrustDialogAccepted, true);
+    for (const key of trustProjectKeys(home)) {
+      assert.equal(cfg.projects[key].hasTrustDialogAccepted, true, key);
+    }
     const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
     assert.equal(settings.theme, 'dark');
     assert.ok(!existsSync(join(userHome, '.claude.json')));
@@ -580,6 +621,18 @@ describe('grafted onboarding config and shell prompts', () => {
     });
     assert.equal(r.ok, true, r.reason);
     assert.ok(Date.now() - started < 2000, `resolved immediately (${Date.now() - started} ms)`);
+  });
+
+  test('isTrustPrompt matches the Claude 2.1 folder dialog', () => {
+    assert.equal(isTrustPrompt(' ❯ No, exit\n   Yes, I trust this folder\n'), true);
+    assert.equal(isTrustPrompt('bypass permissions on'), false);
+  });
+
+  test('trustProjectKeys includes slash and drive-letter forms', () => {
+    const keys = trustProjectKeys('C:\\Users\\me\\tmp\\firstmate');
+    assert.ok(keys.includes('C:\\Users\\me\\tmp\\firstmate'));
+    assert.ok(keys.includes('C:/Users/me/tmp/firstmate'));
+    assert.ok(keys.includes('c:/Users/me/tmp/firstmate'));
   });
 
   test("C's prompt patterns match Git Bash, Linux cwd, and Windows shells", () => {

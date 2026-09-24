@@ -17,12 +17,15 @@
 // afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
 // first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
 // (onboarding, bypass-permissions, folder trust, theme) and passing it into
-// the pane env. Host claude.ai login is inherited into that dir: the
+// the pane env. Folder trust is keyed by every slash and drive-letter form
+// of the home, because Claude 2.1 on Windows looks up C:/... not C:\....
+// Host claude.ai login is inherited into that dir: the
 // credentials file Claude reads on Linux/Windows, plus session keys from
 // ~/.claude.json, without mutating the host files. Values are never logged.
 // CLAUDE_CODE_OAUTH_TOKEN is still passed when present, but is not required
 // for a desktop claude.ai session login. Dialog handlers remain as a
-// fallback. A dead primary is the pid going away or the pane returning to a
+// fallback and fail the run if folder trust stays up past a short bound.
+// A dead primary is the pid going away or the pane returning to a
 // shell prompt (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`).
 //
 // Environment:
@@ -33,6 +36,7 @@
 //   FM_CONTROL_EVIDENCE     evidence directory (default <tmp>/fm-control-artifacts/<feature>-<utc>)
 //   FM_CONTROL_KEEP         1 keeps the throwaway home and pane after the run
 //   FM_CONTROL_PRETRUST     0 skips writing the throwaway CLAUDE_CONFIG_DIR
+//   FM_CONTROL_TRUST_MS     bound for a visible folder-trust dialog (default 12000)
 //   FM_CONTROL_PRESTART     0 skips the throwaway session-start that writes
 //                           state/.lock before claude launches (default: run it)
 //   FM_CONTROL_BASH         Git Bash used for that pre-start (default: detect)
@@ -55,18 +59,43 @@ import { recordedPaneIds } from './predicates.mjs';
 // throwaway dir. Prefer a hardlink for the credentials file so a mid-run
 // refresh stays on the same inode as the host login; copy when a hardlink
 // cannot be made. Evidence archival strips those files and keys.
+// Claude keys projects by cwd. On Windows the dialog uses C:\... and the
+// config lookup uses C:/...; a single backslash key does not skip the prompt.
+export function trustProjectKeys(home) {
+  const keys = new Set();
+  const add = (p) => { if (p) keys.add(p); };
+  add(home);
+  add(home.replace(/\\/g, '/'));
+  add(home.replace(/\//g, '\\'));
+  const m = String(home).match(/^([A-Za-z])([:\\/].*)$/);
+  if (m) {
+    for (const drive of [m[1].toLowerCase(), m[1].toUpperCase()]) {
+      const rest = m[2];
+      add(drive + rest);
+      add((drive + rest).replace(/\\/g, '/'));
+      add((drive + rest).replace(/\//g, '\\'));
+    }
+  }
+  return [...keys];
+}
+
+export function isTrustPrompt(text) {
+  return /Yes, I trust this folder/.test(String(text || ''));
+}
+
 export function prepareClaudeConfig(home, env = process.env) {
   const config = join(home, '.fm-control-claude');
   mkdirSync(config, { recursive: true });
+  const trusted = { hasTrustDialogAccepted: true };
+  const projects = {};
+  for (const key of trustProjectKeys(home)) projects[key] = { ...trusted };
   writeFileSync(
     join(config, '.claude.json'),
     `${JSON.stringify({
       ...hostAuthState(env),
       hasCompletedOnboarding: true,
       bypassPermissionsModeAccepted: true,
-      projects: {
-        [home]: { hasTrustDialogAccepted: true },
-      },
+      projects,
     })}\n`,
     { mode: 0o600 },
   );
@@ -181,6 +210,10 @@ export class Session {
     this.model = env.FM_CONTROL_MODEL || 'opus';
     this.readyMs = Number.parseInt(env.FM_CONTROL_READY_MS || '120000', 10);
     this.operableBudgetMs = Number.parseInt(env.FM_CONTROL_OPERABLE_MS || '240000', 10);
+    this.trustBoundMs = Number.parseInt(env.FM_CONTROL_TRUST_MS || '12000', 10);
+    this.trustSeenAt = null;
+    this.dialogBusy = false;
+    this.dialogPoll = null;
     if (!this.env.CLAUDE_CODE_OAUTH_TOKEN && this.env.CLAUDE_CODE_OATH_TOKEN) {
       this.env = { ...this.env, CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OATH_TOKEN };
     }
@@ -381,6 +414,7 @@ export class Session {
     this.signals.shellDead = null;
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: this.launchLine(), keys: ['enter'] });
     await this.awaitReady();
+    this.watchDialogs();
     return Date.now() - t0;
   }
 
@@ -411,14 +445,24 @@ export class Session {
   }
 
   // Answer a claude dialog visible in the pane. Returns true when one was handled.
+  // Folder trust defaults to "No, exit". Enter only after the cursor is on Yes.
   async answerDialog(text) {
     const cursorOnNo = /❯\s*No/.test(text);
-    if (/Yes, I trust this folder/.test(text)) {
+    if (isTrustPrompt(text)) {
       this.snapshot('trust-prompt', text);
-      if (cursorOnNo) { await this.keys('down'); await sleep(250); }
-      await this.keys('enter');
+      this.trustSeenAt ??= Date.now();
+      if (Date.now() - this.trustSeenAt > this.trustBoundMs) {
+        this.snapshot('trust-prompt-stuck', text);
+        throw new HerdrError('the primary stayed on the folder trust dialog');
+      }
+      if (/❯\s*Yes/.test(text)) {
+        await this.keys('enter');
+        return true;
+      }
+      await this.keys('down');
       return true;
     }
+    this.trustSeenAt = null;
     if (/Yes, I accept/.test(text) && /[Bb]ypass [Pp]ermissions/.test(text)) {
       this.snapshot('bypass-prompt', text);
       if (cursorOnNo) { await this.keys('down'); await sleep(250); }
@@ -435,6 +479,29 @@ export class Session {
       return true;
     }
     return false;
+  }
+
+  // After ready, folder trust can still appear (pre-start lock makes ready
+  // fire on splash). Poll so waitUntil does not spend the register budget
+  // on "No, exit". A stuck prompt sets signals.blocked and fails the step.
+  watchDialogs() {
+    if (this.dialogPoll) return;
+    this.dialogPoll = setInterval(async () => {
+      if (this.closed || this.dialogBusy) return;
+      this.dialogBusy = true;
+      try {
+        const text = await this.paneText().catch(() => '');
+        if (!text) return;
+        try {
+          await this.answerDialog(text);
+        } catch (err) {
+          this.signals.blocked = err.message;
+        }
+      } finally {
+        this.dialogBusy = false;
+      }
+    }, 2000);
+    this.dialogPoll.unref?.();
   }
 
   // Implicit ready: claude in the foreground plus lock-under-new-identity or
@@ -654,6 +721,7 @@ export class Session {
     const t0 = Date.now();
     this.lockBaseline = this.lockText();
     this.signals.shellDead = null;
+    this.trustSeenAt = null;
     this.snapshot('before-relaunch', await this.paneText().catch(() => ''));
     const exited = await this.exitToPrompt();
     if (!exited) throw new HerdrError('the primary did not exit on /exit within 90 s, so no restart could happen');
@@ -715,6 +783,7 @@ export class Session {
     this.closed = true;
     const t0 = Date.now();
     if (this.statusPoll) clearInterval(this.statusPoll);
+    if (this.dialogPoll) clearInterval(this.dialogPoll);
     if (!this.herdr) { this.archive(); this.removeScratch(); return Date.now() - t0; }
     const keep = this.env.FM_CONTROL_KEEP === '1';
     try { this.snapshot('final', await this.paneText()); } catch { /* pane may be gone */ }

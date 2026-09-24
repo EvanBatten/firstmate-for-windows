@@ -35,8 +35,9 @@
 #     persistent-cd protection intact; --reemit and a stale completion still
 #     take their existing paths
 #   - the explicit fast path for verify/control homes: lock and completion
-#     still publish, bulk digest and deferred network are skipped, a lock
-#     refusal stays read-only, and an ordinary empty home is unchanged
+#     still publish, then the digest exits; detect-only bootstrap, wake
+#     drain, and the bulk sections are skipped; a lock refusal stays
+#     read-only; an ordinary empty home is unchanged
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2419,15 +2420,16 @@ assert_fast_session_start() {
     "fast path did not acquire the session lock"
   assert_contains "$out" "FAST SESSION START: operable (lock held, completion recorded)." \
     "fast path did not publish an early operable marker"
-  assert_contains "$out" "skipped (fast session start) - no live-task inventory" \
-    "fast path dumped the fleet inventory"
-  assert_contains "$out" "skipped (fast session start) - deferred network stage was not started." \
-    "fast path did not declare the skipped network stage"
-  assert_contains "$out" "skipped (fast session start) - captain memory files remain on disk" \
-    "fast path dumped the context files"
-  assert_contains "$out" "BOOTSTRAP" "fast path dropped detect-only bootstrap"
-  assert_contains "$out" "WAKE QUEUE" "fast path dropped the wake drain"
-  assert_contains "$out" "NEXT STEP" "fast path dropped the closing reminder"
+  assert_contains "$out" "FAST SESSION START: remaining digest skipped." \
+    "fast path did not exit after the lock"
+  assert_not_contains "$out" "BOOTSTRAP" "fast path still ran detect-only bootstrap"
+  assert_not_contains "$out" "WAKE QUEUE" "fast path still drained the wake queue"
+  assert_not_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS" \
+    "fast path still printed the supervision block"
+  assert_not_contains "$out" "FLEET STATE" "fast path still printed the fleet digest"
+  assert_not_contains "$out" "NETWORK CHECKS" "fast path still printed network checks"
+  assert_not_contains "$out" "CONTEXT" "fast path still printed the context digest"
+  assert_not_contains "$out" "NEXT STEP" "fast path still printed the closing reminder"
   assert_not_contains "$out" "data/captain.md" \
     "fast path printed a context file label it should have skipped"
   [ -s "$home/state/.lock" ] || fail "fast path left no session lock ($reason)"
@@ -2455,14 +2457,14 @@ EOF
   make_fake_tasks_axi_compact "$fakebin"
   log="$home/tasks-axi.log"
   printf '# Backlog\n\n## In flight\n\n## Queued\n' > "$home/data/backlog.md"
-  append_wake "$home/state" signal verify-task "done: fast path must still drain" \
+  append_wake "$home/state" signal verify-task "done: fast path must leave this queued" \
     || fail "seed wake for fast path failed"
 
   out=$(FM_SESSION_START_FAST=1 FM_FAKE_TASKS_AXI_LOG="$log" \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_fast_session_start "$out" "$home" FM_SESSION_START_FAST
-  assert_contains "$out" "$(printf 'signal\tverify-task\tdone: fast path must still drain')" \
-    "fast path skipped the wake drain"
+  [ -s "$home/state/.wake-queue" ] \
+    || fail "fast path drained a queued wake"
   if [ -f "$log" ]; then
     probes=$(grep -c -- '--version' "$log" || true)
     [ "$probes" -eq 0 ] \

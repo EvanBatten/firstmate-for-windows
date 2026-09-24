@@ -28,6 +28,23 @@ import { join, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+const TRUST_NO = [
+  'Accessing workspace:',
+  '',
+  ' ❯ No, exit',
+  '   Yes, I trust this folder',
+  '',
+  'Enter to confirm',
+].join('\n');
+const TRUST_YES = [
+  'Accessing workspace:',
+  '',
+  '   No, exit',
+  ' ❯ Yes, I trust this folder',
+  '',
+  'Enter to confirm',
+].join('\n');
+
 const DIR = process.env.FAKE_HERDR_DIR;
 if (!DIR) { process.stderr.write('FAKE_HERDR_DIR is required\n'); process.exit(64); }
 mkdirSync(DIR, { recursive: true });
@@ -67,6 +84,7 @@ function startPrimary(s) {
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], { detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
   s.primary = { pid: child.pid };
+  if (process.env.FAKE_HERDR_TRUST === '1') s.trust = 'no';
   s.launches += 1;
   s.lockSeq += 1;
   const delay = Number.parseInt(process.env.FAKE_HERDR_LOCK_DELAY_MS || '0', 10);
@@ -166,15 +184,26 @@ if (args[0] === '--apply') {
       break;
     case 'pane read':
       if (!primaryAlive(s)) process.stdout.write('\n$ \n');
-      else if (process.env.FAKE_HERDR_PANE_UNTIL_LOCK && !existsSync(join(s.home, 'state', '.lock'))) process.stdout.write(process.env.FAKE_HERDR_PANE_UNTIL_LOCK);
+      else if (process.env.FAKE_HERDR_TRUST === '1' && s.trust && s.trust !== 'done') {
+        process.stdout.write(s.trust === 'yes' ? TRUST_YES : TRUST_NO);
+      } else if (process.env.FAKE_HERDR_PANE_UNTIL_LOCK && !existsSync(join(s.home, 'state', '.lock'))) process.stdout.write(process.env.FAKE_HERDR_PANE_UNTIL_LOCK);
       else if (process.env.FAKE_HERDR_PANE) process.stdout.write(process.env.FAKE_HERDR_PANE);
       else process.stdout.write('\n> \n\nbypass permissions on\n');
       break;
-    case 'pane send-keys':
-      s.sends.push({ keys: a.slice(3), t: Date.now() });
+    case 'pane send-keys': {
+      const keys = a.slice(3);
+      s.sends.push({ keys, t: Date.now() });
+      if (process.env.FAKE_HERDR_TRUST === '1') {
+        const named = keys.map((k) => String(k).toLowerCase());
+        s.trust = s.trust || 'no';
+        if (s.trust === 'no' && named.includes('down')) s.trust = 'yes';
+        else if (s.trust === 'yes' && named.includes('enter')) s.trust = 'done';
+        else if (s.trust === 'no' && named.includes('enter')) killPrimary(s);
+      }
       save(s);
       out({});
       break;
+    }
     case 'pane run': {
       const text = a[3] ?? '';
       s.sends.push({ text, t: Date.now() });
