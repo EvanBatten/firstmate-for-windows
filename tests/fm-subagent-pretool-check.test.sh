@@ -245,6 +245,39 @@ test_stdin_transports_and_output_shapes() {
   pass "both stdin transports classify correctly and Claude's deny keeps stdout empty"
 }
 
+test_payload_on_a_stdin_left_open_is_still_judged() {
+  local hook waited=0 rc=0 cap
+  cap=$(fm_test_seconds 5)
+  : > "$OUT"; : > "$ERR"
+  FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" "$CHECK" --claude \
+    < <(printf '%s\n' '{"tool_name":"Agent","tool_input":{"prompt":"go"}}'; sleep "$((cap + 5))" 2>/dev/null) \
+    > "$OUT" 2> "$ERR" &
+  hook=$!
+  while kill -0 "$hook" 2>/dev/null && [ "$waited" -lt "$cap" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$hook" 2>/dev/null; then
+    kill "$hook" 2>/dev/null || true
+    wait "$hook" 2>/dev/null || true
+    fail "the guard still reading a stdin left open after its payload after ${waited}s"
+  fi
+  wait "$hook" || rc=$?
+  [ "$rc" -eq 2 ] || fail "an Agent payload on a stdin left open must deny, got exit $rc"
+  [ ! -s "$OUT" ] || fail "Claude deny wrote stdout: $(cat "$OUT")"
+  pass "a payload whose writer leaves stdin open is judged within the read bound"
+}
+
+test_multiline_payload_without_final_newline_is_judged() {
+  local rc=0
+  : > "$OUT"; : > "$ERR"
+  printf '{\n  "tool_name": "Agent",\n  "tool_input": {"prompt": "go"}\n}' \
+    | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
+      "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
+  [ "$rc" -eq 2 ] || fail "a multi-line Agent payload with no final newline must deny, got exit $rc"
+  pass "a multi-line payload with no final newline is read whole and denied"
+}
+
 test_malformed_transport_fails_open() {
   local rc payload
   for payload in '{not-json' '' '{}' '{"tool_name":null}'; do
@@ -289,5 +322,7 @@ test_escape_hatch_allows_deliberate_use
 test_task_worktree_and_non_firstmate_repo_are_inert
 test_secondmate_home_is_in_scope
 test_stdin_transports_and_output_shapes
+test_payload_on_a_stdin_left_open_is_still_judged
+test_multiline_payload_without_final_newline_is_judged
 test_malformed_transport_fails_open
 test_missing_jq_stdin_transport_fails_open

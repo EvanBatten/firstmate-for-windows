@@ -351,6 +351,37 @@ test_prefilter_is_strict_superset() {
   pass "transport prefilter is a strict superset: non-fm-watch fast-allows, every fm-watch and quoting-decoder-marker command reaches the classifier"
 }
 
+test_open_stdin_returns_within_the_read_bound() {
+  local script hook waited status cap
+  cap=$(fm_test_seconds 5)
+  for script in fm-arm-pretool-check.sh fm-cd-pretool-check.sh fm-subagent-pretool-check.sh; do
+    waited=0
+    status=0
+    "$ROOT/bin/$script" --claude < <(sleep "$((cap + 5))" 2>/dev/null) >/dev/null 2>&1 &
+    hook=$!
+    while kill -0 "$hook" 2>/dev/null && [ "$waited" -lt "$cap" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$hook" 2>/dev/null; then
+      kill "$hook" 2>/dev/null || true
+      wait "$hook" 2>/dev/null || true
+      fail "$script still reading an open stdin after ${waited}s"
+    fi
+    wait "$hook" 2>/dev/null || status=$?
+    [ "$status" -eq 0 ] || fail "$script exited $status on an open, empty stdin"
+  done
+  pass "each PreToolUse hook gives up on an open, empty stdin within the read bound"
+}
+
+test_multiline_payload_without_final_newline_is_judged() {
+  local rc=0
+  printf '{\n  "tool_name": "Bash",\n  "tool_input": {"command": "bin/fm-watch-arm.sh &"}\n}' \
+    | "$CHECK" --claude >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a multi-line payload with no final newline must still be judged and denied, got exit $rc"
+  pass "stdin: a multi-line payload with no final newline is read whole and denied"
+}
+
 # --- fail-open ----------------------------------------------------------------
 
 test_failopen_empty_stdin() {
@@ -457,6 +488,8 @@ test_stdin_claude_codex_schema_allow
 test_stdin_claude_codex_schema_deny
 test_stdin_unrelated_command_allowed
 test_prefilter_is_strict_superset
+test_open_stdin_returns_within_the_read_bound
+test_multiline_payload_without_final_newline_is_judged
 test_failopen_empty_stdin
 test_failopen_garbage_stdin
 test_failopen_missing_jq
