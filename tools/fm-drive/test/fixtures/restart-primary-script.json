@@ -1,0 +1,19 @@
+{
+  "add my project from": [
+    { "cloneFromSay": "projects/greeter" },
+    { "path": "data/projects.md", "content": "# Projects\n\n- greeter [local-only] - a throwaway project\n" },
+    { "delayMs": 300 },
+    { "path": "state/t1.meta", "content": "kind=ship\nproject=greeter\nherdr_pane_id=pane-w1\n" },
+    { "path": "state/t1.status", "content": "working: building greet.sh\n" },
+    { "delayMs": 200 },
+    { "path": "data/backlog.md", "content": "# Backlog\n\n## In flight\n- [ ] t1 - greeter: add greet.sh (kind: ship)\n## Queued\n## Done\n" }
+  ],
+  "I'm back": [
+    { "delayMs": 200 },
+    { "commitIn": "projects/greeter", "file": "greet.sh", "content": "#!/bin/sh\ncase $1 in hello) echo hello;; bye) echo bye;; version) echo 1;; esac\n" },
+    { "delayMs": 200 },
+    { "path": "state/t1.status", "content": "working: building greet.sh\ndone: landed on main\n" },
+    { "delayMs": 200 },
+    { "remove": "state/t1.meta" }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "add my project": [
+    { "path": "data/projects.md", "content": "# Projects\n\n- greeter [local-only] - a throwaway project\n" },
+    { "mkdir": "projects/greeter/.git/refs/heads" },
+    { "path": "projects/greeter/.git/refs/heads/main", "content": "1111111111111111111111111111111111111111\n" }
+  ],
+  "dispatch a worker": [
+    { "delayMs": 250 },
+    { "path": "state/t1.meta", "content": "kind=ship\nproject=greeter\nherdr_pane_id=pane-w1\n" },
+    { "path": "state/t1.status", "content": "working: building\n" }
+  ],
+  "land it": [
+    { "delayMs": 200 },
+    { "path": "state/t1.status", "content": "working: building\ndone: landed on main\n" }
+  ],
+  "clean up": [
+    { "delayMs": 150 },
+    { "remove": "state/t1.meta" }
+  ],
+  "crash now": [
+    { "killPrimary": true }
+  ]
+}
