@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Regression tests for spawning into a project that has no origin remote.
-#
-# A project made with `git init` and registered local-only has no remote base to
-# be stale against, so its local default branch is the base a worker starts from.
-# A project whose origin exists but cannot be fetched must still be refused.
 set -u
 
 # shellcheck source=tests/fixtures.sh
