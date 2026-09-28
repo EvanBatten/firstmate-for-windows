@@ -552,7 +552,9 @@ export class Session {
             this.snapshot('ready', text);
             return;
           }
-        } else if (sawClaude || /claude --dangerously/.test(text)) {
+        } else if (sawClaude) {
+          // Only a claude that reached the foreground and left it has exited;
+          // one still starting behind its echoed launch line has not.
           this.snapshot('exited-before-ready', text);
           throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
         }
