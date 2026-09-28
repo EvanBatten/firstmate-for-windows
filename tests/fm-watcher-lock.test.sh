@@ -333,6 +333,25 @@ test_lock_takeover_removes_a_contender_deposit() {
   pass "takeover removes a contender deposit from a dead lock"
 }
 
+test_lock_release_with_unremovable_owner_keeps_errexit_caller() {
+  local dir state lockdir out
+  dir=$(make_case lock-release-errexit)
+  state="$dir/state"
+  lockdir="$state/.held.lock"
+
+  out=$(FM_STATE_OVERRIDE="$state" bash -c '
+    set -eu
+    . "$1"
+    fm_lock_try_acquire "$2"
+    : > "$2/caller-file"
+    fm_lock_release "$2"
+    printf "after release\n"
+  ' _ "$LIB" "$lockdir" 2>&1) || fail "a set -eu caller died in fm_lock_release when the owner directory held a stray file: $out"
+  [ "$out" = "after release" ] || fail "a set -eu caller did not continue past fm_lock_release: $out"
+  [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ] || fail "release left the public lock behind"
+  pass "release keeps a set -eu caller alive when the owner directory cannot be removed"
+}
+
 test_lock_steals_dead_pid_lock() {
   local dir state lockdir dead rc newpid
   dir=$(make_case lock-dead-steal)
@@ -1940,6 +1959,7 @@ test_msys_pid_identity_uses_proc() {
 
 test_lock_takeover_removes_a_contender_deposit
 test_lock_losing_publish_leaves_no_owner_debris
+test_lock_release_with_unremovable_owner_keeps_errexit_caller
 test_singleton_start
 test_pid_identity_is_locale_invariant
 test_linux_proc_pid_identity_ignores_btime_and_detects_pid_reuse
