@@ -385,3 +385,4 @@ fm_session_lock_inspect() {  # <state>
   # shellcheck disable=SC2034 # Output global, read by lock status and inbox ready.
   FM_LOCK_INSPECT_LIVE_HARNESS=false
 }
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'
