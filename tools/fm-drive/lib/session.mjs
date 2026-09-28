@@ -11,11 +11,11 @@
 //   FM_DRIVE_PANE_PATH_EXTRA  extra PATH entries for the pane, before the inherited PATH
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, copyFileSync, chmodSync, linkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, copyFileSync, chmodSync, linkSync, readlinkSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
 import { recordedPaneIds } from './predicates.mjs';
 
@@ -163,7 +163,7 @@ export function archiveClaudeConfig(src, dest) {
         continue;
       }
     }
-    cpSync(from, to);
+    copyFileSync(from, to);
   }
 }
 
@@ -730,7 +730,7 @@ export class Session {
           if (!exited) this.log('the primary did not exit on /exit within 60 s; closing its workspace anyway');
         }
       } catch { /* closing the workspace ends it regardless */ }
-      this.stopWatcher();
+      await this.stopWatcher();
       await this.closeTaskWorkspaces();
       try { await this.herdr.call('workspace.close', { workspace_id: this.workspaceId }); } catch {}
       await this.destroyPools();
@@ -741,11 +741,13 @@ export class Session {
     return Date.now() - t0;
   }
 
-  stopWatcher() {
-    try {
-      const pid = Number.parseInt(readFileSync(join(this.home, 'state', '.watch.lock', 'pid'), 'utf8').trim(), 10);
-      if (pid > 1) process.kill(pid, 'SIGTERM');
-    } catch {}
+  async stopWatcher() {
+    let pid;
+    try { pid = Number.parseInt(readFileSync(join(this.home, 'state', '.watch.lock', 'pid'), 'utf8').trim(), 10); } catch { return; }
+    if (!(pid > 1)) return;
+    const outcome = await stopPid(pid, this.env);
+    this.keep('watcher.txt', `pid ${pid} ${outcome}\n`);
+    this.log(`the home's watcher, pid ${pid}, ${outcome}`);
   }
 
   async closeTaskWorkspaces() {
@@ -795,7 +797,7 @@ export class Session {
 
   archive() {
     for (const d of ['state', 'data']) {
-      try { cpSync(join(this.home, d), join(this.evidenceDir, 'home', d), { recursive: true, dereference: false, force: true, errorOnExist: false }); } catch {}
+      copyTreeBestEffort(join(this.home, d), join(this.evidenceDir, 'home', d));
     }
     if (this.claudeConfigDir) {
       try { archiveClaudeConfig(this.claudeConfigDir, join(this.evidenceDir, 'claude-config')); } catch {}
@@ -817,6 +819,58 @@ const realpathSafe = safeReal;
 
 function readHomeStateFile(home, name) {
   try { return readFileSync(join(home, 'state', name), 'utf8').trim() || null; } catch { return null; }
+}
+
+// cpSync kills the process on Windows (node 24) when an entry vanishes mid-copy,
+// which the watcher's lock-owner directories do; try/catch cannot stop that.
+export function copyTreeBestEffort(src, dst, { beforeEntry = () => {} } = {}) {
+  const walk = (rel) => {
+    let names;
+    try { names = readdirSync(join(src, rel)); mkdirSync(join(dst, rel), { recursive: true }); } catch { return; }
+    for (const name of names) {
+      const child = rel ? `${rel}/${name}` : name;
+      beforeEntry(child);
+      try {
+        const st = lstatSync(join(src, child));
+        if (st.isDirectory()) walk(child);
+        else if (st.isSymbolicLink()) symlinkSync(readlinkSync(join(src, child)), join(dst, child));
+        else if (st.isFile()) copyFileSync(join(src, child), join(dst, child));
+      } catch {}
+    }
+  };
+  walk('');
+}
+
+// fm-watch.sh records its MSYS pid on Windows, which process.kill cannot reach;
+// Git for Windows' own kill.exe can.
+function signaller(pid, env) {
+  if (process.platform !== 'win32') {
+    return (sig) => { try { process.kill(pid, sig === '0' ? 0 : `SIG${sig}`); return true; } catch { return false; } };
+  }
+  const kill = msysKill(env);
+  return kill && ((sig) => spawnSync(kill, [`-${sig}`, String(pid)], { stdio: 'ignore', windowsHide: true }).status === 0);
+}
+
+function msysKill(env) {
+  for (const dir of (env.PATH ?? env.Path ?? '').split(delimiter)) {
+    if (!dir || !existsSync(join(dir, 'git.exe'))) continue;
+    for (const up of [['..'], ['..', '..']]) {
+      const kill = join(dir, ...up, 'usr', 'bin', 'kill.exe');
+      if (existsSync(kill)) return kill;
+    }
+  }
+  return null;
+}
+
+export async function stopPid(pid, env) {
+  const send = signaller(pid, env);
+  if (!send) return 'not stopped: no kill.exe beside git on PATH';
+  send('TERM');
+  for (let i = 0; i < 25; i++) {
+    if (!send('0')) return 'stopped';
+    await sleep(200);
+  }
+  return 'still running 5 s after TERM';
 }
 
 export function homeIsOperable(home) {
