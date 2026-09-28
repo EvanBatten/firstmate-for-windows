@@ -9,6 +9,9 @@
 // detection, operable gate, kill(pid, 0) liveness, /exit and relaunch all
 // run against a process that actually lives and dies. FAKE_HERDR_LOCK_DELAY_MS
 // postpones those files so the operable wait can be exercised after splash.
+// FAKE_HERDR_CLAUDE_START_CALLS=<n> plays a slow claude start: after each launch
+// the first n pane process-info calls list only the shell, the pane shows the
+// echoed launch line, and the lock is written when the countdown ends.
 //
 // Captain lines are answered from $FAKE_HERDR_SCRIPT, a JSON object mapping a
 // substring of the say text to a list of home actions, applied in order by a
@@ -80,13 +83,16 @@ function writeLock(s) {
   s.lockAt = Date.now();
 }
 
-function startPrimary(s) {
+function startPrimary(s, launchLine) {
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000)'], { detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
   s.primary = { pid: child.pid };
   if (process.env.FAKE_HERDR_TRUST === '1') s.trust = 'no';
   s.launches += 1;
   s.lockSeq += 1;
+  s.launchLine = launchLine;
+  s.startingCalls = Number.parseInt(process.env.FAKE_HERDR_CLAUDE_START_CALLS || '0', 10);
+  if (s.startingCalls > 0) return;
   const delay = Number.parseInt(process.env.FAKE_HERDR_LOCK_DELAY_MS || '0', 10);
   if (delay > 0) {
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--lock-later', JSON.stringify({ home: s.home, lockSeq: s.lockSeq, delay })], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true });
@@ -175,6 +181,13 @@ if (args[0] === '--apply') {
       out({});
       break;
     case 'pane process-info': {
+      if (s.startingCalls > 0) {
+        s.startingCalls -= 1;
+        if (s.startingCalls === 0) writeLock(s);
+        save(s);
+        out({ process_info: { shell_pid: process.ppid, foreground_processes: [{ pid: process.ppid, name: 'pwsh', argv: ['pwsh'] }] } });
+        break;
+      }
       const alive = primaryAlive(s);
       out({ process_info: { shell_pid: process.ppid, foreground_processes: alive ? [{ pid: s.primary.pid, name: 'claude', argv: ['claude'] }] : [{ pid: process.ppid, name: 'bash', argv: ['bash'] }] } });
       break;
@@ -184,6 +197,7 @@ if (args[0] === '--apply') {
       break;
     case 'pane read':
       if (!primaryAlive(s)) process.stdout.write('\n$ \n');
+      else if (s.startingCalls > 0) process.stdout.write(`\nfirstmate on main\n❯ ${s.launchLine}\n`);
       else if (process.env.FAKE_HERDR_TRUST === '1' && s.trust && s.trust !== 'done') {
         process.stdout.write(s.trust === 'yes' ? TRUST_YES : TRUST_NO);
       } else if (process.env.FAKE_HERDR_PANE_UNTIL_LOCK && !existsSync(join(s.home, 'state', '.lock'))) process.stdout.write(process.env.FAKE_HERDR_PANE_UNTIL_LOCK);
@@ -208,7 +222,7 @@ if (args[0] === '--apply') {
       const text = a[3] ?? '';
       s.sends.push({ text, t: Date.now() });
       if (/claude --dangerously-skip-permissions/.test(text)) {
-        startPrimary(s);
+        startPrimary(s, text);
       } else if (text === '/exit') {
         s.exits += 1;
         killPrimary(s);

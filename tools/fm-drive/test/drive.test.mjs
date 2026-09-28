@@ -526,6 +526,24 @@ describe('fake-herdr end to end', () => {
     assert.ok(r.json.operableMs >= 1500, `operable wait ${r.json.operableMs} ms`);
   });
 
+  test('a claude that takes a few seconds to reach the foreground is not counted as exited', () => {
+    const { dir, env } = fakeEnv({
+      FM_DRIVE_ROOT: root,
+      FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
+      FAKE_HERDR_CLAUDE_START_CALLS: '3',
+      FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run'),
+    });
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-slow-start'))], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.equal(r.json.pass, true);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    assert.equal(state.startingCalls, 0, 'the driver kept asking until claude reached the foreground');
+    assert.equal(state.launches, 1, 'one launch, no retry');
+    const says = captainSays(state);
+    assert.equal(says.length, 1);
+    assert.match(says[0], /^ahoy! add my project from \S+ as greeter$/);
+  });
+
   test('a persistent-cd session-start denial does not send Escape', () => {
     const { dir, env } = fakeEnv({
       FM_DRIVE_ROOT: root,
