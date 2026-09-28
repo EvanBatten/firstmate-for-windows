@@ -760,9 +760,9 @@ fm_lock_discard_owner() {
   [ -d "$ownerdir" ] && [ ! -L "$ownerdir" ] || return 0
   fm_lock_clean_known_files "$ownerdir"
   for child in "$ownerdir"/* "$ownerdir"/.[!.]* "$ownerdir"/..?*; do
-    [ -L "$child" ] && rm -f "$child" 2>/dev/null
+    [ ! -L "$child" ] || rm -f "$child" 2>/dev/null || true
   done
-  rmdir "$ownerdir" 2>/dev/null
+  rmdir "$ownerdir" 2>/dev/null || true
 }
 
 fm_lock_claim_blocked_by_steal() {
@@ -821,7 +821,7 @@ fm_lock_try_create() {
       rm -f "$lockdir" 2>/dev/null || true
     fi
   fi
-  fm_lock_discard_owner "$ownerdir" || true
+  fm_lock_discard_owner "$ownerdir"
   return 1
 }
 
@@ -834,6 +834,7 @@ fm_lock_remove_path() {
     return 0
   fi
   fm_lock_discard_owner "$lockdir"
+  [ ! -e "$lockdir" ]
 }
 
 fm_lock_mid_acquire_is_fresh() {
@@ -1320,7 +1321,7 @@ fm_lock_release() {
   fi
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
   [ "$pid" = "$current" ] || return 0
-  fm_lock_discard_owner "$lockdir" || true
+  fm_lock_discard_owner "$lockdir"
 }
 
 fm_meta_lock_path() {
