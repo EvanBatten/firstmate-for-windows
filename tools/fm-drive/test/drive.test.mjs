@@ -106,11 +106,14 @@ describe('trace refusal', () => {
   });
 
   test('the shipped traces validate through check', () => {
-    for (const name of ['restart-primary', 'scout-report']) {
+    const shipped = readdirSync(join(HERE, '..', 'traces')).sort();
+    assert.deepEqual(shipped, ['register.json', 'restart-primary.json', 'scout-report.json']);
+    const steps = { register: 1, 'restart-primary': 6, 'scout-report': 6 };
+    for (const [name, count] of Object.entries(steps)) {
       const r = runDrive(['check', join(HERE, '..', 'traces', `${name}.json`)], process.env);
       assert.equal(r.status, 0, r.stderr);
       assert.equal(r.json.feature, name);
-      assert.ok(r.json.steps.length >= 5);
+      assert.equal(r.json.steps.length, count);
     }
   });
 
