@@ -1,16 +1,17 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
+import * as sessionLib from '../lib/session.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DRIVE = join(HERE, '..', 'drive.mjs');
@@ -751,6 +752,85 @@ describe('operable home gate', () => {
     assert.equal(isSessionStartBusy(''), false);
   });
 
+});
+
+function listTree(dir, prefix = '') {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    return e.isDirectory() ? [rel, ...listTree(join(dir, e.name), rel)] : [rel];
+  }).sort();
+}
+
+// Git for Windows' own bash, so the recorded pid is an MSYS pid as fm-watch.sh writes it.
+const BASH = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/bash.exe' : 'bash';
+
+describe('close', () => {
+  test('the evidence copy skips entries that vanish mid-walk and keeps the rest', () => {
+    const src = tmp('copy-src');
+    const dst = join(tmp('copy-dst'), 'state');
+    writeFileSync(join(src, 'a'), 'A');
+    writeFileSync(join(src, 'b'), 'B');
+    mkdirSync(join(src, 'd'));
+    writeFileSync(join(src, 'd', 'x'), 'X');
+    mkdirSync(join(src, '.x.lock.owner.1'));
+    writeFileSync(join(src, '.x.lock.owner.1', 'pid'), '1');
+    const vanish = new Set(['b', '.x.lock.owner.1']);
+    sessionLib.copyTreeBestEffort(src, dst, {
+      beforeEntry: (rel) => { if (vanish.has(rel)) rmSync(join(src, rel), { recursive: true, force: true }); },
+    });
+    assert.deepEqual(listTree(dst), ['a', 'd', 'd/x']);
+    assert.equal(readFileSync(join(dst, 'a'), 'utf8'), 'A');
+    assert.equal(readFileSync(join(dst, 'd', 'x'), 'utf8'), 'X');
+  });
+
+  test('archiving a home whose watcher churns lock dirs does not kill the driver', () => {
+    const home = tmp('churn-home');
+    const state = join(home, 'state');
+    mkdirSync(state);
+    for (let i = 0; i < 30; i++) writeFileSync(join(state, `t${i}.status`), 'working: x\n');
+    const churn = spawn(NODE, ['-e', `
+      const { mkdirSync, rmSync, writeFileSync } = require('node:fs');
+      const d = process.argv[1];
+      for (;;) for (let i = 0; i < 50; i++) { const p = d + '/.watch.lock.owner.' + i; try { mkdirSync(p); writeFileSync(p + '/pid', '1'); rmSync(p, { recursive: true, force: true }); } catch {} }
+    `, state], { stdio: 'ignore' });
+    try {
+      const script = join(tmp('churn-script'), 'archive.mjs');
+      writeFileSync(script, `
+        import { Session } from ${JSON.stringify(pathToFileURL(join(HERE, '..', 'lib', 'session.mjs')).href)};
+        const s = new Session({ trace: { feature: 'churn', steps: [] }, env: { ...process.env, FM_DRIVE_EVIDENCE: process.argv[3] } });
+        s.home = process.argv[2];
+        for (let n = 0; n < 200; n++) s.archive();
+        console.log('survived');
+      `);
+      const r = spawnSync(NODE, [script, home, join(tmp('churn-evidence'), 'run')], { encoding: 'utf8', timeout: 120_000 });
+      assert.deepEqual({ status: r.status, out: r.stdout.trim() }, { status: 0, out: 'survived' }, r.stderr);
+    } finally {
+      churn.kill();
+    }
+  });
+
+  test('stopWatcher stops the pid the watcher recorded, including an MSYS pid on Windows', async () => {
+    const home = tmp('watcher-home');
+    const lock = join(home, 'state', '.watch.lock');
+    mkdirSync(lock, { recursive: true });
+    const pidFile = join(lock, 'pid').replace(/\\/g, '/');
+    const watcher = spawn(BASH, ['-c', 'echo $$ > "$1"; while :; do sleep 1; done', 'watcher', pidFile], { stdio: 'ignore' });
+    const exited = new Promise((res) => watcher.once('exit', () => res(true)));
+    try {
+      for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 100));
+      assert.ok(existsSync(pidFile), 'the stand-in watcher recorded its pid');
+      const evidence = join(tmp('watcher-evidence'), 'run');
+      const s = new sessionLib.Session({ trace: { feature: 'watcher', steps: [] }, env: { ...process.env, FM_DRIVE_EVIDENCE: evidence } });
+      mkdirSync(evidence, { recursive: true });
+      s.home = home;
+      await s.stopWatcher();
+      const gone = await Promise.race([exited, new Promise((r) => setTimeout(() => r(false), 5000))]);
+      assert.equal(gone, true, 'the watcher process exited');
+      assert.match(readFileSync(join(evidence, 'watcher.txt'), 'utf8'), /^pid \d+ stopped\n$/);
+    } finally {
+      watcher.kill();
+    }
+  });
 });
 
 test('no module spawns a shell', () => {
