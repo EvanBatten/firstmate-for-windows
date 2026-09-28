@@ -11,13 +11,17 @@
 // lists a claude foreground process, and either state/.lock exists in the
 // home under a new identity or the prompt is up (see awaitReady). That is
 // implicit ready (splash / bypass banner). An operable home is a later
-// firstmate fact: state/.lock or state/.session-start-complete, the digest
-// marker fm-session-start.sh writes when the helm is actually taken.
+// firstmate fact: state/.lock or state/.session-start-complete, written by
+// the repo's own SessionStart hook when the helm is actually taken.
 // The first captain say waits for that (see sayWhenOperable). Liveness
-// afterwards is kill(pid, 0) on that pid, which costs no herdr call. Claude's
-// first-run dialogs are skipped by writing a throwaway CLAUDE_CONFIG_DIR
-// (onboarding, bypass-permissions, folder trust, theme) and passing it into
-// the pane env. Folder trust is keyed by every slash and drive-letter form
+// afterwards is kill(pid, 0) on that pid, which costs no herdr call.
+//
+// The home is what a captain gets: a clone of the checkout with the repo's
+// hooks untouched, no data/captain.md, and nothing run before claude starts.
+// The only thing the driver supplies is a clean CLAUDE_CONFIG_DIR at
+// <scratch>/claude-config, beside the home rather than in it, so Claude's
+// first-run dialogs are skipped (onboarding, bypass-permissions, folder
+// trust, theme). Folder trust is keyed by every slash and drive-letter form
 // of the home, because Claude 2.1 on Windows looks up C:/... not C:\....
 // Host claude.ai login is inherited into that dir: the
 // credentials file Claude reads on Linux/Windows, plus session keys from
@@ -35,12 +39,10 @@
 //   FM_DRIVE_UNTIL_MS     default step budget when a step has no budgetSec (default 180000)
 //   FM_DRIVE_EVIDENCE     evidence directory (default <tmp>/fm-drive-artifacts/<feature>-<utc>)
 //   FM_DRIVE_KEEP         1 keeps the throwaway home and pane after the run
-//   FM_DRIVE_PRETRUST     0 skips writing the throwaway CLAUDE_CONFIG_DIR
 //   FM_DRIVE_TRUST_MS     bound for a visible folder-trust dialog (default 12000)
-//   FM_DRIVE_PRESTART     0 skips the throwaway session-start that writes
-//                           state/.lock before claude launches (default: run it)
-//   FM_DRIVE_BASH         Git Bash used for that pre-start (default: detect)
 //   FM_DRIVE_ROOT         checkout to clone as the home (default: the repo holding this file)
+//   FM_DRIVE_TOOLS_DIR    tools dir linked into the home as .tools (default: <root>/.tools)
+//   FM_DRIVE_PANE_PATH_EXTRA  extra PATH entries for the pane, before the inherited PATH
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, copyFileSync, chmodSync, linkSync } from 'node:fs';
@@ -83,8 +85,9 @@ export function isTrustPrompt(text) {
   return /Yes, I trust this folder/.test(String(text || ''));
 }
 
-export function prepareClaudeConfig(home, env = process.env) {
-  const config = join(home, '.fm-control-claude');
+// The config lives beside the home, not in it, so the home holds nothing a
+// captain's checkout lacks. Trust still keys on the home.
+export function prepareClaudeConfig(config, home, env = process.env) {
   mkdirSync(config, { recursive: true });
   const trusted = { hasTrustDialogAccepted: true };
   const projects = {};
@@ -262,21 +265,7 @@ export class Session {
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
-    if (this.env.FM_DRIVE_PRETRUST !== '0') this.claudeConfigDir = prepareClaudeConfig(this.home, this.env);
-    // Throwaway homes only. Take the helm from this driver so state/.lock
-    // exists before claude's splash, and the first say does not wait on the
-    // pane to finish session-start. A captain home has no marker and is skipped.
-    if (this.env.FM_DRIVE_PRESTART !== '0') {
-      const pre = Date.now();
-      const result = await prestartThrowawayHome(this.home, { env: this.env, log: this.log, counters: this.counters });
-      if (!result.skipped) {
-        this.keep('prestart.txt', result.out || '');
-        this.log(`throwaway session-start pre-ran in ${Date.now() - pre} ms`);
-        // The pre-start lock is not Claude's splash. Remember it so awaitReady
-        // still waits for the pane, and so lock.rotated after relaunch works.
-        this.lockBaseline = this.lockText();
-      }
-    }
+    this.claudeConfigDir = prepareClaudeConfig(join(this.scratch, 'claude-config'), this.home, this.env);
     this.herdr = await Herdr.attach(this.env, { log: this.log });
     try {
       const list = await this.herdr.call('workspace.list');
@@ -286,11 +275,9 @@ export class Session {
     }
     // TMUX is blanked so a herdr server that happens to run under tmux still
     // yields a pane where firstmate auto-detects herdr, not tmux.
-    const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '' };
-    if (this.claudeConfigDir) paneEnv.CLAUDE_CONFIG_DIR = this.claudeConfigDir;
+    const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '', CLAUDE_CONFIG_DIR: this.claudeConfigDir };
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
-    Object.assign(paneEnv, throwawayPaneSessionEnv(this.home));
     const created = await this.herdr.call('workspace.create', { cwd: this.home, label: `fm-drive-${this.trace.feature}`, focus: false, env: paneEnv });
     this.workspaceId = created.workspace?.workspace_id;
     this.paneId = created.root_pane?.pane_id;
@@ -331,6 +318,17 @@ export class Session {
     });
   }
 
+  async gitBytes(args) {
+    this.counters.setupSpawns += 1;
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn('git', args, { stdio: ['ignore', 'pipe', 'ignore'], shell: false, windowsHide: true });
+      const chunks = [];
+      child.stdout.on('data', (d) => chunks.push(d));
+      child.on('error', reject);
+      child.on('close', (code) => (code === 0 ? resolvePromise(Buffer.concat(chunks)) : reject(new Error(`git ${args.slice(2, 4).join(' ')} exited ${code}`))));
+    });
+  }
+
   // The code under test, cloned into a fresh home: the same isolation rule as
   // tests/verification/session-lib.sh, so the primary never runs in the
   // primary checkout.
@@ -346,14 +344,7 @@ export class Session {
     const dirty = await this.git(['-C', this.root, 'status', '--porcelain']);
     if (dirty) {
       try {
-        const patch = await new Promise((res, rej) => {
-          this.counters.setupSpawns += 1;
-          const c = spawn('git', ['-C', this.root, 'diff', 'HEAD', '--binary'], { stdio: ['ignore', 'pipe', 'ignore'], shell: false, windowsHide: true });
-          const chunks = [];
-          c.stdout.on('data', (d) => chunks.push(d));
-          c.on('error', rej);
-          c.on('close', () => res(Buffer.concat(chunks)));
-        });
+        const patch = await this.gitBytes(['-C', this.root, 'diff', 'HEAD', '--binary']);
         if (patch.length) {
           await new Promise((res, rej) => {
             this.counters.setupSpawns += 1;
@@ -378,34 +369,6 @@ export class Session {
     } catch {
       throw new HerdrError("the clone's harness skill link does not resolve, so the primary would have no skills");
     }
-    // SessionStart's cheap path is opt-in. A real captain home has none of
-    // FM_SESSION_START_FAST, FM_VERIFY_HOME, or this regular file.
-    writeFileSync(join(this.home, '.fm-control-throwaway'), '');
-    // Prestart already took the helm. Claude's project SessionStart hook
-    // and PreToolUse bash checks have each burned the 150s register
-    // budget on Windows. Strip those on a marked throwaway. Stop stays.
-    // Captain homes never reach here.
-    stripThrowawaySessionStartHooks(this.home);
-    ensureThrowawayTools(this.home, this.env);
-    mkdirSync(join(this.home, 'config'), { recursive: true });
-    // Default-on Herdr presentation projection races spawn on Windows and
-    // can hold the focus lock past the dispatch budget. Throwaways opt out.
-    writeFileSync(join(this.home, 'config', 'herdr-presentation-spaces'), 'off\n');
-    mkdirSync(join(this.home, 'data'), { recursive: true });
-    writeFileSync(
-      join(this.home, 'data', 'captain.md'),
-      [
-        '# Captain',
-        '',
-        'When I ask you to add a local-only project, write `data/projects.md` and clone it under `projects/<name>` in this turn.',
-        'Do not load project-management.',
-        'Do not inspect the whole home first.',
-        'Session start already finished. state/.lock and state/.session-start-complete are the helm.',
-        'Do not run bin/fm-session-start.sh. Do not load harness-adapters before spawn.',
-        'To ship: tasks-axi add, bin/fm-brief.sh, bin/fm-spawn.sh in the same turn. Spawn is the done signal.',
-        '',
-      ].join('\n'),
-    );
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
   }
 
@@ -438,15 +401,28 @@ export class Session {
     const home = this.home;
     const cfg = this.claudeConfigDir;
     if (this.shell === 'pwsh') {
-      const cfgSet = cfg ? `; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'` : '';
-      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }${cfgSet}; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}`;
+      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}`;
     }
     if (this.shell === 'cmd') {
-      const cfgSet = cfg ? `set "CLAUDE_CONFIG_DIR=${cfg}" && ` : '';
-      return `set "PATH=%FM_PANE_PATH%" && ${cfgSet}cd /d "${home}" && claude ${flags}`;
+      return `set "PATH=%FM_PANE_PATH%" && set "CLAUDE_CONFIG_DIR=${cfg}" && cd /d "${home}" && claude ${flags}`;
     }
-    const cfgSet = cfg ? `export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; ` : '';
-    return `export PATH="$FM_PANE_PATH"; ${cfgSet}cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
+    return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
+  }
+
+  // What the primary was launched into, measured rather than asserted: the
+  // clone's hooks against its own committed settings, and whether a
+  // data/captain.md was already there before the captain said anything.
+  async fidelity() {
+    const committed = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
+    let settings = null;
+    try { settings = readFileSync(join(this.home, '.claude', 'settings.json')); } catch { /* absent */ }
+    const same = committed === null ? settings === null : settings !== null && committed.equals(settings);
+    return {
+      claudeConfig: 'clean',
+      hooks: same ? 'repo' : 'modified',
+      captainMd: existsSync(join(this.home, 'data', 'captain.md')) ? 'present' : 'untouched',
+      model: this.model,
+    };
   }
 
   async launch() {
@@ -522,9 +498,9 @@ export class Session {
     return false;
   }
 
-  // After ready, folder trust can still appear (pre-start lock makes ready
-  // fire on splash). Poll so waitUntil does not spend the register budget
-  // on "No, exit". A stuck prompt sets signals.blocked and fails the step.
+  // After ready, folder trust can still appear (ready can fire on the
+  // splash). Poll so waitUntil does not spend a step budget on "No, exit".
+  // A stuck prompt sets signals.blocked and fails the step.
   watchDialogs() {
     if (this.dialogPoll) return;
     this.dialogPoll = setInterval(async () => {
@@ -925,133 +901,6 @@ const realpathSafe = safeReal;
 
 function readHomeStateFile(home, name) {
   try { return readFileSync(join(home, 'state', name), 'utf8').trim() || null; } catch { return null; }
-}
-
-export function isThrowawayControlHome(home) {
-  const marker = join(home, '.fm-control-throwaway');
-  try { return existsSync(marker) && !lstatSync(marker).isSymbolicLink(); } catch { return false; }
-}
-
-// Do not copy treehouse.exe into .tools. Git Bash treats a chmod'd copy as a
-// shell script and hangs for minutes on --version and get. Throwaway PATH
-// already pins ~/.local/bin, where the host binary runs as a real PE.
-// Captain homes never reach here.
-export function ensureThrowawayTools(home, env = process.env) {
-  if (!isThrowawayControlHome(home)) return { skipped: 'not-throwaway' };
-  const tools = join(home, '.tools');
-  mkdirSync(tools, { recursive: true });
-  return { skipped: 'host-path', tools };
-}
-
-// Claude's bash does not inherit the driver's pre-start env. Without these
-// the model's `bin/fm-session-start.sh` misses the throwaway opt-in and
-// spends the register budget on a captain digest. Captain homes have no
-// marker and get an empty object.
-export function throwawayPaneSessionEnv(home) {
-  if (!isThrowawayControlHome(home)) return {};
-  const posix = toPosixPath(home);
-  return {
-    FM_SESSION_START_FAST: '1',
-    FM_HOME: posix,
-    FM_ROOT_OVERRIDE: posix,
-  };
-}
-
-// Throwaway clones only. Prestart already ran session-start, so Claude's
-// SessionStart hook is a second digest on a dead lock pid, and PreToolUse
-// bash checks have parked the first inspect for the whole register budget.
-// Captain homes have no marker and are left untouched.
-export function stripThrowawaySessionStartHooks(home) {
-  if (!isThrowawayControlHome(home)) return { skipped: 'not-throwaway' };
-  const path = join(home, '.claude', 'settings.json');
-  const parsed = readJsonQuiet(path);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { skipped: 'no-settings' };
-  if (!parsed.hooks?.SessionStart && !parsed.hooks?.PreToolUse) return { skipped: 'no-startup-hooks' };
-  delete parsed.hooks.SessionStart;
-  delete parsed.hooks.PreToolUse;
-  writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
-  return { skipped: false };
-}
-
-export function controlBashPath(env = process.env) {
-  if (env.FM_DRIVE_BASH) return env.FM_DRIVE_BASH;
-  if (process.platform !== 'win32') return 'bash';
-  const candidates = [
-    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
-    env['ProgramFiles(x86)'] && join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
-    'C:\\Program Files\\Git\\bin\\bash.exe',
-  ].filter(Boolean);
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
-export function toPosixPath(p) {
-  const abs = resolve(p);
-  if (process.platform !== 'win32') return abs;
-  const m = abs.match(/^([A-Za-z]):[\\/](.*)$/);
-  if (!m) return abs.replace(/\\/g, '/');
-  return `/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`;
-}
-
-// Run bin/fm-session-start.sh once against a marked throwaway home so the
-// operable gate sees state/.lock before claude launches. Fail closed when
-// the script exits non-zero or finishes without a lock or completion record.
-// Unmarked homes are a no-op.
-export function prestartThrowawayHome(home, { env = process.env, log = () => {}, counters, timeoutMs = 240_000 } = {}) {
-  if (env.FM_DRIVE_PRESTART === '0') return Promise.resolve({ skipped: 'disabled' });
-  if (!isThrowawayControlHome(home)) return Promise.resolve({ skipped: 'not-throwaway' });
-  const bash = controlBashPath(env);
-  if (!bash) {
-    return Promise.reject(new HerdrError('cannot pre-start the throwaway home: no Git Bash (set FM_DRIVE_BASH)'));
-  }
-  const script = join(home, 'bin', 'fm-session-start.sh');
-  if (!existsSync(script)) {
-    return Promise.reject(new HerdrError(`cannot pre-start the throwaway home: missing ${script}`));
-  }
-  const posixHome = toPosixPath(home);
-  const posixScript = toPosixPath(script);
-  return new Promise((resolve, reject) => {
-    if (counters) counters.setupSpawns += 1;
-    const childEnv = { ...env, FM_HOME: posixHome, FM_ROOT_OVERRIDE: posixHome };
-    delete childEnv.CURSOR_AGENT;
-    delete childEnv.CURSOR_INVOKED_AS;
-    delete childEnv.CLAUDECODE;
-    delete childEnv.PI_CODING_AGENT;
-    delete childEnv.GROK_AGENT;
-    const child = spawn(bash, [posixScript], {
-      cwd: home,
-      env: childEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new HerdrError(`throwaway session-start timed out after ${Math.round(timeoutMs / 1000)} s`));
-    }, timeoutMs);
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { err += d; });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(new HerdrError(`cannot pre-start the throwaway home: ${e.message}`));
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new HerdrError(`throwaway session-start exited ${code}${err.trim() ? `: ${lastLines(err, 2)}` : out.trim() ? `: ${lastLines(out, 2)}` : ''}`));
-        return;
-      }
-      if (readHomeStateFile(home, '.lock') === null && readHomeStateFile(home, '.session-start-complete') === null) {
-        reject(new HerdrError('throwaway session-start finished without a lock or completion record'));
-        return;
-      }
-      log(`throwaway session-start pre-ran (${out.split('\n').length} lines)`);
-      resolve({ skipped: false, out, err });
-    });
-  });
 }
 
 // Helm taken: lock acquired, or the digest-complete marker published.

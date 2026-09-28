@@ -5,6 +5,8 @@
 // reserved verb "$relaunch". `until` is a closed catalog expression
 // (lib/predicates.mjs). `project` names the throwaway project seeded when a
 // say mentions {{projectOrigin}} (default greeter).
+// A say is captain text: one that names firstmate's internals (STEERING) is
+// refused, because the run would prove obedience rather than the product.
 // Refusal is a thrown TraceError; drive.mjs maps it to exit 2.
 
 import { readFileSync } from 'node:fs';
@@ -20,6 +22,13 @@ export class TraceError extends Error {
 
 export const RELAUNCH = '$relaunch';
 export const INTERPOLATIONS = ['projectOrigin', 'home'];
+
+const STEERING = [
+  { pattern: /\bbin\//, what: 'a bin/ path' },
+  { pattern: /\bfm-[A-Za-z0-9_-]+\.sh\b/, what: 'a firstmate script' },
+  { pattern: /\btasks-axi\b/, what: 'tasks-axi' },
+  { pattern: /session[ -]start/i, what: 'session start' },
+];
 
 export function loadTrace(filePath) {
   let text;
@@ -66,6 +75,10 @@ export function validateTrace(raw) {
     if (typeof step.until !== 'string') throw new TraceError(`${at}.until must be a string`);
     if (step.say.startsWith('$') && step.say !== RELAUNCH) {
       throw new TraceError(`${at}.say: unknown reserved verb ${JSON.stringify(step.say)}; only ${RELAUNCH} is defined`);
+    }
+    const steer = STEERING.find(({ pattern }) => pattern.test(step.say));
+    if (steer) {
+      throw new TraceError(`${at}.say names ${steer.what}; that steers the primary with internals, so the run would prove obedience rather than the product`);
     }
     for (const m of step.say.matchAll(/\{\{\s*([^}]*?)\s*\}\}/g)) {
       if (!INTERPOLATIONS.includes(m[1])) {

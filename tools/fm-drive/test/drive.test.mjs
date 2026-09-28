@@ -6,7 +6,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync, lstatSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
-import { Session, prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isThrowawayControlHome, controlBashPath, prestartThrowawayHome, isTrustPrompt, trustProjectKeys, stripThrowawaySessionStartHooks, throwawayPaneSessionEnv, ensureThrowawayTools } from '../lib/session.mjs';
+import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
 import { waitUntil } from '../lib/wait.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -56,7 +56,6 @@ function fakeEnv(extra = {}) {
       FM_DRIVE_TRANSPORT: 'cli',
       FM_DRIVE_QUIET: '1',
       FM_DRIVE_READY_MS: '20000',
-      FM_DRIVE_PRESTART: '0',
       FAKE_HERDR_DIR: fakeDir,
       ...extra,
     },
@@ -306,53 +305,6 @@ describe('fake-herdr end to end', () => {
   let root;
   before(() => { root = makeRoot(); });
 
-  test('cloneHome writes an empty regular .fm-control-throwaway marker', async () => {
-    const session = new Session({
-      trace: { feature: 'throwaway-marker', steps: [] },
-      env: { ...process.env, FM_DRIVE_ROOT: root, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') },
-    });
-    session.scratch = tmp('marker-scratch');
-    session.home = join(session.scratch, 'firstmate');
-    await session.cloneHome();
-    const marker = join(session.home, '.fm-control-throwaway');
-    assert.ok(existsSync(marker), 'the throwaway home has the fast-session-start marker');
-    const st = lstatSync(marker);
-    assert.equal(st.isFile(), true);
-    assert.equal(st.isSymbolicLink(), false);
-    assert.equal(readFileSync(marker, 'utf8'), '');
-    const captain = readFileSync(join(session.home, 'data', 'captain.md'), 'utf8');
-    assert.match(captain, /Do not load project-management/);
-    assert.match(captain, /Do not run bin\/fm-session-start\.sh/);
-    assert.match(captain, /Do not load harness-adapters before spawn/);
-    assert.match(captain, /bin\/fm-spawn\.sh/);
-    assert.equal(
-      readFileSync(join(session.home, 'config', 'herdr-presentation-spaces'), 'utf8').trim(),
-      'off',
-    );
-  });
-
-  test('throwawayPaneSessionEnv pins the fast session-start opt-in', () => {
-    const home = tmp('pane-fast-env');
-    assert.deepEqual(throwawayPaneSessionEnv(home), {});
-    writeFileSync(join(home, '.fm-control-throwaway'), '');
-    const env = throwawayPaneSessionEnv(home);
-    assert.equal(env.FM_SESSION_START_FAST, '1');
-    assert.equal(env.FM_HOME, env.FM_ROOT_OVERRIDE);
-    assert.ok(env.FM_HOME);
-  });
-
-  test('ensureThrowawayTools does not copy treehouse into .tools', () => {
-    const home = tmp('tools-home');
-    const hostBin = tmp('host-bin');
-    const fake = join(hostBin, process.platform === 'win32' ? 'treehouse.exe' : 'treehouse');
-    writeFileSync(fake, '#!/bin/sh\necho fake-treehouse\n');
-    assert.deepEqual(ensureThrowawayTools(home, { ...process.env, PATH: hostBin }), { skipped: 'not-throwaway' });
-    writeFileSync(join(home, '.fm-control-throwaway'), '');
-    const result = ensureThrowawayTools(home, { ...process.env, PATH: hostBin, USERPROFILE: dirname(hostBin), HOME: dirname(hostBin) });
-    assert.equal(result.skipped, 'host-path');
-    assert.equal(existsSync(join(home, '.tools', process.platform === 'win32' ? 'treehouse.exe' : 'treehouse')), false);
-  });
-
   test('a passing trace: says once each, relaunch rotates the lock, result JSON has the contract shape', () => {
     const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
     const trace = {
@@ -556,7 +508,6 @@ describe('fake-herdr end to end', () => {
       FM_DRIVE_OPERABLE_MS: '15000',
       FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run'),
     });
-    const evidence = env.FM_DRIVE_EVIDENCE;
     const trace = {
       feature: 'e2e-operable-wait',
       steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
@@ -564,7 +515,6 @@ describe('fake-herdr end to end', () => {
     const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.json.pass, true);
-    assert.ok(!existsSync(join(evidence, 'prestart.txt')), 'fake runs do not pre-start session-start');
     const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
     const firstSay = state.sends.find((s) => s.text && s.text.startsWith('ahoy! add my project'));
     assert.ok(firstSay, 'the first captain say was typed');
@@ -645,8 +595,9 @@ describe('grafted onboarding config and shell prompts', () => {
   test("B's throwaway CLAUDE_CONFIG_DIR is created and does not write ~/.claude.json", () => {
     const home = tmp('claude-home');
     const userHome = tmp('user-home');
-    const dir = prepareClaudeConfig(home, { HOME: userHome, USERPROFILE: userHome });
-    assert.equal(dir, join(home, '.fm-control-claude'));
+    const dir = prepareClaudeConfig(join(tmp('scratch'), 'claude-config'), home, { HOME: userHome, USERPROFILE: userHome });
+    assert.ok(existsSync(join(dir, '.claude.json')));
+    assert.deepEqual(readdirSync(home), [], 'nothing is written into the home');
     const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
     assert.equal(cfg.hasCompletedOnboarding, true);
     assert.equal(cfg.bypassPermissionsModeAccepted, true);
@@ -680,7 +631,7 @@ describe('grafted onboarding config and shell prompts', () => {
         theme: 'light',
       })}\n`,
     );
-    const dir = prepareClaudeConfig(home, { HOME: userHome, USERPROFILE: userHome });
+    const dir = prepareClaudeConfig(join(tmp('scratch'), 'claude-config'), home, { HOME: userHome, USERPROFILE: userHome });
     assert.ok(existsSync(join(dir, '.credentials.json')), 'credentials file is present in the throwaway dir');
     const creds = JSON.parse(readFileSync(join(dir, '.credentials.json'), 'utf8'));
     assert.equal(typeof creds.claudeAiOauth, 'object');
@@ -711,7 +662,7 @@ describe('grafted onboarding config and shell prompts', () => {
       join(userHome, '.claude.json'),
       `${JSON.stringify({ oauthAccount: { accountUuid: 'acct' }, hasCompletedOnboarding: true })}\n`,
     );
-    const dir = prepareClaudeConfig(home, { HOME: userHome, USERPROFILE: userHome });
+    const dir = prepareClaudeConfig(join(tmp('scratch'), 'claude-config'), home, { HOME: userHome, USERPROFILE: userHome });
     const evidence = tmp('claude-evidence');
     archiveClaudeConfig(dir, evidence);
     assert.ok(!existsSync(join(evidence, '.credentials.json')), 'credentials are not copied into evidence');
@@ -792,83 +743,6 @@ describe('operable home gate', () => {
     assert.equal(isSessionStartBusy(''), false);
   });
 
-  test('isThrowawayControlHome requires a regular marker', () => {
-    const home = tmp('throwaway-marker');
-    assert.equal(isThrowawayControlHome(home), false);
-    writeFileSync(join(home, '.fm-control-throwaway'), '');
-    assert.equal(isThrowawayControlHome(home), true);
-  });
-
-  test('stripThrowawaySessionStartHooks removes SessionStart and PreToolUse on a marked home', () => {
-    const home = tmp('strip-hooks');
-    mkdirSync(join(home, '.claude'), { recursive: true });
-    writeFileSync(join(home, '.claude', 'settings.json'), `${JSON.stringify({
-      hooks: {
-        SessionStart: [{ hooks: [{ type: 'command', command: 'fm-sessionstart-run.sh' }] }],
-        PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'fm-cd-pretool-check.sh' }] }],
-        Stop: [{ hooks: [{ type: 'command', command: 'fm-turnend-guard.sh' }] }],
-      },
-    })}\n`);
-    assert.equal(stripThrowawaySessionStartHooks(home).skipped, 'not-throwaway');
-    assert.ok(JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks.SessionStart);
-    writeFileSync(join(home, '.fm-control-throwaway'), '');
-    assert.equal(stripThrowawaySessionStartHooks(home).skipped, false);
-    const hooks = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks;
-    assert.equal(hooks.SessionStart, undefined);
-    assert.equal(hooks.PreToolUse, undefined);
-    assert.ok(hooks.Stop);
-  });
-
-  test('controlBashPath honors FM_DRIVE_BASH', () => {
-    assert.equal(controlBashPath({ FM_DRIVE_BASH: 'C:\\git\\bash.exe' }), 'C:\\git\\bash.exe');
-  });
-
-  test('prestartThrowawayHome is a no-op without the marker or when disabled', async () => {
-    const home = tmp('prestart-skip');
-    mkdirSync(join(home, 'state'), { recursive: true });
-    const skipped = await prestartThrowawayHome(home, { env: { ...process.env } });
-    assert.equal(skipped.skipped, 'not-throwaway');
-    writeFileSync(join(home, '.fm-control-throwaway'), '');
-    const disabled = await prestartThrowawayHome(home, { env: { ...process.env, FM_DRIVE_PRESTART: '0' } });
-    assert.equal(disabled.skipped, 'disabled');
-    assert.equal(homeIsOperable(home), false);
-  });
-
-  test('prestartThrowawayHome writes the lock and fails closed on a missing lock', async () => {
-    const bash = controlBashPath(process.env);
-    if (!bash) {
-      assert.ok(true, 'no Git Bash on this host; skip the live pre-start cases');
-      return;
-    }
-    const okHome = tmp('prestart-ok');
-    mkdirSync(join(okHome, 'bin'), { recursive: true });
-    mkdirSync(join(okHome, 'state'), { recursive: true });
-    writeFileSync(join(okHome, '.fm-control-throwaway'), '');
-    writeFileSync(join(okHome, 'bin', 'fm-session-start.sh'), '#!/usr/bin/env bash\nprintf \'1\\n\' > "$FM_HOME/state/.lock"\n');
-    const ok = await prestartThrowawayHome(okHome, { env: { ...process.env, FM_DRIVE_BASH: bash }, timeoutMs: 15_000 });
-    assert.equal(ok.skipped, false);
-    assert.equal(homeIsOperable(okHome), true);
-
-    const miss = tmp('prestart-miss');
-    mkdirSync(join(miss, 'bin'), { recursive: true });
-    mkdirSync(join(miss, 'state'), { recursive: true });
-    writeFileSync(join(miss, '.fm-control-throwaway'), '');
-    writeFileSync(join(miss, 'bin', 'fm-session-start.sh'), '#!/usr/bin/env bash\nexit 0\n');
-    await assert.rejects(
-      () => prestartThrowawayHome(miss, { env: { ...process.env, FM_DRIVE_BASH: bash }, timeoutMs: 15_000 }),
-      /without a lock or completion record/,
-    );
-
-    const bad = tmp('prestart-bad');
-    mkdirSync(join(bad, 'bin'), { recursive: true });
-    mkdirSync(join(bad, 'state'), { recursive: true });
-    writeFileSync(join(bad, '.fm-control-throwaway'), '');
-    writeFileSync(join(bad, 'bin', 'fm-session-start.sh'), '#!/usr/bin/env bash\nexit 2\n');
-    await assert.rejects(
-      () => prestartThrowawayHome(bad, { env: { ...process.env, FM_DRIVE_BASH: bash }, timeoutMs: 15_000 }),
-      /exited 2/,
-    );
-  });
 });
 
 test('no module spawns a shell', () => {

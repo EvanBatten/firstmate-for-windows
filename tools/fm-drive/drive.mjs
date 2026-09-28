@@ -9,10 +9,12 @@
 //   0  every step held (pass true)
 //   1  a step did not hold: budget elapsed, primary died, or it parked on a question
 //   2  the trace was refused before any herdr call (unknown predicate, startup-only claims, bad shape)
-//   3  the environment failed: herdr unusable, clone failed, primary never became ready
+//   3  the environment failed: herdr unusable, clone failed, primary never became ready,
+//      or the launched home is not the captain path (fidelity below)
 //
 // Result shape (one JSON object, always printed for run, even on failure):
 //   { feature, wallMs, pass, readyMs, operableMs, predicateMs,
+//     fidelity: { claudeConfig: 'clean', hooks: 'repo'|'modified', captainMd: 'untouched'|'present', model },
 //     steps: [{ say, until, ms, ok, reason, sayMs?, relaunchMs?, primaryStatus?, tasks? }],
 //     overhead: { transport, herdrCalls, spawns, herdrSpawns, gitSpawns, setupSpawns, cleanupSpawns, setupMs, operableMs, closeMs },
 //     evidence, error? }
@@ -20,6 +22,9 @@
 // operableMs the wait for lock / session-start-complete before the first say (also folded
 // into readyMs so the first feature budget does not start during splash). The rest of
 // wallMs is the driver's own setup, typing, relaunch and cleanup.
+// fidelity is measured once the primary is first up: hooks is 'repo' when the home's
+// .claude/settings.json is byte for byte the clone's committed one, captainMd is
+// 'untouched' when no data/captain.md exists. Anything else fails the run with exit 3.
 // The trace grammar, predicate catalog and environment knobs are documented in lib/trace.mjs,
 // lib/predicates.mjs, lib/herdr.mjs and lib/session.mjs.
 
@@ -31,6 +36,7 @@ import { waitUntil } from './lib/wait.mjs';
 import { HerdrError } from './lib/herdr.mjs';
 
 const T0 = Date.now();
+const CAPTAIN_PATH = { hooks: 'repo', captainMd: 'untouched' };
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {
@@ -75,6 +81,7 @@ async function run(trace) {
     readyMs: null,
     operableMs: null,
     predicateMs: 0,
+    fidelity: null,
     steps: [],
     overhead: {},
     evidence: session.evidenceDir,
@@ -103,6 +110,11 @@ async function run(trace) {
 
     result.readyMs = await session.launch();
     log(`primary ready in ${result.readyMs} ms (pid ${session.primaryPid}, lock ${session.lockAtReady})`);
+    result.fidelity = await session.fidelity();
+    const broken = Object.entries(CAPTAIN_PATH).filter(([field, want]) => result.fidelity[field] !== want);
+    if (broken.length) {
+      throw new Error(`the launched home is not the captain path: ${broken.map(([field]) => `fidelity.${field} is ${result.fidelity[field]}`).join(', ')}`);
+    }
 
     const gitAhead = {};
     const deps = {
