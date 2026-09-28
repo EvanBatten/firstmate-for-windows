@@ -1,11 +1,6 @@
-// Behavioral tests for the fm-drive driver. Run with:
-//   node --test tools/fm-drive/test/
-// No real herdr or claude is involved: fake-herdr.mjs stands in for the
-// binary through the driver's cli transport, and every home is a temp dir.
-
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -65,11 +60,9 @@ function fakeEnv(extra = {}) {
 function runDrive(args, env) {
   const r = spawnSync(NODE, [DRIVE, ...args], { env, encoding: 'utf8', timeout: 120_000 });
   let json = null;
-  try { json = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch { /* not JSON */ }
+  try { json = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
 }
-
-// ---- 1. refusal happens before any herdr call ------------------------------
 
 describe('trace refusal', () => {
   const rejects = readdirSync(join(FIXTURES, 'reject')).filter((f) => f.endsWith('.json'));
@@ -132,8 +125,6 @@ describe('trace refusal', () => {
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
 });
-
-// ---- 2. predicates over fixture homes are literal booleans -----------------
 
 describe('predicates over fixture homes', () => {
   const ctx = (over = {}) => ({ lockBaseline: undefined, seeds: {}, seenTaskIds: new Set(), ...over });
@@ -257,8 +248,6 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'beacon.fresh').ok, false);
   });
 });
-
-// ---- 3. fake-herdr end to end ----------------------------------------------
 
 // The repo's hook layout, so a driver that strips or rewrites hooks is caught.
 const REPO_SETTINGS = `${JSON.stringify({
@@ -390,7 +379,7 @@ describe('fake-herdr end to end', () => {
     });
     const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-fidelity'))], env);
     const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
-    if (state.primary) { try { process.kill(state.primary.pid); } catch { /* already gone */ } }
+    if (state.primary) { try { process.kill(state.primary.pid); } catch {} }
     scratch.push(dirname(state.home));
     const committed = spawnSync('git', ['-C', root, 'show', 'HEAD:.claude/settings.json']).stdout;
     assert.deepEqual(
@@ -601,8 +590,6 @@ describe('fake-herdr end to end', () => {
   });
 });
 
-// ---- 4. cli transport mapping ----------------------------------------------
-
 describe('cli transport argv mapping', () => {
   test('send_input with enter is pane run; keys alone are send-keys', () => {
     assert.deepEqual(cliArgv('pane.send_input', { pane_id: 'p', text: 'hi', keys: ['enter'] }), ['pane', 'run', 'p', 'hi']);
@@ -773,6 +760,3 @@ test('no module spawns a shell', () => {
     assert.ok(!/execSync|exec\(/.test(src), `${f} never uses exec`);
   }
 });
-
-// keep the helper referenced for platforms where spawn is unused by tests
-void spawn;

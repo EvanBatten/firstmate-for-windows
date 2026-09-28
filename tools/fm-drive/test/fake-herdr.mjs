@@ -1,31 +1,3 @@
-// A scripted stand-in for the herdr binary, used by the tests through the
-// driver's cli transport (FM_DRIVE_HERDR=<this file> FM_DRIVE_TRANSPORT=cli).
-//
-// It answers the CLI verbs lib/herdr.mjs emits, appends every invocation to
-// $FAKE_HERDR_DIR/calls.log (one JSON argv per line), and plays the primary:
-// a launch line starts a real sleeper child whose pid it reports as the
-// claude foreground process and writes a fresh state/.lock plus
-// state/.session-start-complete into the home, so the driver's ready
-// detection, operable gate, kill(pid, 0) liveness, /exit and relaunch all
-// run against a process that actually lives and dies. FAKE_HERDR_LOCK_DELAY_MS
-// postpones those files so the operable wait can be exercised after splash.
-// FAKE_HERDR_CLAUDE_START_CALLS=<n> plays a slow claude start: after each launch
-// the first n pane process-info calls list only the shell, the pane shows the
-// echoed launch line, and the lock is written when the countdown ends.
-//
-// Captain lines are answered from $FAKE_HERDR_SCRIPT, a JSON object mapping a
-// substring of the say text to a list of home actions, applied in order by a
-// detached child so the CLI call itself returns at once, like a herdr that
-// has typed the line:
-//   { "<substring>": [ { "delayMs": 300 },              sleep before the next action
-//                      { "path": "data/projects.md", "content": "- greeter ..." },
-//                      { "mkdir": "projects/greeter/.git" },
-//                      { "remove": "state/t1.meta" },
-//                      { "cloneFromSay": "projects/greeter" },   git clone the origin named "from <path> as" in the say
-//                      { "commitIn": "projects/greeter", "file": "greet.sh", "content": "..." },  one commit on main
-//                      { "killPrimary": true } ] }        the primary dies (a crash)
-// Sends are recorded in $FAKE_HERDR_DIR/state.json under sends[].
-
 import { readFileSync, writeFileSync, mkdirSync, rmSync, appendFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -101,7 +73,7 @@ function startPrimary(s, launchLine) {
 }
 
 function killPrimary(s) {
-  if (s.primary) { try { process.kill(s.primary.pid); } catch { /* gone */ } }
+  if (s.primary) { try { process.kill(s.primary.pid); } catch {} }
   s.primary = null;
 }
 

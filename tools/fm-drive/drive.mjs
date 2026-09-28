@@ -1,32 +1,4 @@
 #!/usr/bin/env node
-// fm-drive: drive one firstmate session through a captain trace and report
-// how long each claim took to become true.
-//
-//   node tools/fm-drive/drive.mjs run   <trace.json>   drive a real session; JSON result on stdout
-//   node tools/fm-drive/drive.mjs check <trace.json>   validate the trace only; no herdr call
-//
-// Exit codes:
-//   0  every step held (pass true)
-//   1  a step did not hold: budget elapsed, primary died, or it parked on a question
-//   2  the trace was refused before any herdr call (unknown predicate, startup-only claims, bad shape)
-//   3  the environment failed: herdr unusable, clone failed, primary never became ready,
-//      or the launched home is not the captain path (fidelity below)
-//
-// Result shape (one JSON object, always printed for run, even on failure):
-//   { feature, wallMs, pass, readyMs, operableMs, predicateMs,
-//     fidelity: { claudeConfig: 'clean', hooks: 'repo'|'modified', captainMd: 'untouched'|'present', model },
-//     steps: [{ say, until, ms, ok, reason, sayMs?, relaunchMs?, primaryStatus?, tasks? }],
-//     overhead: { transport, herdrCalls, spawns, herdrSpawns, gitSpawns, setupSpawns, cleanupSpawns, setupMs, operableMs, closeMs },
-//     evidence, error? }
-// predicateMs is the time spent waiting for claims; readyMs the implicit splash launch;
-// operableMs the wait for lock / session-start-complete before the first say (also folded
-// into readyMs so the first feature budget does not start during splash). The rest of
-// wallMs is the driver's own setup, typing, relaunch and cleanup.
-// fidelity is measured once the primary is first up: hooks is 'repo' when the home's
-// .claude/settings.json is byte for byte the clone's committed one, captainMd is
-// 'untouched' when no data/captain.md exists. Anything else fails the run with exit 3.
-// The trace grammar, predicate catalog and environment knobs are documented in lib/trace.mjs,
-// lib/predicates.mjs, lib/herdr.mjs and lib/session.mjs.
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -196,7 +168,7 @@ async function run(trace) {
       closeMs: result.overhead.closeMs,
     };
     result.wallMs = Date.now() - T0;
-    try { writeFileSync(join(session.evidenceDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch { /* evidence is best effort */ }
+    try { writeFileSync(join(session.evidenceDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch {}
     emit(result);
   }
   return exitCode;

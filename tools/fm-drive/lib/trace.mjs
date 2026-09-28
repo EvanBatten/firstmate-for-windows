@@ -1,14 +1,3 @@
-// Trace loading and refusal. Everything here runs before any herdr call.
-//
-// A trace is { feature, project?, steps: [{ say, until, budgetSec? }] }. `say`
-// is captain text typed into the primary, "" to wait without typing, or the
-// reserved verb "$relaunch". `until` is a closed catalog expression
-// (lib/predicates.mjs). `project` names the throwaway project seeded when a
-// say mentions {{projectOrigin}} (default greeter).
-// A say is captain text: one that names firstmate's internals (STEERING) is
-// refused, because the run would prove obedience rather than the product.
-// Refusal is a thrown TraceError; drive.mjs maps it to exit 2.
-
 import { readFileSync } from 'node:fs';
 import { parseUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
 
@@ -114,7 +103,6 @@ export function validateTrace(raw) {
   return { feature: raw.feature, ...(project ? { project } : {}), steps };
 }
 
-// Replace {{name}} tokens in every say. Unknown names were refused at load.
 export function interpolate(trace, vars) {
   return {
     ...trace,

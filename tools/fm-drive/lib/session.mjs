@@ -1,37 +1,3 @@
-// One firstmate session under test: a throwaway home, one herdr pane the
-// driver owns, a real primary started from that pane's own shell, captain
-// lines typed into it, and a close that touches only what this run created.
-//
-// The pane shell is whatever herdr gives the pane (bash here, pwsh on the
-// operator's Windows host); claude starts as its child with no Git Bash login
-// hop. PATH reaches the pane as FM_PANE_PATH and the launch line adopts it,
-// because herdr may drop a PATH passed through workspace env.
-//
-// Ready is a process fact plus a firstmate fact: herdr's pane.process_info
-// lists a claude foreground process, and either state/.lock exists in the
-// home under a new identity or the prompt is up (see awaitReady). That is
-// implicit ready (splash / bypass banner). An operable home is a later
-// firstmate fact: state/.lock or state/.session-start-complete, written by
-// the repo's own SessionStart hook when the helm is actually taken.
-// The first captain say waits for that (see sayWhenOperable). Liveness
-// afterwards is kill(pid, 0) on that pid, which costs no herdr call.
-//
-// The home is what a captain gets: a clone of the checkout with the repo's
-// hooks untouched, no data/captain.md, and nothing run before claude starts.
-// The only thing the driver supplies is a clean CLAUDE_CONFIG_DIR at
-// <scratch>/claude-config, beside the home rather than in it, so Claude's
-// first-run dialogs are skipped (onboarding, bypass-permissions, folder
-// trust, theme). Folder trust is keyed by every slash and drive-letter form
-// of the home, because Claude 2.1 on Windows looks up C:/... not C:\....
-// Host claude.ai login is inherited into that dir: the
-// credentials file Claude reads on Linux/Windows, plus session keys from
-// ~/.claude.json, without mutating the host files. Values are never logged.
-// CLAUDE_CODE_OAUTH_TOKEN is still passed when present, but is not required
-// for a desktop claude.ai session login. Dialog handlers remain as a
-// fallback and fail the run if folder trust stays up past a short bound.
-// A dead primary is the pid going away or the pane returning to a
-// shell prompt (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`).
-//
 // Environment:
 //   FM_DRIVE_MODEL        primary model (default opus)
 //   FM_DRIVE_READY_MS     implicit-ready budget per launch (default 120000)
@@ -53,16 +19,7 @@ import { spawn } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
 import { recordedPaneIds } from './predicates.mjs';
 
-// Isolated Claude config for one throwaway home. Never writes the host
-// ~/.claude.json. CLAUDE_CONFIG_DIR redirects Claude's whole state, including
-// auth, so a dir that only has onboarding flags leaves a claude.ai desktop
-// login behind. Inherit the host files Claude actually reads (docs:
-// ~/.claude/.credentials.json, and ~/.claude.json session keys) into the
-// throwaway dir. Prefer a hardlink for the credentials file so a mid-run
-// refresh stays on the same inode as the host login; copy when a hardlink
-// cannot be made. Evidence archival strips those files and keys.
-// Claude keys projects by cwd. On Windows the dialog uses C:\... and the
-// config lookup uses C:/...; a single backslash key does not skip the prompt.
+// Claude Code shows the trust dialog for C:\... but looks the project up as C:/..., so every slash and drive-letter form is written.
 export function trustProjectKeys(home) {
   const keys = new Set();
   const add = (p) => { if (p) keys.add(p); };
@@ -85,8 +42,6 @@ export function isTrustPrompt(text) {
   return /Yes, I trust this folder/.test(String(text || ''));
 }
 
-// The config lives beside the home, not in it, so the home holds nothing a
-// captain's checkout lacks. Trust still keys on the home.
 export function prepareClaudeConfig(config, home, env = process.env) {
   mkdirSync(config, { recursive: true });
   const trusted = { hasTrustDialogAccepted: true };
@@ -127,8 +82,6 @@ function userHome(env) {
   return env.HOME || env.USERPROFILE || homedir();
 }
 
-// Names of keys Claude stores for a claude.ai / Console session in
-// ~/.claude.json. Matched by name only; values are never logged or asserted.
 export function isAuthStateKey(key) {
   return /oauth|account|apiKey|api_key|userID|userId|authMethod|loggedIn|organizationUuid|refreshToken|accessToken/i.test(key);
 }
@@ -169,6 +122,8 @@ function hostAuthState(env) {
   return out;
 }
 
+// CLAUDE_CONFIG_DIR redirects Claude's auth too, so the host login is inherited; a hardlink keeps a mid-run
+// token refresh on the host's own file.
 function inheritHostCredentials(config, env) {
   const dest = join(config, '.credentials.json');
   for (const src of hostCredentialPaths(env)) {
@@ -176,7 +131,7 @@ function inheritHostCredentials(config, env) {
     try {
       try { linkSync(src, dest); } catch {
         copyFileSync(src, dest);
-        try { chmodSync(dest, 0o600); } catch { /* Windows ignores mode */ }
+        try { chmodSync(dest, 0o600); } catch {}
       }
     } catch {
       // absence or an unreadable host file leaves the pane on env-token auth
@@ -185,7 +140,6 @@ function inheritHostCredentials(config, env) {
   }
 }
 
-// Copy a throwaway config into evidence without credentials or session keys.
 export function archiveClaudeConfig(src, dest) {
   mkdirSync(dest, { recursive: true });
   for (const name of readdirSync(src)) {
@@ -214,6 +168,7 @@ export function archiveClaudeConfig(src, dest) {
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const PROCESS_POLL_EVERY_N_TICKS = 3;
 export const DEFAULT_ROOT = resolve(HERE, '..', '..', '..');
 
 export class Session {
@@ -255,8 +210,6 @@ export class Session {
     this.evidenceDir = env.FM_DRIVE_EVIDENCE || join(tmpdir(), 'fm-drive-artifacts', `${trace.feature}-${stamp}`);
   }
 
-  // ---- setup --------------------------------------------------------------
-
   async open() {
     mkdirSync(this.evidenceDir, { recursive: true });
     this.scratch = mkdtempSync(join(tmpdir(), `fm-drive-${this.trace.feature}-`));
@@ -275,6 +228,7 @@ export class Session {
     }
     // TMUX is blanked so a herdr server that happens to run under tmux still
     // yields a pane where firstmate auto-detects herdr, not tmux.
+    // herdr drops PATH from pane env (bin/backends/herdr.sh), so it rides in as FM_PANE_PATH.
     const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '', CLAUDE_CONFIG_DIR: this.claudeConfigDir };
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
@@ -372,8 +326,6 @@ export class Session {
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
   }
 
-  // A throwaway project with its own bare origin and one commit on main, the
-  // shape tests/verification/session-lib.sh's project_seed makes.
   async seedProject(name) {
     const origin = join(this.scratch, `${name}.git`);
     const seed = join(this.scratch, `${name}-seed`);
@@ -394,8 +346,6 @@ export class Session {
     this.projectName = name;
   }
 
-  // ---- launch and ready ---------------------------------------------------
-
   launchLine() {
     const flags = `--dangerously-skip-permissions --model ${this.model}`;
     const home = this.home;
@@ -409,13 +359,10 @@ export class Session {
     return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
   }
 
-  // What the primary was launched into, measured rather than asserted: the
-  // clone's hooks against its own committed settings, and whether a
-  // data/captain.md was already there before the captain said anything.
   async fidelity() {
     const committed = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
     let settings = null;
-    try { settings = readFileSync(join(this.home, '.claude', 'settings.json')); } catch { /* absent */ }
+    try { settings = readFileSync(join(this.home, '.claude', 'settings.json')); } catch {}
     const same = committed === null ? settings === null : settings !== null && committed.equals(settings);
     return {
       claudeConfig: 'clean',
@@ -461,8 +408,7 @@ export class Session {
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, keys });
   }
 
-  // Answer a claude dialog visible in the pane. Returns true when one was handled.
-  // Folder trust defaults to "No, exit". Enter only after the cursor is on Yes.
+  // Claude's folder-trust dialog defaults to "No, exit"; Enter only after the cursor is on Yes.
   async answerDialog(text) {
     const cursorOnNo = /❯\s*No/.test(text);
     if (isTrustPrompt(text)) {
@@ -521,9 +467,7 @@ export class Session {
     this.dialogPoll.unref?.();
   }
 
-  // Implicit ready: claude in the foreground plus lock-under-new-identity or
-  // the bypass footer. This can fire on the splash before session-start has
-  // taken the helm; sayWhenOperable waits for that separately.
+  // Ready can fire on the splash before session start takes the helm; sayWhenOperable waits for that.
   async awaitReady() {
     const deadline = Date.now() + this.readyMs;
     let sawClaude = false;
@@ -538,10 +482,8 @@ export class Session {
         this.snapshot('exited-before-ready', text);
         throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
       }
-      // The process list is asked for only when it can decide something: a
-      // ready candidate, or every third tick to notice an exit. On the cli
-      // transport each ask is a process, so this halves the ready cost.
-      if (lockFresh || prompted || tick % 3 === 0) {
+      // On the cli transport each process-list ask is a process, so it is asked only when it can decide something.
+      if (lockFresh || prompted || tick % PROCESS_POLL_EVERY_N_TICKS === 0) {
         const fg = await this.foreground();
         const claude = fg.find((p) => /claude/i.test(p.name || '') || /claude/i.test(p.argv?.[0] || ''));
         if (claude) {
@@ -567,11 +509,7 @@ export class Session {
     throw new HerdrError(`the primary did not become ready within ${Math.round(this.readyMs / 1000)} s. Its pane shows: ${lastLines(text)}`);
   }
 
-  // Operable home: session-start has taken the helm. Firstmate writes
-  // state/.lock when it acquires the lock and state/.session-start-complete
-  // when the digest finishes. Either is enough. The first non-empty captain
-  // say waits here so the feature budget does not start during splash.
-  //
+  // The first say waits for an operable home so a step budget does not start during splash.
   // If the splash is idle and session-start is not in the pane, the hook
   // stood down and the first say is what starts session-start; send it and
   // keep waiting for the lock. If the pane already shows fm-session-start
@@ -614,8 +552,6 @@ export class Session {
     throw new HerdrError(`the home did not become operable within ${Math.round(this.operableBudgetMs / 1000)} s. Its pane shows: ${lastLines(pane)}`);
   }
 
-  // ---- liveness and status ------------------------------------------------
-
   async liveness() {
     if (this.signals.shellDead) return { alive: false, reason: this.signals.shellDead };
     if (this.primaryPid) {
@@ -627,9 +563,6 @@ export class Session {
     return { alive, reason: alive ? 'claude in the foreground' : `foreground is ${fg.map((p) => p.name).join(',') || 'empty'}` };
   }
 
-  // Herdr's own view of the primary: blocked means it stopped to ask the
-  // captain a question. Event-driven on the socket transport, a slow poll on
-  // the cli transport.
   watchPrimaryStatus() {
     const apply = (status) => {
       this.signals.status = status;
@@ -682,8 +615,6 @@ export class Session {
     }
   }
 
-  // ---- captain lines ------------------------------------------------------
-
   async say(text) {
     const t0 = Date.now();
     this.captainLog.push(`${new Date().toISOString()}\t${text}`);
@@ -705,9 +636,7 @@ export class Session {
     return Date.now() - t0;
   }
 
-  // /exit the primary and wait for the shell to have it back. Claude raises a
-  // "Background work is running" dialog when a shell it started is still
-  // alive; its first option, Exit and stop tasks, is what Enter accepts.
+  // Claude's "Background work is running" exit dialog: Enter accepts its first option, Exit and stop tasks.
   async exitToPrompt(budgetMs = 90_000) {
     const already = await this.paneText().catch(() => '');
     if (atShellPrompt(already)) return true;
@@ -733,9 +662,7 @@ export class Session {
     return false;
   }
 
-  // What a captain does when the window closed and opened again: the primary
-  // exits, claude starts again in the same pane, the home and any worker are
-  // untouched. Captures the lock identity first so lock.rotated has a baseline.
+  // The lock identity is captured before /exit so lock.rotated has a baseline.
   async relaunch() {
     const t0 = Date.now();
     this.lockBaseline = this.lockText();
@@ -749,10 +676,8 @@ export class Session {
     return Date.now() - t0;
   }
 
-  // ---- evidence -----------------------------------------------------------
-
   keep(name, text) {
-    try { writeFileSync(join(this.evidenceDir, name), text); } catch { /* evidence is best effort */ }
+    try { writeFileSync(join(this.evidenceDir, name), text); } catch {}
   }
 
   snapshot(label, text) {
@@ -760,21 +685,17 @@ export class Session {
     this.keep(`pane-${stamp}-${label}.txt`, text);
   }
 
-  // Herdr's own classification of the primary's pane (idle, working,
-  // blocked...), one pane.get; unknown when herdr does not answer.
   async primaryStatus() {
     try { return (await this.herdr.call('pane.get', { pane_id: this.paneId })).pane?.agent_status ?? 'unknown'; } catch { return 'unknown'; }
   }
 
-  // The primary's pane and every recorded worker's pane, kept when a step
-  // fails, so a worker parked on its own dialog is visible in the evidence.
   async snapshotAll(label, snap) {
-    try { this.snapshot(label, await this.paneText()); } catch { /* pane may be gone */ }
+    try { this.snapshot(label, await this.paneText()); } catch {}
     for (const id of snap ? recordedPaneIds(snap) : []) {
       try {
         const r = await this.herdr.call('pane.read', { pane_id: id, source: 'visible' });
         this.snapshot(`${label}-worker-${id.replace(/[^A-Za-z0-9_-]/g, '_')}`, r.read?.text ?? '');
-      } catch { /* worker pane gone */ }
+      } catch {}
     }
   }
 
@@ -786,16 +707,12 @@ export class Session {
     }
   }
 
-  // Task temp directories firstmate recorded for this run's workers, removed
-  // only when they live under the OS temp root.
   removeTaskTmps() {
     const root = realpathSafe(tmpdir());
     for (const t of this.taskTmps) {
-      if (realpathSafe(t).startsWith(root + sep)) { try { rmSync(t, { recursive: true, force: true }); } catch { /* best effort */ } }
+      if (realpathSafe(t).startsWith(root + sep)) { try { rmSync(t, { recursive: true, force: true }); } catch {} }
     }
   }
-
-  // ---- close --------------------------------------------------------------
 
   async close() {
     if (this.closed) return 0;
@@ -805,7 +722,7 @@ export class Session {
     if (this.dialogPoll) clearInterval(this.dialogPoll);
     if (!this.herdr) { this.archive(); this.removeScratch(); return Date.now() - t0; }
     const keep = this.env.FM_DRIVE_KEEP === '1';
-    try { this.snapshot('final', await this.paneText()); } catch { /* pane may be gone */ }
+    try { this.snapshot('final', await this.paneText()); } catch {}
     if (!keep) {
       try {
         if ((await this.liveness()).alive) {
@@ -815,7 +732,7 @@ export class Session {
       } catch { /* closing the workspace ends it regardless */ }
       this.stopWatcher();
       await this.closeTaskWorkspaces();
-      try { await this.herdr.call('workspace.close', { workspace_id: this.workspaceId }); } catch { /* already gone */ }
+      try { await this.herdr.call('workspace.close', { workspace_id: this.workspaceId }); } catch {}
       await this.destroyPools();
     }
     this.archive();
@@ -828,25 +745,22 @@ export class Session {
     try {
       const pid = Number.parseInt(readFileSync(join(this.home, 'state', '.watch.lock', 'pid'), 'utf8').trim(), 10);
       if (pid > 1) process.kill(pid, 'SIGTERM');
-    } catch { /* no watcher, or already gone */ }
+    } catch {}
   }
 
-  // Only tabs labelled for tasks this home recorded, and only a workspace
-  // that did not exist before the run and holds one of them.
   async closeTaskWorkspaces() {
     let tabs = [];
     try { tabs = (await this.herdr.call('tab.list')).tabs ?? []; } catch { return; }
     const want = new Set([...this.seenTaskIds].map((id) => `fm-${id}`));
     for (const t of tabs) {
       if (!want.has(t.label)) continue;
-      try { await this.herdr.call('tab.close', { tab_id: t.tab_id }); } catch { /* gone */ }
+      try { await this.herdr.call('tab.close', { tab_id: t.tab_id }); } catch {}
       if (t.workspace_id !== this.workspaceId && !this.baselineWorkspaces.has(t.workspace_id)) {
-        try { await this.herdr.call('workspace.close', { workspace_id: t.workspace_id }); } catch { /* gone */ }
+        try { await this.herdr.call('workspace.close', { workspace_id: t.workspace_id }); } catch {}
       }
     }
   }
 
-  // Treehouse pools whose worktrees belong to a project inside this home.
   async destroyPools() {
     const root = join(homedir(), '.treehouse');
     let pools = [];
@@ -881,15 +795,15 @@ export class Session {
 
   archive() {
     for (const d of ['state', 'data']) {
-      try { cpSync(join(this.home, d), join(this.evidenceDir, 'home', d), { recursive: true, dereference: false, force: true, errorOnExist: false }); } catch { /* absent */ }
+      try { cpSync(join(this.home, d), join(this.evidenceDir, 'home', d), { recursive: true, dereference: false, force: true, errorOnExist: false }); } catch {}
     }
     if (this.claudeConfigDir) {
-      try { archiveClaudeConfig(this.claudeConfigDir, join(this.evidenceDir, 'claude-config')); } catch { /* absent */ }
+      try { archiveClaudeConfig(this.claudeConfigDir, join(this.evidenceDir, 'claude-config')); } catch {}
     }
   }
 
   removeScratch() {
-    try { rmSync(this.scratch, { recursive: true, force: true }); } catch { /* best effort */ }
+    try { rmSync(this.scratch, { recursive: true, force: true }); } catch {}
   }
 }
 
@@ -905,7 +819,6 @@ function readHomeStateFile(home, name) {
   try { return readFileSync(join(home, 'state', name), 'utf8').trim() || null; } catch { return null; }
 }
 
-// Helm taken: lock acquired, or the digest-complete marker published.
 export function homeIsOperable(home) {
   return readHomeStateFile(home, '.lock') !== null || readHomeStateFile(home, '.session-start-complete') !== null;
 }

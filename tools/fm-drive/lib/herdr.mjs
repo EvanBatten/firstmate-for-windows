@@ -1,15 +1,4 @@
-// The one herdr client of a run.
-//
-// Two transports speak the same logical methods (the socket API's own names,
-// e.g. pane.send_input). `socket` opens one Unix-socket connection per request
-// and spawns nothing after attach: herdr 0.7.4 (protocol 16) answers one
-// request per connection and closes it, so a persistent connection is not on
-// offer, but a connect+request round trip is about a millisecond and no
-// process. `cli` spawns the herdr binary once per call with shell:false, no
-// bash, no pwsh, no jq; it is the transport Node can use on Windows today,
-// where net.connect() cannot open herdr's AF_UNIX socket (Node emulates local
-// sockets with named pipes there). Both transports count every call and every
-// process they start so the result JSON can report driver overhead.
+// On Windows, Node's net.connect(path) opens a named pipe and cannot reach herdr's AF_UNIX socket, so auto picks the cli transport there.
 //
 // Environment:
 //   FM_DRIVE_HERDR            herdr binary (default: herdr on PATH)
@@ -55,7 +44,7 @@ export class Herdr {
     this.session = session;
     this.socketPath = socketPath;
     this.transport = transport;
-    this.ownServer = ownServer; // { child } when this run started the server
+    this.ownServer = ownServer;
     this.log = log ?? (() => {});
     this.counters = { calls: 0, spawns: ownServer ? 1 : 0, statusSpawns: 0 };
     this.subscriptions = new Set();
@@ -138,7 +127,6 @@ export class Herdr {
     return h;
   }
 
-  // One logical herdr call. Returns the parsed `result` object.
   async call(method, params = {}, { timeoutMs = 30_000 } = {}) {
     this.counters.calls += 1;
     if (this.transport === 'socket') {
@@ -150,9 +138,6 @@ export class Herdr {
     return cliCall(this.bin, method, params, this.session, this.env, timeoutMs);
   }
 
-  // Event stream (socket transport only). onEvent receives { event, data }.
-  // Returns a handle with close(). On the cli transport returns null: the
-  // caller falls back to its own low-rate reads.
   subscribe(subscriptions, onEvent) {
     if (this.transport !== 'socket') return null;
     this.counters.calls += 1;
@@ -182,31 +167,24 @@ export class Herdr {
     return handle;
   }
 
-  // Stops a server this run started and removes the session directory herdr
-  // made for it, after copying its server log to keepLogAt when given. A
-  // server that was already running is left exactly as found.
   async close({ keepLogAt } = {}) {
     for (const s of this.subscriptions) s.close();
     if (this.ownServer) {
       this.log(`stopping the throwaway herdr server for session ${this.ownServer.session}`);
       try {
         await this.call('server.stop', {}, { timeoutMs: 5000 });
-      } catch {
-        // fall through to the child kill
-      }
+      } catch {}
       const { child } = this.ownServer;
       await Promise.race([new Promise((r) => child.once('exit', r)), sleep(3000)]);
       if (child.exitCode === null) child.kill('SIGKILL');
       const dir = this.socketPath ? dirname(this.socketPath) : '';
       if (dir && basename(dir) === this.ownServer.session && basename(dirname(dir)) === 'sessions') {
-        if (keepLogAt) { try { copyFileSync(join(dir, 'herdr-server.log'), keepLogAt); } catch { /* no log */ } }
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+        if (keepLogAt) { try { copyFileSync(join(dir, 'herdr-server.log'), keepLogAt); } catch {} }
+        try { rmSync(dir, { recursive: true, force: true }); } catch {}
       }
     }
   }
 }
-
-// ---- socket transport -----------------------------------------------------
 
 let seq = 0;
 export function socketRequest(socketPath, method, params, timeoutMs) {
@@ -229,8 +207,6 @@ export function socketRequest(socketPath, method, params, timeoutMs) {
     sock.on('close', () => finish(reject, new Error(`${method}: herdr closed the connection without a response`)));
   });
 }
-
-// ---- cli transport --------------------------------------------------------
 
 function sessionArgs(session) {
   return session ? ['--session', session] : [];
@@ -264,7 +240,6 @@ async function cliJson(bin, args, session, env, timeoutMs = 15_000) {
   }
 }
 
-// Map a socket method onto the herdr CLI verb that does the same thing.
 export function cliArgv(method, params) {
   const p = params;
   switch (method) {

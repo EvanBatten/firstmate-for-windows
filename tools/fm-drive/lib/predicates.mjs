@@ -1,11 +1,3 @@
-// The closed `until` catalog and the home snapshot it reads.
-//
-// An `until` is a conjunction of atoms joined by `&&`. Every atom is a claim
-// about the throwaway firstmate home (state/, data/, projects/), never about
-// pane text. Two atoms (tabs.clean, worker.alive) additionally need one herdr
-// fact, which the wait loop fetches lazily and stores on the snapshot so
-// evaluation itself stays a pure function of the snapshot and the run context.
-//
 // Catalog (arguments after ':'; NAME is [A-Za-z0-9._-]+, N a non-negative integer):
 //   projects.registered:NAME    data/projects.md has a "- NAME " row and projects/NAME/.git exists
 //   tasks.count>=N              at least N state/*.meta task records
@@ -88,8 +80,6 @@ export function parseUntil(expr) {
   const atoms = expr.split('&&').map(parseAtom);
   return { expr: expr.trim(), atoms, needsHerdr: atoms.some((a) => HERDR_ATOMS.includes(a.name)) };
 }
-
-// ---- snapshot -------------------------------------------------------------
 
 function readText(p) {
   try { return readFileSync(p, 'utf8'); } catch { return null; }
@@ -185,8 +175,6 @@ export function snapshotHome(home, nowMs = Date.now()) {
   };
 }
 
-// Count the list items under one "## <section>" heading of a tasks-axi
-// markdown backlog, stopping at the next heading.
 export function backlogSectionItems(text, section) {
   if (!text) return 0;
   let inside = false;
@@ -199,12 +187,9 @@ export function backlogSectionItems(text, section) {
   return count;
 }
 
-// Every herdr pane id a task record names, so the herdr facts can be fetched.
 export function recordedPaneIds(snap) {
   return Object.values(snap.meta).map((m) => m.herdr_pane_id || (m.window || '').replace(/^[^:]*:/, '')).filter(Boolean);
 }
-
-// ---- evaluation -----------------------------------------------------------
 
 // ctx: { lockBaseline: string|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
 // Returns { ok, reason, needs } where needs names a herdr fact the snapshot
