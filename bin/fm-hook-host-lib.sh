@@ -69,3 +69,19 @@ fm_hook_payload_string() {  # <payload> <jq-filter>
   esac
   printf '%s' "$payload" | jq -r "$filter" 2>/dev/null
 }
+
+# A `-d ''` read takes one byte per syscall, which on MSYS spent 2.7 s on a
+# 200 KB payload, so Bash 4.1 and later take whole `read -N` chunks instead.
+# Stock macOS Bash 3.2 has no -N.
+fm_hook_read_payload() {
+  local chunk stdin_idle_seconds=3
+  PAYLOAD=
+  if (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 401 )); then
+    while IFS= read -r -N 65536 -t "$stdin_idle_seconds" chunk; do
+      PAYLOAD+=$chunk
+    done
+  else
+    IFS= read -r -d '' -t "$stdin_idle_seconds" chunk
+  fi
+  PAYLOAD+=$chunk
+}

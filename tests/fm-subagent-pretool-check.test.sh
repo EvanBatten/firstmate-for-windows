@@ -247,6 +247,10 @@ test_stdin_transports_and_output_shapes() {
 
 test_payload_on_a_stdin_left_open_is_still_judged() {
   local hook waited=0 rc=0 cap
+  if (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 401 )); then
+    printf 'skip: Bash %s drops what a timed-out read took, so a payload on an open stdin cannot be judged\n' "$BASH_VERSION"
+    return 0
+  fi
   cap=$(fm_test_seconds 5)
   : > "$OUT"; : > "$ERR"
   FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" "$CHECK" --claude \
