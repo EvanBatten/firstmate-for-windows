@@ -87,6 +87,18 @@ describe('trace refusal', () => {
     });
   }
 
+  test('check refuses a say that steers the primary with internals, before any herdr call', () => {
+    const steering = rejects.filter((f) => f.startsWith('steer-')).sort();
+    assert.deepEqual(steering, ['steer-bin-spawn.json', 'steer-fm-brief.json', 'steer-session-start-dash.json', 'steer-session-start.json', 'steer-tasks-axi.json']);
+    for (const f of steering) {
+      const { dir, env } = fakeEnv();
+      const r = runDrive(['check', join(FIXTURES, 'reject', f)], env);
+      assert.equal(r.status, 2, `${f}: ${r.stdout}`);
+      assert.match(r.json?.rejected ?? '', /steers the primary/, f);
+      assert.ok(!existsSync(join(dir, 'calls.log')), `${f}: the fake herdr was never invoked`);
+    }
+  });
+
   test('a missing trace file exits 2', () => {
     const { dir, env } = fakeEnv();
     const r = runDrive(['run', join(FIXTURES, 'reject', 'does-not-exist.json')], env);
@@ -246,20 +258,39 @@ describe('predicates over fixture homes', () => {
 
 // ---- 3. fake-herdr end to end ----------------------------------------------
 
-function makeRoot() {
+// The repo's hook layout, so a driver that strips or rewrites hooks is caught.
+const REPO_SETTINGS = `${JSON.stringify({
+  hooks: {
+    SessionStart: [{ hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/bin/fm-sessionstart-run.sh; exit 0', timeout: 180 }] }],
+    PreToolUse: [
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'exec "$CLAUDE_PROJECT_DIR"/bin/fm-cd-pretool-check.sh --claude' }] },
+      { matcher: '.*', hooks: [{ type: 'command', command: '"$CLAUDE_PROJECT_DIR"/bin/fm-subagent-pretool-check.sh --claude' }] },
+    ],
+    Stop: [{ hooks: [{ type: 'command', command: 'exec "$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh --claude' }] }],
+  },
+}, null, 2)}\n`;
+
+function makeRoot(extraFiles = {}) {
   const root = tmp('root');
   const git = (...a) => {
     const r = spawnSync('git', ['-C', root, ...a], { encoding: 'utf8' });
     assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
   };
   git('init', '-q', '-b', 'main');
+  // Like the repo: LF everywhere, so a Git for Windows autocrlf default does not rewrite the clone.
+  writeFileSync(join(root, '.gitattributes'), '* text=auto eol=lf\n');
   mkdirSync(join(root, '.agents', 'skills', 'sample'), { recursive: true });
   writeFileSync(join(root, '.agents', 'skills', 'sample', 'SKILL.md'), '# sample\n');
   mkdirSync(join(root, '.claude'));
   symlinkSync(join('..', '.agents', 'skills'), join(root, '.claude', 'skills'), 'dir');
+  writeFileSync(join(root, '.claude', 'settings.json'), REPO_SETTINGS);
   writeFileSync(join(root, 'AGENTS.md'), '# test root\n');
   mkdirSync(join(root, 'bin'));
   writeFileSync(join(root, 'bin', '.keep'), '');
+  for (const [rel, content] of Object.entries(extraFiles)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), content);
+  }
   git('add', '-A');
   git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'root');
   return root;
@@ -384,6 +415,67 @@ describe('fake-herdr end to end', () => {
     assert.equal(theme.theme, 'dark');
     const calls = readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n');
     assert.equal(calls.length, j.overhead.herdrSpawns, 'the driver counted every herdr process it started');
+  });
+
+  const registerTrace = (feature) => ({
+    feature,
+    steps: [{ say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 }],
+  });
+  const captainSays = (state) => state.sends
+    .filter((s) => s.text !== undefined && !/claude --dangerously|^\/exit$/.test(s.text))
+    .map((s) => s.text);
+
+  test('a driven home keeps the repo hooks, gets no captain.md, and reports its fidelity', () => {
+    const { dir, env } = fakeEnv({
+      FM_DRIVE_ROOT: root,
+      FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'),
+      FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run'),
+      FM_DRIVE_KEEP: '1',
+      FM_DRIVE_MODEL: 'opus',
+    });
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-fidelity'))], env);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    if (state.primary) { try { process.kill(state.primary.pid); } catch { /* already gone */ } }
+    scratch.push(dirname(state.home));
+    const committed = spawnSync('git', ['-C', root, 'show', 'HEAD:.claude/settings.json']).stdout;
+    assert.deepEqual(
+      {
+        exit: r.status,
+        hooksAreTheRepos: readFileSync(join(state.home, '.claude', 'settings.json')).equals(committed),
+        captainMdExists: existsSync(join(state.home, 'data', 'captain.md')),
+        configBesideHome: dirname(state.claudeConfigDir) === dirname(state.home),
+        fidelity: r.json?.fidelity,
+      },
+      {
+        exit: 0,
+        hooksAreTheRepos: true,
+        captainMdExists: false,
+        configBesideHome: true,
+        fidelity: { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched', model: 'opus' },
+      },
+      r.stderr,
+    );
+  });
+
+  test('a clone that already holds a captain.md fails fidelity with exit 3 before any say', () => {
+    const withCaptain = makeRoot({ 'data/captain.md': '# Captain\n' });
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: withCaptain, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-captain-md'))], env);
+    assert.equal(r.status, 3, r.stderr);
+    assert.equal(r.json.fidelity.captainMd, 'present');
+    assert.match(r.json.error, /captainMd/);
+    assert.deepEqual(captainSays(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))), []);
+  });
+
+  test('a clone whose hooks differ from the committed ones fails fidelity with exit 3', () => {
+    const dirty = makeRoot();
+    writeFileSync(join(dirty, '.claude', 'settings.json'), `${JSON.stringify({ hooks: {} }, null, 2)}\n`);
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: dirty, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-hooks'))], env);
+    assert.equal(r.status, 3, r.stderr);
+    assert.equal(r.json.fidelity.hooks, 'modified');
+    assert.match(r.json.error, /hooks/);
+    assert.deepEqual(captainSays(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))), []);
   });
 
   test('an empty say waits without typing', () => {
