@@ -100,9 +100,6 @@ async function run(trace) {
     const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home };
     const steps = interpolate(trace, vars).steps;
 
-    result.readyMs = await session.launch();
-    log(`primary ready in ${result.readyMs} ms (pid ${session.primaryPid}, lock ${session.lockAtReady})`);
-
     const gitAhead = {};
     const deps = {
       liveness: () => session.liveness(),
@@ -115,6 +112,16 @@ async function run(trace) {
     const onSnapshot = (snap) => session.noteTaskIds(snap);
     const ctxNow = () => ({ lockBaseline: session.lockBaseline, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
     const short = (text) => JSON.stringify(text.length > 60 ? `${text.slice(0, 57)}...` : text);
+    const emptyHeldBefore = new Map();
+    const noteEmptyWaiters = async (from, ctx) => {
+      for (let j = from + 1; j < steps.length && steps[j].say === ''; j++) {
+        emptyHeldBefore.set(j, (await holdsNow({ home: session.home, parsed: steps[j].parsed, ctx, deps, onSnapshot })).ok);
+      }
+    };
+
+    await noteEmptyWaiters(-1, ctxNow());
+    result.readyMs = await session.launch();
+    log(`primary ready in ${result.readyMs} ms (pid ${session.primaryPid}, lock ${session.lockAtReady})`);
 
     let allOk = true;
     let firstSay = true;
@@ -124,10 +131,14 @@ async function run(trace) {
       const heldBefore = async () => {
         const ctx = step.say === RELAUNCH ? { ...ctxNow(), lockBaseline: session.lockText() } : ctxNow();
         const pre = await holdsNow({ home: session.home, parsed: step.parsed, ctx, deps, onSnapshot });
-        return pre.ok ? `vacuous: ${step.until} already held before its say, so this step proves nothing` : null;
+        if (pre.ok) return `vacuous: ${step.until} already held before its say, so this step proves nothing`;
+        await noteEmptyWaiters(i, ctx);
+        return null;
       };
       let withheld = null;
-      if (step.say === RELAUNCH) {
+      if (step.say === '' && emptyHeldBefore.get(i)) {
+        withheld = `vacuous: ${step.until} already held before the say it waits on, so this step proves nothing`;
+      } else if (step.say === RELAUNCH) {
         withheld = await heldBefore();
         if (!withheld) {
           rec.relaunchMs = await session.relaunch();
