@@ -9,8 +9,10 @@
 #     nothing, and stat reports the mode the reading process's umask implies,
 #     not a mode stored on the file. At 077 every file reads as 600 or 700, so
 #     upstream's private-mode checks and `mkdir -m 700` pass. What keeps the
-#     files private is the directory ACL, so the umask is set only when
-#     private-root.sh finds FM_HOME and /tmp private.
+#     files private is the directory ACL, so the umask is 077 only for a home
+#     that private-root.sh finds private, with /tmp. Such a home is recorded in
+#     FM_WIN_PRIVATE_ROOTS, and bash-env.sh reads that record for the FM_HOME
+#     each bash serves. An open home runs at 022 without BASH_ENV.
 
 case ${BASH_SOURCE[0]} in
   */*) _fm_win_dir=${BASH_SOURCE[0]%/*} ;;
@@ -30,24 +32,37 @@ done
 MSYS="winsymlinks:nativestrict$_fm_win_msys"
 
 _fm_win_home=${FM_HOME:-$_fm_win_dir/../..}
-if [ "${FM_WIN_PRIVATE_ROOTS:-}" != "$_fm_win_home:/tmp" ]; then
-  FM_WIN_PRIVATE_ROOTS=
+_fm_win_private=0
+IFS=';' read -r -a _fm_win_roots <<< "${FM_WIN_PRIVATE_ROOTS:-}"
+for _fm_win_root in "${_fm_win_roots[@]}"; do
+  [ "$_fm_win_root" -ef "$_fm_win_home" ] && _fm_win_private=1 && break
+done
+if [ "$_fm_win_private" = 0 ]; then
   if _fm_win_out=$(bash "$_fm_win_dir/private-root.sh" check "$_fm_win_home" /tmp); then
-    FM_WIN_PRIVATE_ROOTS=$_fm_win_home:/tmp
+    # Drive spelling and ';' pass through a native parent unconverted.
+    FM_WIN_PRIVATE_ROOTS=${FM_WIN_PRIVATE_ROOTS:+$FM_WIN_PRIVATE_ROOTS;}$(cygpath -m -- "$_fm_win_home")
+    _fm_win_private=1
   else
     printf '%s\n' "$_fm_win_out" | grep -v '^private ' >&2
   fi
 fi
-if [ -n "$FM_WIN_PRIVATE_ROOTS" ]; then
+# A native parent hands BASH_ENV back in drive spelling, so compare files.
+_fm_win_ours=0
+[ -n "${BASH_ENV:-}" ] && [ "$BASH_ENV" -ef "$_fm_win_dir/bash-env.sh" ] && _fm_win_ours=1
+if [ "$_fm_win_private" = 1 ]; then
   umask 077
-  # A native parent hands BASH_ENV back in drive spelling, so compare files.
-  if [ -z "${BASH_ENV:-}" ] || [ ! "$BASH_ENV" -ef "$_fm_win_dir/bash-env.sh" ]; then
-    FM_WIN_PRIOR_BASH_ENV=${BASH_ENV:-}
-  fi
+  [ "$_fm_win_ours" = 1 ] || FM_WIN_PRIOR_BASH_ENV=${BASH_ENV:-}
   BASH_ENV=$_fm_win_dir/bash-env.sh
   export BASH_ENV FM_WIN_PRIOR_BASH_ENV
+else
+  umask 022
+  if [ "$_fm_win_ours" = 1 ]; then
+    if [ -n "${FM_WIN_PRIOR_BASH_ENV:-}" ]; then BASH_ENV=$FM_WIN_PRIOR_BASH_ENV; else unset BASH_ENV; fi
+    unset FM_WIN_PRIOR_BASH_ENV
+  fi
 fi
 
 FM_PLATFORM_OVERLAY=$_fm_win_dir/overrides.sh
 export PATH MSYS FM_PLATFORM_OVERLAY FM_WIN_PRIVATE_ROOTS
-unset _fm_win_dir _fm_win_path _fm_win_msys _fm_win_word _fm_win_home _fm_win_out
+unset _fm_win_dir _fm_win_path _fm_win_msys _fm_win_word _fm_win_home _fm_win_out \
+  _fm_win_private _fm_win_roots _fm_win_root _fm_win_ours
