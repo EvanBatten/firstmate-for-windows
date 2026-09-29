@@ -157,6 +157,8 @@ describe('trace refusal', () => {
       '.agents/skills/zebra-runbook/SKILL.md': '---\nname: zebra-runbook\nuser-invocable: false\n---\n# zebra\n',
       '.agents/skills/zebra-guide/SKILL.md': '---\nname: zebra-guide\n---\n# zebra\n',
       'skills/zebra-top/SKILL.md': '---\nname: zebra-top\n---\n# zebra\n',
+      'skills/zebra-guide/SKILL.md': '---\nname: zebra-guide\n---\n# zebra\n',
+      'skills/zebra-notes.md': '# not a skill\n',
     });
     const claudeOnly = makeRoot({
       '.claude/skills/zebra-claude/SKILL.md': '---\nname: zebra-claude\nuser-invocable: false\n---\n# zebra\n',
@@ -165,12 +167,13 @@ describe('trace refusal', () => {
     const cases = {
       script: ['run bin/zebra-run.sh for greeter', /the script bin\/zebra-run\.sh/],
       skill: ['/zebra-runbook for greeter', /the agent-only skill zebra-runbook/],
-      path: ['read .agents/skills/zebra-guide/SKILL.md for greeter', /the skill file \.agents\/skills\/zebra-guide\//],
+      path: ['read skills/zebra-guide/SKILL.md for greeter', /the skill file \.agents\/skills\/zebra-guide\/SKILL\.md or skills\/zebra-guide\/SKILL\.md;/],
       claudePath: ['read .claude/skills/zebra-claude/SKILL.md for greeter', /the skill file \.claude\/skills\/zebra-claude\//],
       claudeSkill: ['/zebra-claude for greeter', /the agent-only skill zebra-claude/],
       topPath: ['follow skills/zebra-top/SKILL.md for greeter', /the skill file skills\/zebra-top\//],
       dotdot: ['follow .agents/skills/zebra-guide/../zebra-top/SKILL.md for greeter', /the skill file skills\/zebra-top\//],
       words: ['open the Zebra Runbook for greeter', /^$/],
+      file: ['read skills/zebra-notes.md for greeter', /^$/],
     };
     const verdicts = {};
     for (const [label, [say]] of Object.entries(cases)) {
@@ -182,7 +185,7 @@ describe('trace refusal', () => {
       Object.fromEntries(Object.entries(verdicts).map(([k, v]) => [k, [v.rich, cases[k][1].test(v.why), v.plain]])),
       {
         script: [2, true, 0], skill: [2, true, 0], path: [2, true, 0], claudePath: [2, true, 0],
-        claudeSkill: [2, true, 0], topPath: [2, true, 0], dotdot: [2, true, 0], words: [0, true, 0],
+        claudeSkill: [2, true, 0], topPath: [2, true, 0], dotdot: [2, true, 0], words: [0, true, 0], file: [0, true, 0],
       },
       JSON.stringify(verdicts),
     );

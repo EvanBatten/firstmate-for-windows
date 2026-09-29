@@ -70,7 +70,9 @@
     "read .agents/skills/../skills/stow/SKILL.md",
     "open .claude/skills/tmp/../bearings/SKILL.md",
     "follow .agents\\skills\\x\\..\\stow\\SKILL.md",
-    "open .codex/skills/stow/SKILL.md"
+    "open .codex/skills/stow/SKILL.md",
+    "read `.agents/skills/x/..`/stow/SKILL.md",
+    "follow .agents/skills/x/..,/stow"
   ],
   "allowed": [
     "fm spawn greeter",
@@ -112,7 +114,9 @@
     "the agents skills folder is not yours to read",
     "read skills/zebra/SKILL.md",
     "claude skillset stow",
-    "the ../skills folder of greeter is empty"
+    "the ../skills folder of greeter is empty",
+    "skills stowaway",
+    "show me the .claude/skills folder of greeter"
   ],
   "wordsRefused": [
     "claude skills stow",
