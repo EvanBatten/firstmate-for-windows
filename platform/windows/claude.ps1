@@ -1,9 +1,6 @@
-# Dot-source this from the PowerShell profile. In a firstmate home, `claude`
-# then starts through Git Bash with env.sh sourced, the same as a claude run
-# from Git Bash: the overlay is on in every hook and tool shell, and claude.exe
-# gets the MSYS pid that state/.lock records. A claude.exe started by
-# PowerShell itself has no MSYS pid, so its session can never own the lock.
-# Anywhere else `claude` is the plain executable.
+# Dot-source this from the PowerShell profile. A claude.exe that PowerShell
+# starts has no MSYS pid, so its session can never own state/.lock; started
+# through Git Bash with env.sh sourced, it gets one, and the overlay is on.
 
 function claude {
     $exe = (Get-Command claude -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source

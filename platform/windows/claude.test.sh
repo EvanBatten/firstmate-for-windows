@@ -26,7 +26,6 @@ expect() {
   if [ "$3" = "$2" ]; then ok "$1"; else not_ok "$1 (want: $2, got: $3)"; fi
 }
 
-# Runs `claude <args>` in pwsh from <dir>, with <fake>/claude.exe first on PATH.
 pwsh_claude() {
   local fake=$1 dir=$2
   shift 2
