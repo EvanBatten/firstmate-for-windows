@@ -1,17 +1,23 @@
 # shellcheck shell=bash
 # A test fixture that puts its own fake `ps` first on PATH keeps the upstream
-# bodies, which read that fake as they do on Linux.
+# bodies, which read that fake as they do on Linux. MSYS's own ps is not a
+# fixture: Git's bin/bash.exe, which Claude runs hooks through, puts /usr/bin
+# ahead of the overlay's bin. A native parent hands FM_PLATFORM_OVERLAY back in
+# drive spelling, so compare files.
+_fm_win_ps=
 IFS=: read -r -a _fm_win_dirs <<< "$PATH"
 for _fm_win_d in "${_fm_win_dirs[@]}"; do
-  [ -n "$_fm_win_d" ] && [ -x "$_fm_win_d/ps" ] && break
+  [ -n "$_fm_win_d" ] && [ -x "$_fm_win_d/ps" ] && _fm_win_ps=$_fm_win_d/ps && break
 done
-if [ "$_fm_win_d" != "${FM_PLATFORM_OVERLAY%/*}/bin" ]; then
-  unset _fm_win_dirs _fm_win_d
+unset _fm_win_dirs _fm_win_d
+if [ -n "$_fm_win_ps" ] && [ ! "$_fm_win_ps" -ef "${FM_PLATFORM_OVERLAY%/*}/bin/ps" ] \
+  && [ ! "$_fm_win_ps" -ef /usr/bin/ps ]; then
+  unset _fm_win_ps
   [ -z "${_FM_WIN_PS_FN:-}" ] || unset -f ps
   unset _FM_WIN_PS_FN
   return 0
 fi
-unset _fm_win_dirs _fm_win_d
+unset _fm_win_ps
 # shellcheck source=platform/windows/proc.sh
 declare -F fm_win_proc >/dev/null || . "${FM_PLATFORM_OVERLAY%/*}/proc.sh"
 
