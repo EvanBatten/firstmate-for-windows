@@ -1,0 +1,1 @@
+{"feature":"steer-skill-top-level","steps":[{"say":"follow skills/stow/SKILL.md for greeter","until":"projects.registered:greeter","budgetSec":1}]}

@@ -1,0 +1,1 @@
+{"feature":"steer-skill-dotdot","steps":[{"say":"follow .agents/skills/../skills/stow/SKILL.md for greeter","until":"projects.registered:greeter","budgetSec":1}]}
