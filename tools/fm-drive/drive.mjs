@@ -2,7 +2,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadTrace, interpolate, agentOnlySkills, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
+import { loadTrace, interpolate, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
 import { Session, driveRoot } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
 import { HerdrError } from './lib/herdr.mjs';
@@ -32,7 +32,7 @@ async function main(argv) {
 
   let trace;
   try {
-    trace = loadTrace(file, { agentSkills: agentOnlySkills(driveRoot(process.env)) });
+    trace = loadTrace(file, { root: driveRoot(process.env) });
   } catch (err) {
     if (err instanceof TraceError) return refuse(err);
     throw err;

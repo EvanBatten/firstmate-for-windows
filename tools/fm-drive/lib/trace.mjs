@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, basename } from 'node:path';
 import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
 
 export class TraceError extends Error {
@@ -13,19 +13,10 @@ export class TraceError extends Error {
 export const RELAUNCH = '$relaunch';
 export const INTERPOLATIONS = ['projectOrigin', 'home'];
 
-const NORMALIZED_STEERING = [
-  { pattern: /\bbin\//, what: 'a bin/ path' },
-  { pattern: /\bstate\//, what: 'a state/ path' },
-  { pattern: /\bfm-[a-z0-9]/, what: 'a firstmate script' },
-  { pattern: /\btasks-?axi\b/, what: 'tasks-axi' },
-  { pattern: /\bsession-?start/, what: 'session start' },
-];
+const fold = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-');
+const holds = (folded, needle) => `-${folded}-`.includes(`-${needle}-`);
 
-export function normalizeSay(say) {
-  return say.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/\\/g, '/').replace(/[_\s]+/g, '-');
-}
-
-export function agentOnlySkills(root) {
+function agentOnlySkills(root) {
   const dir = join(root, '.agents', 'skills');
   let names;
   try { names = readdirSync(dir); } catch { return []; }
@@ -34,14 +25,33 @@ export function agentOnlySkills(root) {
     try { text = readFileSync(join(dir, name, 'SKILL.md'), 'utf8'); } catch { return false; }
     const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
     return Boolean(front && /^user-invocable:\s*false\s*$/m.test(front[1]));
-  }).sort();
+  });
 }
 
-function steeringIn(say, agentSkills) {
-  const said = normalizeSay(say);
-  const hit = NORMALIZED_STEERING.find(({ pattern }) => pattern.test(said));
-  if (hit) return hit.what;
-  const skill = agentSkills.find((name) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(said));
+function binScripts(root) {
+  const bin = join(root, 'bin');
+  let entries;
+  try { entries = readdirSync(bin, { recursive: true }); } catch { return []; }
+  return entries.filter((rel) => statSync(join(bin, rel)).isFile()).flatMap((rel) => {
+    const path = `bin/${rel.replace(/\\/g, '/')}`;
+    const stem = path.replace(/\.[^./]+$/, '');
+    const needles = [{ needle: fold(stem), what: `the script ${path}` }];
+    if (stem !== path) needles.push({ needle: fold(basename(path)), what: `the script ${path}` });
+    return needles;
+  });
+}
+
+function steeringIn(say, root) {
+  if (!root) return null;
+  const folded = fold(say);
+  const script = binScripts(root).find(({ needle }) => holds(folded, needle));
+  if (script) return script.what;
+  const lowered = say.normalize('NFKC').toLowerCase();
+  const skill = agentOnlySkills(root).find((name) => {
+    const words = fold(name);
+    const sigil = new RegExp(`(?:^|[^\\p{L}\\p{N}])[/$]${words.split('-').join('[^\\p{L}\\p{N}]+')}(?![\\p{L}\\p{N}])`, 'u');
+    return sigil.test(lowered) || holds(folded, `the-${words}-skill`);
+  });
   return skill ? `the agent-only skill ${skill}` : null;
 }
 
@@ -61,7 +71,7 @@ export function loadTrace(filePath, options) {
   return validateTrace(raw, options);
 }
 
-export function validateTrace(raw, { agentSkills = [] } = {}) {
+export function validateTrace(raw, { root } = {}) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new TraceError('trace must be a JSON object');
   }
@@ -91,9 +101,9 @@ export function validateTrace(raw, { agentSkills = [] } = {}) {
     if (step.say.startsWith('$') && step.say !== RELAUNCH) {
       throw new TraceError(`${at}.say: unknown reserved verb ${JSON.stringify(step.say)}; only ${RELAUNCH} is defined`);
     }
-    const steer = steeringIn(step.say, agentSkills);
+    const steer = steeringIn(step.say, root);
     if (steer) {
-      throw new TraceError(`${at}.say names ${steer}; that steers the primary with internals, so the run would prove obedience rather than the product`);
+      throw new TraceError(`${at}.say invokes ${steer}; that steers the primary with internals, so the run would prove obedience rather than the product`);
     }
     for (const m of step.say.matchAll(/\{\{\s*([^}]*?)\s*\}\}/g)) {
       if (!INTERPOLATIONS.includes(m[1])) {
