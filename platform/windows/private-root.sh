@@ -4,7 +4,7 @@
 # On Windows a firstmate file is private because of its directory's ACL, not
 # its POSIX mode: Git Bash mounts drives noacl, so chmod changes nothing and
 # stat reports the mode the reader's umask implies (see env.sh). A root is
-# private when its ACL grants read or more only to this user, SYSTEM and
+# private when every entry of its ACL names this user, SYSTEM or
 # Administrators, the same set that can read a 0700 directory on Linux.
 #
 # check prints "private <dir>" or "open <dir>: <principal>..." and exits 1 when
@@ -18,24 +18,25 @@ case $mode in check | apply) shift ;; *) echo "usage: $0 check|apply <dir>..." >
 
 me="$USERDOMAIN\\$USERNAME"
 
-# Print the principals other than the private set that $1 grants more than
-# traverse (X) or synchronize (S) to.
+# Print each entry of $1's ACL that names a principal outside the private set.
+# An ACL that cannot be read is not known to be private, so a missing or
+# failing icacls, or one that lists no entry, prints "unreadable-acl".
 open_principals() {
-  local line entry who perms
+  local out line entry who entries=0
+  out=$(MSYS2_ARG_CONV_EXCL='*' icacls "$1" 2>&1) || { echo unreadable-acl; return; }
   while IFS= read -r line; do
     line=${line//$'\r'/}
     case $line in *':('*) ;; *) continue ;; esac
+    entries=$((entries + 1))
     entry=${line#"$1"}
     entry=${entry#"${entry%%[! ]*}"}
     who=${entry%%:(*}
-    perms=${entry#"$who":}
     case $who in
-      "NT AUTHORITY\\SYSTEM" | "BUILTIN\\Administrators" | "$me" | "CREATOR OWNER") continue ;;
+      "NT AUTHORITY\\SYSTEM" | "BUILTIN\\Administrators" | "$me") continue ;;
     esac
-    perms=${perms//(OI)/} perms=${perms//(CI)/} perms=${perms//(IO)/} perms=${perms//(I)/} perms=${perms//(NP)/}
-    case $perms in '(S,X)' | '(X)' | '(S)') continue ;; esac
-    printf '%s %s\n' "$who" "$perms"
-  done < <(MSYS2_ARG_CONV_EXCL='*' icacls "$1" 2>/dev/null)
+    printf '%s %s\n' "$who" "${entry#"$who":}"
+  done <<< "$out"
+  [ "$entries" -gt 0 ] || echo unreadable-acl
 }
 
 rc=0
