@@ -14,8 +14,7 @@
 # It writes coverage.tsv and a summary beside the other evidence. With no
 # arguments it runs every script, which takes as long as the suite does.
 #
-# Exit status is 0 when the measurement completed. It reports; it does not
-# judge. bin/fm-feature-coverage.sh is the gate that reads the result.
+# Exit status is 0 when the measurement completed.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
