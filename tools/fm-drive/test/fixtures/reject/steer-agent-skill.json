@@ -1,0 +1,1 @@
+{"feature":"steer-agent-skill","steps":[{"say":"use the secondmate-provisioning skill to add greeter","until":"projects.registered:greeter","budgetSec":1}]}

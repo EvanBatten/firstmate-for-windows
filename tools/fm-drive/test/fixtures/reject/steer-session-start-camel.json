@@ -1,0 +1,1 @@
+{"feature":"steer-session-start-camel","steps":[{"say":"your SessionStart hook did not fire, redo it","until":"projects.registered:greeter","budgetSec":1}]}

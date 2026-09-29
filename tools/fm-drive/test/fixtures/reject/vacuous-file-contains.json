@@ -1,0 +1,1 @@
+{"feature":"vacuous-file-contains","steps":[{"say":"ahoy! tell me what this repo is","until":"file.contains:README.md:firstmate","budgetSec":1}]}

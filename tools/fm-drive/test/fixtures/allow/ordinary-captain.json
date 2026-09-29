@@ -1,0 +1,1 @@
+{"feature":"ordinary-captain","project":"greeter","steps":[{"say":"ahoy! start a session of work: add my project from {{projectOrigin}} as greeter, check the state of its tasks, and tell me the status.","until":"projects.registered:greeter","budgetSec":300}]}

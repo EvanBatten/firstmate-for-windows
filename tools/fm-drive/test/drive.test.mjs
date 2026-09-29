@@ -82,7 +82,12 @@ describe('trace refusal', () => {
 
   test('check refuses a say that steers the primary with internals, before any herdr call', () => {
     const steering = rejects.filter((f) => f.startsWith('steer-')).sort();
-    assert.deepEqual(steering, ['steer-bin-spawn.json', 'steer-fm-brief.json', 'steer-session-start-dash.json', 'steer-session-start.json', 'steer-tasks-axi.json']);
+    assert.deepEqual(steering, [
+      'steer-agent-skill.json', 'steer-bin-backslash.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json',
+      'steer-fm-brief.json', 'steer-fm-no-sh.json', 'steer-session-start-camel.json', 'steer-session-start-dash.json',
+      'steer-session-start-underscore.json', 'steer-session-start.json', 'steer-state-path.json', 'steer-tasks-axi-space.json',
+      'steer-tasks-axi-upper.json', 'steer-tasks-axi.json',
+    ]);
     for (const f of steering) {
       const { dir, env } = fakeEnv();
       const r = runDrive(['check', join(FIXTURES, 'reject', f)], env);
@@ -90,6 +95,37 @@ describe('trace refusal', () => {
       assert.match(r.json?.rejected ?? '', /steers the primary/, f);
       assert.ok(!existsSync(join(dir, 'calls.log')), `${f}: the fake herdr was never invoked`);
     }
+  });
+
+  test('check refuses a trace whose every until already holds on a fresh clone of the home', () => {
+    const vacuous = rejects.filter((f) => f.startsWith('vacuous-')).sort();
+    assert.deepEqual(vacuous, ['vacuous-file-contains.json', 'vacuous-home-clean.json', 'vacuous-wake-empty.json']);
+    for (const f of vacuous) {
+      const { dir, env } = fakeEnv();
+      const r = runDrive(['check', join(FIXTURES, 'reject', f)], env);
+      assert.equal(r.status, 2, `${f}: ${r.stdout}`);
+      assert.match(r.json?.rejected ?? '', /already holds on a fresh clone/, f);
+      assert.ok(!existsSync(join(dir, 'calls.log')), `${f}: the fake herdr was never invoked`);
+    }
+  });
+
+  test('an ordinary captain request passes check', () => {
+    const r = runDrive(['check', join(FIXTURES, 'allow', 'ordinary-captain.json')], fakeEnv().env);
+    assert.equal(r.status, 0, r.stdout);
+    assert.equal(r.json.ok, true);
+  });
+
+  test('agent-only skill names come from the driven root at check time', () => {
+    const skilled = makeRoot({ '.agents/skills/zebra-runbook/SKILL.md': '---\nname: zebra-runbook\nuser-invocable: false\n---\n# zebra\n' });
+    const say = { feature: 'zebra', steps: [{ say: 'open the Zebra Runbook for greeter', until: 'projects.registered:greeter', budgetSec: 1 }] };
+    const trace = writeTrace(tmp('trace'), say);
+    const refused = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: skilled }).env);
+    const plain = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: makeRoot() }).env);
+    assert.deepEqual(
+      { refused: refused.status, why: /agent-only skill zebra-runbook/.test(refused.json?.rejected ?? ''), plain: plain.status },
+      { refused: 2, why: true, plain: 0 },
+      `${refused.stdout}\n${plain.stdout}`,
+    );
   });
 
   test('a missing trace file exits 2', () => {
@@ -402,25 +438,54 @@ describe('fake-herdr end to end', () => {
     );
   });
 
-  test('a clone that already holds a captain.md fails fidelity with exit 3 before any say', () => {
+  const launchesOf = (dir) => (existsSync(join(dir, 'state.json')) ? JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).launches ?? 0 : 0);
+
+  test('a clone that already holds a captain.md fails fidelity with exit 3 before claude launches', () => {
     const withCaptain = makeRoot({ 'data/captain.md': '# Captain\n' });
     const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: withCaptain, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
     const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-captain-md'))], env);
-    assert.equal(r.status, 3, r.stderr);
-    assert.equal(r.json.fidelity.captainMd, 'present');
-    assert.match(r.json.error, /captainMd/);
-    assert.deepEqual(captainSays(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))), []);
+    assert.deepEqual(
+      { exit: r.status, captainMd: r.json?.fidelity?.captainMd, named: /captainMd/.test(r.json?.error ?? ''), launches: launchesOf(dir) },
+      { exit: 3, captainMd: 'present', named: true, launches: 0 },
+      r.stderr,
+    );
   });
 
-  test('a clone whose hooks differ from the committed ones fails fidelity with exit 3', () => {
+  test('a clone whose hooks differ from the committed ones fails fidelity with exit 3 before claude launches', () => {
     const dirty = makeRoot();
     writeFileSync(join(dirty, '.claude', 'settings.json'), `${JSON.stringify({ hooks: {} }, null, 2)}\n`);
     const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: dirty, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
     const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-hooks'))], env);
-    assert.equal(r.status, 3, r.stderr);
-    assert.equal(r.json.fidelity.hooks, 'modified');
-    assert.match(r.json.error, /hooks/);
-    assert.deepEqual(captainSays(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))), []);
+    assert.deepEqual(
+      { exit: r.status, hooks: r.json?.fidelity?.hooks, named: /hooks/.test(r.json?.error ?? ''), launches: launchesOf(dir) },
+      { exit: 3, hooks: 'modified', named: true, launches: 0 },
+      r.stderr,
+    );
+  });
+
+  test('a claim that already holds before its say fails that step as vacuous, and the say is never typed', () => {
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = {
+      feature: 'e2e-vacuous',
+      steps: [
+        { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+        { say: 'say hello to greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+      ],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    assert.deepEqual(
+      {
+        exit: r.status,
+        pass: r.json?.pass,
+        oks: r.json?.steps.map((s) => s.ok),
+        vacuous: r.json?.steps[1]?.vacuous,
+        why: /already held before its say/.test(r.json?.steps[1]?.reason ?? ''),
+        typed: captainSays(state).filter((t) => t === 'say hello to greeter').length,
+      },
+      { exit: 1, pass: false, oks: [true, false], vacuous: true, why: true, typed: 0 },
+      r.stderr,
+    );
   });
 
   test('an empty say waits without typing', () => {
@@ -683,6 +748,21 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.equal(isCredentialFileName('.credentials.json'), true);
     const theme = JSON.parse(readFileSync(join(evidence, 'settings.json'), 'utf8'));
     assert.equal(theme.theme, 'dark');
+  });
+
+  test('fidelity measures the throwaway config and names what the driver did not write', async () => {
+    const home = makeRoot();
+    const userHome = tmp('user-home');
+    const env = { ...process.env, HOME: userHome, USERPROFILE: userHome, CLAUDE_CONFIG_DIR: '' };
+    const s = new sessionLib.Session({ trace: { feature: 'cfg', steps: [] }, env });
+    s.home = home;
+    s.claudeConfigDir = prepareClaudeConfig(join(tmp('scratch'), 'claude-config'), home, env);
+    const clean = (await s.fidelity()).claudeConfig;
+    writeFileSync(join(s.claudeConfigDir, 'CLAUDE.md'), '# host memory\n');
+    const settings = JSON.parse(readFileSync(join(s.claudeConfigDir, 'settings.json'), 'utf8'));
+    writeFileSync(join(s.claudeConfigDir, 'settings.json'), JSON.stringify({ ...settings, hooks: { Stop: [] } }));
+    const leaked = (await s.fidelity()).claudeConfig;
+    assert.deepEqual({ clean, leaked }, { clean: 'clean', leaked: 'carries CLAUDE.md, settings.json:hooks' });
   });
 
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
