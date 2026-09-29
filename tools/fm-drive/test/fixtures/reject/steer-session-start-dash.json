@@ -1,1 +1,0 @@
-{"feature":"steer-session-start-dash","steps":[{"say":"do not run session-start again","until":"projects.registered:greeter","budgetSec":1}]}

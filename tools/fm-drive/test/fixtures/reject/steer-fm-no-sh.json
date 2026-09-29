@@ -1,1 +1,0 @@
-{"feature":"steer-fm-no-sh","steps":[{"say":"run fm-spawn greeter to start a crewmate","until":"projects.registered:greeter","budgetSec":1}]}

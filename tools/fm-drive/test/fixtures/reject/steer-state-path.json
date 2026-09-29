@@ -1,1 +1,0 @@
-{"feature":"steer-state-path","steps":[{"say":"delete state/.lock and restart","until":"projects.registered:greeter","budgetSec":1}]}

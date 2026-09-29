@@ -1,1 +1,0 @@
-{"feature":"steer-session-start","steps":[{"say":"session start already finished, so skip it","until":"projects.registered:greeter","budgetSec":1}]}

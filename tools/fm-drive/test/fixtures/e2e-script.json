@@ -19,5 +19,15 @@
   ],
   "crash now": [
     { "killPrimary": true }
+  ],
+  "rewrite the hooks": [
+    { "path": ".claude/settings.json", "content": "{\"hooks\": {}}\n" },
+    { "mkdir": "projects/greeter/.git" },
+    { "path": "data/projects.md", "content": "# Projects\n\n- greeter [local-only] - a throwaway project\n" }
+  ],
+  "remember that I prefer": [
+    { "path": "data/captain.md", "content": "# Captain\n\n- prefers opus workers\n" },
+    { "mkdir": "projects/greeter/.git" },
+    { "path": "data/projects.md", "content": "# Projects\n\n- greeter [local-only] - a throwaway project\n" }
   ]
 }

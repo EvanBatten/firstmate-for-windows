@@ -17,6 +17,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DRIVE = join(HERE, '..', 'drive.mjs');
 const FAKE = join(HERE, 'fake-herdr.mjs');
 const FIXTURES = join(HERE, 'fixtures');
+const REPO = join(HERE, '..', '..', '..');
 const NODE = process.execPath;
 
 const scratch = [];
@@ -83,10 +84,7 @@ describe('trace refusal', () => {
   test('check refuses a say that steers the primary with internals, before any herdr call', () => {
     const steering = rejects.filter((f) => f.startsWith('steer-')).sort();
     assert.deepEqual(steering, [
-      'steer-agent-skill.json', 'steer-bin-backslash.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json',
-      'steer-fm-brief.json', 'steer-fm-no-sh.json', 'steer-session-start-camel.json', 'steer-session-start-dash.json',
-      'steer-session-start-underscore.json', 'steer-session-start.json', 'steer-state-path.json', 'steer-tasks-axi-space.json',
-      'steer-tasks-axi-upper.json', 'steer-tasks-axi.json',
+      'steer-agent-skill.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json', 'steer-fm-brief.json',
     ]);
     for (const f of steering) {
       const { dir, env } = fakeEnv();
@@ -115,16 +113,48 @@ describe('trace refusal', () => {
     assert.equal(r.json.ok, true);
   });
 
-  test('agent-only skill names come from the driven root at check time', () => {
-    const skilled = makeRoot({ '.agents/skills/zebra-runbook/SKILL.md': '---\nname: zebra-runbook\nuser-invocable: false\n---\n# zebra\n' });
-    const say = { feature: 'zebra', steps: [{ say: 'open the Zebra Runbook for greeter', until: 'projects.registered:greeter', budgetSec: 1 }] };
-    const trace = writeTrace(tmp('trace'), say);
-    const refused = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: skilled }).env);
-    const plain = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: makeRoot() }).env);
+  const STEERING = JSON.parse(readFileSync(join(FIXTURES, 'steering.json'), 'utf8'));
+  const refusal = (say) => {
+    try {
+      validateTrace({ feature: 'x', steps: [{ say, until: 'projects.registered:greeter' }] }, { root: REPO });
+      return null;
+    } catch (err) {
+      if (!(err instanceof TraceError)) throw err;
+      return err.message;
+    }
+  };
+
+  test('real captain lines pass, including worker tab names and plain words that match skill names', () => {
+    const refused = STEERING.captain.map((say) => [say, refusal(say)]).filter(([, why]) => why);
+    assert.deepEqual(refused, []);
+  });
+
+  test('a path to a script in bin/ or an agent-only skill invoked as a skill is refused however it is spelled', () => {
+    const allowed = STEERING.refused.filter((say) => !/steers the primary/.test(refusal(say) ?? ''));
+    assert.deepEqual(allowed, []);
+  });
+
+  test('respellings that name no bin/ script and invoke no skill are left to the trace reviewer', () => {
+    const refused = STEERING.allowed.map((say) => [say, refusal(say)]).filter(([, why]) => why);
+    assert.deepEqual(refused, []);
+  });
+
+  test('bin scripts and agent-only skills come from the driven root at check time', () => {
+    const rich = makeRoot({
+      'bin/zebra-run.sh': '#!/bin/sh\n',
+      '.agents/skills/zebra-runbook/SKILL.md': '---\nname: zebra-runbook\nuser-invocable: false\n---\n# zebra\n',
+    });
+    const plain = makeRoot();
+    const verdicts = {};
+    for (const [label, say] of [['script', 'run bin/zebra-run.sh for greeter'], ['skill', '/zebra-runbook for greeter'], ['words', 'open the Zebra Runbook for greeter']]) {
+      const trace = writeTrace(tmp('trace'), { feature: 'zebra', steps: [{ say, until: 'projects.registered:greeter', budgetSec: 1 }] });
+      const r = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: rich }).env);
+      verdicts[label] = { rich: r.status, why: r.json?.rejected ?? '', plain: runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: plain }).env).status };
+    }
     assert.deepEqual(
-      { refused: refused.status, why: /agent-only skill zebra-runbook/.test(refused.json?.rejected ?? ''), plain: plain.status },
-      { refused: 2, why: true, plain: 0 },
-      `${refused.stdout}\n${plain.stdout}`,
+      Object.fromEntries(Object.entries(verdicts).map(([k, v]) => [k, [v.rich, /zebra-run/.test(v.why), v.plain]])),
+      { script: [2, true, 0], skill: [2, true, 0], words: [0, false, 0] },
+      JSON.stringify(verdicts),
     );
   });
 
@@ -425,6 +455,7 @@ describe('fake-herdr end to end', () => {
         captainMdExists: existsSync(join(state.home, 'data', 'captain.md')),
         configBesideHome: dirname(state.claudeConfigDir) === dirname(state.home),
         fidelity: r.json?.fidelity,
+        fidelityAtClose: r.json?.fidelityAtClose,
       },
       {
         exit: 0,
@@ -432,6 +463,7 @@ describe('fake-herdr end to end', () => {
         captainMdExists: false,
         configBesideHome: true,
         fidelity: { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched', model: 'opus' },
+        fidelityAtClose: { hooks: 'repo', captainMd: 'untouched' },
       },
       r.stderr,
     );
@@ -483,6 +515,71 @@ describe('fake-herdr end to end', () => {
         typed: captainSays(state).filter((t) => t === 'say hello to greeter').length,
       },
       { exit: 1, pass: false, oks: [true, false], vacuous: true, why: true, typed: 0 },
+      r.stderr,
+    );
+  });
+
+  test('a captain.md written after the fidelity check but before any say fails the run at close', () => {
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const inject = join(tmp('inject'), 'open-writes-captain.mjs');
+    writeFileSync(inject, [
+      `import { Session } from ${JSON.stringify(pathToFileURL(join(HERE, '..', 'lib', 'session.mjs')).href)};`,
+      "import { mkdirSync, writeFileSync } from 'node:fs';",
+      'const open = Session.prototype.open;',
+      "Session.prototype.open = async function () { mkdirSync(`${this.home}/data`, { recursive: true }); writeFileSync(`${this.home}/data/captain.md`, '# Captain'); return open.call(this); };",
+    ].join('\n'));
+    const r = spawnSync(NODE, ['--import', pathToFileURL(inject).href, DRIVE, 'run', writeTrace(tmp('trace'), registerTrace('e2e-late-captain'))], { env, encoding: 'utf8', timeout: 120_000 });
+    const json = JSON.parse(r.stdout.trim().split('\n').at(-1));
+    assert.deepEqual(
+      { exit: r.status, pass: json.pass, before: json.fidelity?.captainMd, atClose: json.fidelityAtClose?.captainMd, named: /captainMd/.test(json.error ?? '') },
+      { exit: 3, pass: false, before: 'untouched', atClose: 'present', named: true },
+      r.stderr,
+    );
+    assert.ok(launchesOf(dir) >= 1);
+  });
+
+  test('hooks rewritten during the run fail it at close', () => {
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-hooks-late', steps: [{ say: 'rewrite the hooks for greeter', until: 'projects.registered:greeter', budgetSec: 10 }] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, stepOk: r.json?.steps[0]?.ok, atClose: r.json?.fidelityAtClose?.hooks, named: /hooks/.test(r.json?.error ?? '') },
+      { exit: 3, pass: false, stepOk: true, atClose: 'modified', named: true },
+      r.stderr,
+    );
+  });
+
+  test('a captain.md the primary writes after a say is reported, not failed', () => {
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-preference', steps: [{ say: 'remember that I prefer opus workers, and register greeter', until: 'projects.registered:greeter', budgetSec: 10 }] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, fidelityAtClose: r.json?.fidelityAtClose },
+      { exit: 0, pass: true, fidelityAtClose: { hooks: 'repo', captainMd: 'written-after-say' } },
+      r.stderr,
+    );
+  });
+
+  for (const claim of ['home.clean', 'wake.empty', 'file.contains:AGENTS.md:test root']) {
+    test(`an empty say whose claim ${claim} held before the say it waits on fails as vacuous`, () => {
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      const trace = { feature: 'e2e-empty-vacuous', steps: [registerTrace('x').steps[0], { say: '', until: claim, budgetSec: 10 }] };
+      const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+      assert.deepEqual(
+        { exit: r.status, pass: r.json?.pass, oks: r.json?.steps.map((s) => s.ok), vacuous: r.json?.steps[1]?.vacuous, why: /already held before/.test(r.json?.steps[1]?.reason ?? '') },
+        { exit: 1, pass: false, oks: [true, false], vacuous: true, why: true },
+        r.stderr,
+      );
+    });
+  }
+
+  test('a leading empty say whose claim held before launch fails as vacuous', () => {
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-lead-vacuous', steps: [{ say: '', until: 'file.contains:AGENTS.md:test root', budgetSec: 10 }, registerTrace('x').steps[0]] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, vacuous: r.json?.steps[0]?.vacuous, why: /already held before/.test(r.json?.steps[0]?.reason ?? '') },
+      { exit: 1, pass: false, vacuous: true, why: true },
       r.stderr,
     );
   });

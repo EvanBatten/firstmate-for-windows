@@ -1,1 +1,0 @@
-{"feature":"steer-bin-backslash","steps":[{"say":"run bin\\wake-drain now","until":"projects.registered:greeter","budgetSec":1}]}
