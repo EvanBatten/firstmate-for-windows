@@ -1055,6 +1055,13 @@ test_run_non_home_without_state_is_silent() {
   git -C "$root" commit -q --allow-empty -m init
   expect_silent_zero "non-home run" run_hook "$root" --source startup
   assert_absent "$root/state" "a directory that is not a firstmate home got a state directory"
+
+  local base="$TMP_ROOT/run-stateless-linked-base" linked="$TMP_ROOT/run-stateless-linked"
+  fm_git_worktree "$base" "$linked" fm/run-stateless-linked
+  mkdir -p "$linked/bin"
+  : > "$linked/AGENTS.md"
+  expect_silent_zero "stateless linked worktree run" run_hook "$linked" --source startup
+  assert_absent "$linked/state" "an unmarked task worktree without state/ got a state directory"
   pass "run wrapper: a checkout that is not a firstmate home stays silent and untouched"
 }
 
