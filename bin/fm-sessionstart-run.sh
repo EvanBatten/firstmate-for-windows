@@ -83,7 +83,7 @@ stand_down() {
 }
 
 # The gate and primary-root checks keep a no-mistakes gate agent and an unmarked
-# task worktree from running a session start for a home they do not own. Unlike
+# task worktree from running a session start for a home they do not own. Like
 # the nudge wrapper, this skips the state/ check, because a fresh clone has no
 # state/ until the session start below creates it. Pi's preflight-only status
 # preserves that intentional silence without mistaking it for a failed eligible
