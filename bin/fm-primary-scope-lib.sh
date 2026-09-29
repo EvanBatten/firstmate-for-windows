@@ -17,10 +17,9 @@ fm_root_is_secondmate_home() {
   return 0
 }
 
-# Return 0 when $1 is a genuine primary root.
 # A valid secondmate marker force-includes a linked secondmate home.
 # Otherwise only a plain checkout is primary, never a linked task worktree.
-fm_primary_root_matches() {
+fm_primary_shape_matches() {
   local root=$1 git_dir git_common_dir
   if ! fm_root_is_secondmate_home "$root"; then
     git_dir=$(git -C "$root" rev-parse --git-dir 2>/dev/null) || return 1
@@ -31,7 +30,12 @@ fm_primary_root_matches() {
   [ -d "$root/bin" ] || return 1
 }
 
+fm_primary_root_matches() {
+  fm_primary_shape_matches "$1" || return 1
+  [ -f "$1/bin/fm-session-start.sh" ]
+}
+
 fm_primary_scope_matches() {
-  fm_primary_root_matches "$1" || return 1
+  fm_primary_shape_matches "$1" || return 1
   [ -d "$2" ]
 }
