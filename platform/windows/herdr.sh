@@ -55,6 +55,11 @@ herdr() {
     'tab create' | 'workspace create')
       _fm_win_herdr_create "${args[@]}"
       ;;
+    'server '*)
+      # Every pane inherits the server's environment, and a pane shell needs
+      # conversion on for the native programs it starts.
+      "$_FM_WIN_HERDR_BIN" "${args[@]}"
+      ;;
     *)
       MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "${args[@]}"
       ;;
