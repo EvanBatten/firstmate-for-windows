@@ -222,6 +222,8 @@ export class Session {
     this.paneId = null;
     this.shell = 'bash';
     this.primaryPid = null;
+    this.launches = 0;
+    this.readyLaunch = null;
     this.lockBaseline = undefined;
     this.seeds = {};
     this.projectOrigin = null;
@@ -263,7 +265,7 @@ export class Session {
     }
     // TMUX is blanked so a herdr server that happens to run under tmux still
     // yields a pane where firstmate auto-detects herdr, not tmux.
-    // herdr drops PATH from pane env (bin/backends/herdr.sh), so it rides in as FM_PANE_PATH.
+    // herdr drops PATH from pane env, so it rides in as FM_PANE_PATH (platform/windows/pane-rc.sh).
     const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '', CLAUDE_CONFIG_DIR: this.claudeConfigDir };
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
@@ -277,7 +279,32 @@ export class Session {
     if (/pwsh|powershell/.test(shellName)) this.shell = 'pwsh';
     else if (shellName === 'cmd' || shellName === 'cmd.exe') this.shell = 'cmd';
     else this.shell = 'posix';
+    const paneRc = join(this.home, 'platform', 'windows', 'pane-rc.sh');
+    if (this.shell === 'pwsh' && existsSync(paneRc)) await this.enterGitBash(paneRc);
     this.watchPrimaryStatus();
+  }
+
+  // The primary runs where the Windows overlay runs every herdr pane: an
+  // interactive Git Bash on pane-rc.sh, which loads env.sh. Text typed before
+  // that bash sets its title loses its head, so the launch waits for it.
+  async enterGitBash(paneRc) {
+    const gitExec = await this.git(['--exec-path']);
+    const bash = resolve(gitExec, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+    if (!existsSync(bash)) throw new HerdrError(`no Git Bash at ${bash}, derived from git --exec-path ${gitExec}`);
+    const quote = (s) => `'${s.replace(/'/g, "''")}'`;
+    const rc = paneRc.replace(/\\/g, '/');
+    await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: `& ${quote(bash)} --rcfile ${quote(rc)} -i; exit`, keys: ['enter'] });
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const title = ((await this.herdr.call('pane.get', { pane_id: this.paneId })).pane?.terminal_title ?? '').toLowerCase();
+      if (title && !title.endsWith('.exe')) {
+        this.shell = 'git-bash';
+        return;
+      }
+      await sleep(100);
+    }
+    this.snapshot('git-bash-not-ready', await this.paneText().catch(() => ''));
+    throw new HerdrError('the primary pane did not start Git Bash on pane-rc.sh within 30 s');
   }
 
   panePath() {
@@ -391,6 +418,9 @@ export class Session {
     if (this.shell === 'cmd') {
       return `set "PATH=%FM_PANE_PATH%" && set "CLAUDE_CONFIG_DIR=${cfg}" && cd /d "${home}" && claude ${flags}`;
     }
+    if (this.shell === 'git-bash') {
+      return `export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd "$(cygpath -u '${home.replace(/'/g, "'\\''")}')" && claude ${flags}`;
+    }
     return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
   }
 
@@ -417,9 +447,12 @@ export class Session {
   async launch() {
     const t0 = Date.now();
     this.primaryPid = null;
+    this.launches += 1;
+    this.readyLaunch = null;
     this.signals.shellDead = null;
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: this.launchLine(), keys: ['enter'] });
     await this.awaitReady();
+    this.readyLaunch = this.launches;
     this.watchDialogs();
     return Date.now() - t0;
   }
@@ -626,10 +659,13 @@ export class Session {
         this.signals.blocked = null;
       }
       // Rare, event-driven dead-primary check: unknown status plus a shell
-      // prompt. Not a 1 s pane-read loop.
+      // prompt. Not a 1 s pane-read loop. Until the latest launch is ready the
+      // pane still shows the shell that launches claude, so a read taken
+      // then proves nothing.
       if (status === 'unknown' && this.paneId) {
+        const launch = this.readyLaunch;
         this.paneText().then((text) => {
-          if (atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
+          if (launch !== null && launch === this.readyLaunch && atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
         }).catch(() => {});
       }
     };

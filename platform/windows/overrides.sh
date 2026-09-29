@@ -1,4 +1,7 @@
 # shellcheck shell=bash
+# shellcheck source=platform/windows/herdr.sh
+! declare -F fm_backend_herdr_cli >/dev/null || . "${FM_PLATFORM_OVERLAY%/*}/herdr.sh"
+
 # A test fixture that puts its own fake `ps` first on PATH keeps the upstream
 # bodies, which read that fake as they do on Linux. MSYS's own ps is not a
 # fixture: Git's bin/bash.exe, which Claude runs hooks through, puts /usr/bin
