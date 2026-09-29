@@ -11,7 +11,7 @@ cp -r platform/windows "$T/home/platform/windows"
 : > "$T/home/bin/fm-lock.sh"
 cp "$(cygpath -u "$COMSPEC")" "$T/native/claude.exe"
 cp /usr/bin/env.exe "$T/msys/claude.exe"
-printf '%s\n' '. $env:FM_T_PS1' 'Set-Location -LiteralPath $env:FM_T_DIR' 'claude @args' '"rc=$LASTEXITCODE"' > "$T/run.ps1"
+printf '%s\n' '. $env:FM_T_PS1' 'Set-Location -LiteralPath $env:FM_T_DIR' 'if ($env:FM_T_PIPE) { $env:FM_T_PIPE | claude @args } else { claude @args }' '"rc=$LASTEXITCODE"' > "$T/run.ps1"
 cat > "$T/report.sh" << EOF
 o=off; [ -n "\${FM_PLATFORM_OVERLAY:-}" ] && [ "\$FM_PLATFORM_OVERLAY" -ef "$T/home/platform/windows/overrides.sh" ] && o=on
 m=none; for p in /proc/[0-9]*; do [ "\$(cat "\$p/exename" 2> /dev/null)" = "$T/native/claude" ] && m=msys; done
@@ -43,6 +43,9 @@ expect "outside a home claude is the plain executable" \
 expect "arguments reach claude unchanged" \
   '[a b][c"d][] rc=0' \
   "$(pwsh_claude "$T/msys" "$T/home" sh -c 'printf "[%s]" "$@"; echo' _ 'a b' 'c"d' '')"
+expect "input piped to claude in PowerShell reaches it" \
+  '[a prompt] rc=0' \
+  "$(FM_T_PIPE='a prompt' pwsh_claude "$T/msys" "$T/home" sh -c 'read -r l; printf "[%s]" "$l"; echo')"
 expect "claude's exit code comes back to PowerShell" \
   "rc=7" \
   "$(pwsh_claude "$T/native" "$T/home" /d /c exit 7)"
