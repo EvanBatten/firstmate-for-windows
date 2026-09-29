@@ -43,13 +43,18 @@ while :; do
   sleep 0.2
 done
 EOF
+chmod +x "$T/session.sh"
+cat > "$T/hook.sh" <<EOF
+[ -z "\${GROK_AGENT:-}" ] || exit 0; exec $(printf '%q' "$T/session.sh") "\$@"
+EOF
 
 start_session() {  # <name> <home> [hook]
   local i pid winpid bash_exe=$BASH_EXE
   mkdir -p "$T/$1"
-  [ "${3:-}" != hook ] || bash_exe=$GIT_BASH_LAUNCHER
+  local script=$T/session.sh
+  [ "${3:-}" != hook ] || bash_exe=$GIT_BASH_LAUNCHER script=$T/hook.sh
   cp /c/Windows/System32/cmd.exe "$T/$1/claude.exe"
-  MSYS2_ARG_CONV_EXCL='*' "$T/$1/claude.exe" /c "$bash_exe" "$(cygpath -m "$T/session.sh")" "$1" "$2" ${3:+"$3"} > /dev/null 2>&1 &
+  MSYS2_ARG_CONV_EXCL='*' "$T/$1/claude.exe" /c "$bash_exe" "$(cygpath -m "$script")" "$1" "$2" ${3:+"$3"} > /dev/null 2>&1 &
   for ((i = 0; i < 50; i++)); do
     read -r pid winpid < <(/usr/bin/ps -W | awk -v p="$1/claude" 'index($0, p) {print $1, $4; exit}')
     [ -n "$pid" ] && break
@@ -79,11 +84,14 @@ expect "status agrees for that holder" "held by live harness pid $p0" "$(lock_st
 
 # Claude runs a hook through Git's bin/bash.exe, which puts /usr/bin ahead of
 # the overlay's bin, and the hook inherits the overlay only through the
-# environment claude.exe was started with.
-hook_home=$T/hook
-mkdir -p "$hook_home/state"
-start_session s9 "$hook_home" hook; p9=$SESSION_PID
-expect "a hook-shaped session takes the lock" "lock acquired: harness pid $p9" "$(run_lock s9 1)"
+# environment claude.exe was started with. The hook command execs a script,
+# and that exec leaves the script with no live Win32 parent, so only
+# CLAUDE_PID still names the session.
+mkdir -p "$T/hook/state" "$T/hook-noenv/state"
+start_session s9 "$T/hook" hook; p9=$SESSION_PID w9=$SESSION_WINPID
+expect "a hook-shaped session takes the lock" "lock acquired: harness pid $p9" "$(run_lock s9 1 "CLAUDE_PID=$w9 bin/fm-lock.sh")"
+start_session s8 "$T/hook-noenv" hook
+expect "a hook-shaped session without CLAUDE_PID does not" "cannot locate harness process in ancestry" "$(run_lock s8 1)"
 
 start_session s1 "$H"; p1=$SESSION_PID w1=$SESSION_WINPID
 start_session s2 "$H"; p2=$SESSION_PID
