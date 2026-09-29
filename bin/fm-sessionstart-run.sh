@@ -82,12 +82,14 @@ stand_down() {
   exit 0
 }
 
-# The same two eligibility owners the nudge wrapper uses, so a no-mistakes gate
-# agent and an unmarked task worktree can never run a session start for a home
-# they do not own. Pi's preflight-only status preserves that intentional silence
-# without mistaking it for a failed eligible attempt that needs the manual nudge.
+# The gate and primary-root checks keep a no-mistakes gate agent and an unmarked
+# task worktree from running a session start for a home they do not own. Unlike
+# the nudge wrapper, this skips the state/ check, because a fresh clone has no
+# state/ until the session start below creates it. Pi's preflight-only status
+# preserves that intentional silence without mistaking it for a failed eligible
+# attempt that needs the manual nudge.
 fm_is_gate_agent "$FM_ROOT" && stand_down
-fm_primary_scope_matches "$FM_ROOT" "$STATE" || stand_down
+fm_primary_root_matches "$FM_ROOT" || stand_down
 
 session_start_completed() {
   local lock_pid completion_pid
