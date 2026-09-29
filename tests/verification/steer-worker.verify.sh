@@ -36,7 +36,8 @@ captain_says "tell the worker to also add a fourth subcommand, shout, that print
 
 steer_recorded() { ls "$INBOX"/*.msg >/dev/null 2>&1 || ls "$INBOX"/handled/*.msg >/dev/null 2>&1; }
 session_wait "the steer is a durable record in the worker's inbox" 600 steer_recorded
-MSG=$(ls "$INBOX"/*.msg "$INBOX"/handled/*.msg 2>/dev/null | head -1)
+MSG=
+for m in "$INBOX"/*.msg "$INBOX"/handled/*.msg; do [ -f "$m" ] && { MSG=$m; break; }; done
 [ -z "$MSG" ] || verify_keep "$(basename "$MSG")" "$MSG"
 if [ -n "$MSG" ] && grep -q "shout" "$MSG"; then ok "the inbox record carries the captain's words"; else bad "the inbox record does not carry the captain's words: $MSG"; fi
 
