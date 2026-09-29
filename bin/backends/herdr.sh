@@ -4061,3 +4061,4 @@ fm_backend_herdr_wait_transition() {  # <session> <timeout_secs> <state_dir> <pa
   [ "$reader_rc" -eq 0 ] && return 1
   return 2
 }
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'
