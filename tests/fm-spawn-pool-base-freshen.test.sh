@@ -432,35 +432,103 @@ test_dirty_pool_refuses_without_discarding_work() {
   pass "a dirty pooled worktree is refused without discarding its local work"
 }
 
-test_attached_pool_branch_with_unique_commits_refuses() {
-  local rec id out status branch_tip fresh_id
-  id='pool-attached-branch-r15'
-  rec=$(make_case attached-branch "$id")
+pool_commit() {  # <name>
+  printf '%s\n' "$1" > "$POOL_DIR/$1.txt"
+  git -C "$POOL_DIR" add "$1.txt"
+  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm "$1"
+}
+
+assert_on_a_ref() {  # <commit> <message>
+  git -C "$PROJECT_DIR" for-each-ref --contains "$1" --format='%(refname)' | grep -q . || fail "$2"
+}
+
+assert_at_origin_default() {  # <message>
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse "origin/$DEFAULT_BRANCH")" ] || fail "$1"
+}
+
+test_attached_branch_with_commits_on_no_other_ref_refuses_until_detached() {
+  local rec id out status tip
+  id='pool-attached-unique-r15'
+  rec=$(make_case attached-unique "$id")
   read_case_record "$rec"
   git -C "$POOL_DIR" switch --quiet -c wip
-  printf 'work only this branch holds\n' > "$POOL_DIR/wip.txt"
-  git -C "$POOL_DIR" add wip.txt
-  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm wip-work
-  branch_tip=$(git -C "$POOL_DIR" rev-parse HEAD)
+  pool_commit wip-work
+  tip=$(git -C "$POOL_DIR" rev-parse HEAD)
 
   out=$(run_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
-  [ "$status" -ne 0 ] || fail "spawn reset a pooled worktree whose branch holds commits the base lacks"
-  assert_contains "$out" "attached to branch 'wip'" "spawn did not name the branch it refused to reset"
-  [ "$(git -C "$PROJECT_DIR" rev-parse refs/heads/wip)" = "$branch_tip" ] \
-    || fail "spawn moved branch wip and orphaned its commit"
-  [ "$(git -C "$POOL_DIR" symbolic-ref HEAD)" = refs/heads/wip ] \
-    || fail "spawn detached the refused pooled worktree"
+  [ "$status" -ne 0 ] || fail "spawn reset a pooled branch whose commit is on no other ref"$'\n'"$out"
+  assert_contains "$out" "git -C '$POOL_DIR' switch --detach" \
+    "the refusal did not give the command that frees the slot and keeps the commit"$'\n'"$out"
+  [ "$(git -C "$PROJECT_DIR" rev-parse refs/heads/wip)" = "$tip" ] || fail "the refused spawn moved branch wip"
+  [ "$(git -C "$POOL_DIR" symbolic-ref HEAD)" = refs/heads/wip ] || fail "the refused spawn detached the slot"
 
-  fresh_id='pool-attached-fresh-branch-r15'
-  fm_test_spawn_brief "$HOME_DIR" "$fresh_id"
-  git -C "$POOL_DIR" switch --quiet -c fresh "$INITIAL_SHA"
-  out=$(run_spawn "$fresh_id" --mode no-mistakes --yolo off)
+  git -C "$POOL_DIR" switch --quiet --detach
+  id='pool-attached-unique-retry-r15'
+  fm_test_spawn_brief "$HOME_DIR" "$id"
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
-  expect_code 0 "$status" "spawn should reset a branch that holds nothing beyond the base"$'\n'"$out"
-  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/main)" ] \
-    || fail "spawn left a fresh branch on stale history"
-  pass "a pooled branch with unique commits is refused, and a fresh branch still refreshes"
+  expect_code 0 "$status" "spawn should launch once the refused slot is detached"$'\n'"$out"
+  assert_at_origin_default "the retried spawn did not start from the fetched base"
+  [ "$(git -C "$PROJECT_DIR" rev-parse refs/heads/wip)" = "$tip" ] || fail "the retried spawn moved branch wip"
+  pass "a pooled branch holding a commit on no other ref is refused with a recovery command that works"
+}
+
+test_detached_slot_with_a_commit_on_no_ref_refuses_until_kept() {
+  local rec id out status tip keep
+  id='pool-detached-unique-r16'
+  rec=$(make_case detached-unique "$id")
+  read_case_record "$rec"
+  pool_commit detached-work
+  tip=$(git -C "$POOL_DIR" rev-parse HEAD)
+  keep="fm-kept-$(git -C "$POOL_DIR" rev-parse --short HEAD)"
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn reset a detached slot whose commit is on no ref"$'\n'"$out"
+  assert_contains "$out" "git -C '$POOL_DIR' branch $keep" \
+    "the refusal did not give the command that keeps the commit"$'\n'"$out"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$tip" ] || fail "the refused spawn moved the detached slot"
+
+  git -C "$POOL_DIR" branch "$keep"
+  id='pool-detached-unique-retry-r16'
+  fm_test_spawn_brief "$HOME_DIR" "$id"
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should launch once the commit is on a branch"$'\n'"$out"
+  assert_at_origin_default "the retried spawn did not start from the fetched base"
+  assert_on_a_ref "$tip" "the retried spawn orphaned the kept commit"
+  pass "a detached slot holding a commit on no ref is refused with a recovery command that works"
+}
+
+test_attached_branch_whose_commits_live_elsewhere_refreshes() {
+  local rec id out status tip kind
+  for kind in origin-branch local-branch squash-merged; do
+    id="pool-attached-elsewhere-$kind-r17"
+    rec=$(make_case "attached-elsewhere-$kind" "$id")
+    read_case_record "$rec"
+    git -C "$POOL_DIR" switch --quiet -c feat
+    pool_commit feat-work
+    tip=$(git -C "$POOL_DIR" rev-parse HEAD)
+    case $kind in
+      origin-branch) git -C "$POOL_DIR" push --quiet origin feat ;;
+      local-branch) git -C "$PROJECT_DIR" branch keep "$tip" ;;
+      squash-merged)
+        git -C "$POOL_DIR" push --quiet origin feat
+        git -C "$CASE_DIR/publisher" fetch --quiet origin
+        git -C "$CASE_DIR/publisher" merge --quiet --squash origin/feat
+        git -C "$CASE_DIR/publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm squash
+        git -C "$CASE_DIR/publisher" push --quiet origin "$DEFAULT_BRANCH"
+        ;;
+    esac
+
+    out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+    status=$?
+    expect_code 0 "$status" "spawn should reset a branch whose commit is also on another ref ($kind)"$'\n'"$out"
+    assert_at_origin_default "spawn did not start from the fetched base ($kind)"
+    assert_on_a_ref "$tip" "spawn orphaned a commit that lived on another ref ($kind)"
+  done
+  pass "a pooled branch whose commits live on another ref refreshes without a refusal"
 }
 
 test_unresolved_remote_default_refuses_pool() {
@@ -781,7 +849,9 @@ test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
-test_attached_pool_branch_with_unique_commits_refuses
+test_attached_branch_with_commits_on_no_other_ref_refuses_until_detached
+test_detached_slot_with_a_commit_on_no_ref_refuses_until_kept
+test_attached_branch_whose_commits_live_elsewhere_refreshes
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch

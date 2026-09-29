@@ -118,6 +118,48 @@ EOF
   pass "an Orca-backed fresh spawn enters the worktree Orca created for it, instead of hard-refusing on the post-launch proof"
 }
 
+test_orca_spawn_with_local_main_ahead_of_origin_refreshes() {
+  local case_dir home id=orca-ahead-a3 fb out status wt local_tip
+  case_dir="$TMP_ROOT/ahead"
+  home="$case_dir/home"
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  touch "$home/state/.last-watcher-beat"
+  printf 'codex\n' > "$home/config/crew-harness"
+  printf 'manual\n' > "$home/config/backlog-backend"
+  fm_git_init_commit "$case_dir/project"
+  fm_git_add_origin "$case_dir/project" "$case_dir/origin.git"
+  git -C "$case_dir/project" fetch --quiet origin
+  printf 'not pushed yet\n' > "$case_dir/project/local.txt"
+  git -C "$case_dir/project" add local.txt
+  git -C "$case_dir/project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm local-only
+  local_tip=$(git -C "$case_dir/project" rev-parse HEAD)
+  mkdir -p "$home/data/$id"
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+Exercise an Orca-backed spawn for $id.
+
+## Firstmate spec
+Confirm the launch starts from origin while local main carries an unpushed commit.
+EOF
+  fb=$(make_orca_fakebin "$case_dir")
+
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$case_dir/user-home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
+    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+  status=$?
+
+  expect_code 0 "$status" "an Orca spawn should launch while local main is ahead of origin"$'\n'"$out"
+  wt=$(grep '^worktree=' "$home/state/$id.meta" | cut -d= -f2-)
+  [ "$(git -C "$wt" rev-parse HEAD)" = "$(git -C "$wt" rev-parse origin/main)" ] \
+    || fail "the Orca worktree did not start from origin/main"
+  [ "$(git -C "$case_dir/project" rev-parse refs/heads/main)" = "$local_tip" ] \
+    || fail "the Orca spawn moved local main"
+  pass "an Orca spawn starts from origin while local main carries an unpushed commit"
+}
+
 test_orca_relaunch_is_refused_before_the_worktree_carveout_could_run() {
   local case_dir home proj wt id=orca-relaunch-a2 out status
   case_dir="$TMP_ROOT/relaunch"
@@ -165,6 +207,7 @@ EOF
 }
 
 test_orca_fresh_spawn_enters_the_worktree_it_created
+test_orca_spawn_with_local_main_ahead_of_origin_refreshes
 test_orca_relaunch_is_refused_before_the_worktree_carveout_could_run
 
 echo "# all fm-spawn-orca-worktree tests passed"
