@@ -66,5 +66,8 @@ expect "icacls with no output reads open" "rc=1" "$(rc_of "$T/fakebin:/usr/bin" 
 printf '#!/bin/sh\necho "$1 NT AUTHORITY\\\\SYSTEM:(F)"\nexit 5\n' > "$T/fakebin/icacls"
 expect "icacls that fails reads open" "rc=1" "$(rc_of "$T/fakebin:/usr/bin" "$P")"
 expect "a private root with icacls present is private" "rc=0" "$(rc_of "$PATH" "$P")"
+mkdir -p "$T/granted"
+MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$T/granted")" /grant '*S-1-5-32-545:(OI)(CI)R' '*S-1-3-0:(OI)(CI)(IO)F' > /dev/null
+expect "apply makes a root with its own grants private" "private $T/granted" "$(clean bash platform/windows/private-root.sh apply "$T/granted" 2>&1)"
 
 [ "$fails" -eq 0 ]

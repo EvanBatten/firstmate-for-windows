@@ -92,6 +92,13 @@ start_session s9 "$T/hook" hook; p9=$SESSION_PID w9=$SESSION_WINPID
 expect "a hook-shaped session takes the lock" "lock acquired: harness pid $p9" "$(run_lock s9 1 "CLAUDE_PID=$w9 bin/fm-lock.sh")"
 start_session s8 "$T/hook-noenv" hook
 expect "a hook-shaped session without CLAUDE_PID does not" "cannot locate harness process in ancestry" "$(run_lock s8 1)"
+expect "a hook-shaped session whose CLAUDE_PID is no Claude does not" "cannot locate harness process in ancestry" "$(run_lock s8 2 "CLAUDE_PID=$(cat /proc/$$/winpid) bin/fm-lock.sh")"
+mkdir -p "$T/direct/state"
+out=$(CLAUDE_PID=$w9 FM_HOME=$T/direct bin/fm-lock.sh 2>&1)
+case $out in
+  *"harness pid $p9"*) not_ok "a shell whose walk did not break ignores another session's CLAUDE_PID (got: $out)" ;;
+  *) ok "a shell whose walk did not break ignores another session's CLAUDE_PID" ;;
+esac
 
 start_session s1 "$H"; p1=$SESSION_PID w1=$SESSION_WINPID
 start_session s2 "$H"; p2=$SESSION_PID
