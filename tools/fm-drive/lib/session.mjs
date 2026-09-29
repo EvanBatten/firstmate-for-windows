@@ -222,6 +222,7 @@ export class Session {
     this.paneId = null;
     this.shell = 'bash';
     this.primaryPid = null;
+    this.launches = 0;
     this.lockBaseline = undefined;
     this.seeds = {};
     this.projectOrigin = null;
@@ -445,6 +446,7 @@ export class Session {
   async launch() {
     const t0 = Date.now();
     this.primaryPid = null;
+    this.launches += 1;
     this.signals.shellDead = null;
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: this.launchLine(), keys: ['enter'] });
     await this.awaitReady();
@@ -654,10 +656,12 @@ export class Session {
         this.signals.blocked = null;
       }
       // Rare, event-driven dead-primary check: unknown status plus a shell
-      // prompt. Not a 1 s pane-read loop.
+      // prompt. Not a 1 s pane-read loop. A prompt read before the latest
+      // launch is the shell that launch replaced.
       if (status === 'unknown' && this.paneId) {
+        const launches = this.launches;
         this.paneText().then((text) => {
-          if (atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
+          if (launches === this.launches && atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
         }).catch(() => {});
       }
     };
