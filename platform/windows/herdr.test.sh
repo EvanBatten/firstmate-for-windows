@@ -59,11 +59,11 @@ pane=${created#* }
 target=$S:$pane
 
 # shellcheck disable=SC2016 # Expanded by the pane's bash.
-fm_backend_herdr_send_text_line "$target" 'echo "o3probe $BASH $(umask) ${PATH%%:*}"'
-want="o3probe /usr/bin/bash 0077 $ROOT/platform/windows/bin"
+fm_backend_herdr_send_text_line "$target" 'echo "o3probe $BASH $(umask) ${PATH%%:*} conv=${MSYS2_ARG_CONV_EXCL-on}"'
+want="o3probe /usr/bin/bash 0077 $ROOT/platform/windows/bin conv=on"
 case $(wait_capture "$target" "$want") in
-  *"$want"*) ok "a task pane runs Git Bash with the overlay's umask and PATH" ;;
-  *) not_ok "a task pane runs Git Bash with the overlay's umask and PATH (want: $want, pane: $(fm_backend_herdr_capture "$target" 5 | tr '\n' '|'))" ;;
+  *"$want"*) ok "a task pane runs Git Bash with the overlay's umask and PATH and MSYS argument conversion on" ;;
+  *) not_ok "a task pane runs Git Bash with the overlay's umask and PATH and MSYS argument conversion on (want: $want, pane: $(fm_backend_herdr_capture "$target" 5 | tr '\n' '|'))" ;;
 esac
 
 mkdir -p "$T/cwd probe"
