@@ -42,8 +42,12 @@ for dir in "$@"; do
   win=$(cygpath -w -- "$dir")
   open=$(acl_outsiders "$win")
   if [ -n "$open" ] && [ "$mode" = apply ]; then
-    MSYS2_ARG_CONV_EXCL='*' icacls "$win" /inheritance:r /grant:r \
-      "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "$me:(OI)(CI)F" >/dev/null || { rc=1; continue; }
+    if ! { MSYS2_ARG_CONV_EXCL='*' icacls "$win" /reset >/dev/null \
+      && MSYS2_ARG_CONV_EXCL='*' icacls "$win" /inheritance:r /grant:r \
+        "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "$me:(OI)(CI)F" >/dev/null; }; then
+      rc=1
+      continue
+    fi
     open=$(acl_outsiders "$win")
   fi
   if [ -n "$open" ]; then
