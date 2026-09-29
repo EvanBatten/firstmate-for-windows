@@ -363,6 +363,9 @@ Once the exact pane is confirmed gone, teardown retires the task's own journal w
 Recovery is deliberately conservative and presentation-only.
 An existing journal suppresses another projected create.
 Before any recovery mutation, Firstmate holds both the task spawn lock and the named-session presentation lock.
+A spawn releases the presentation lock as soon as its task endpoint exists.
+Worktree acquisition and launch staging then run outside the lock, so another taker waits only for presentation work.
+If a spawn aborts after that point and cannot take the lock back within its five-second wait, it keeps the projection journal and skips the cleanup.
 
 A same-identity version 2 binding may replace one exact agent-free restart husk in place.
 A husk is a restored same-labeled tab with a missing pane or no registered agent, as [Restart and liveness behavior](#restart-and-liveness-behavior) describes.
