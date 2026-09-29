@@ -237,6 +237,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/control-firstmate/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/verify-firstmate/SKILL.md",
       "audience": "agent-runtime"
     },

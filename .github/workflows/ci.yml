@@ -59,6 +59,18 @@ jobs:
       - name: Prove complete regression partition
         run: bin/fm-test-run.sh --check-coverage
 
+  fm-drive-unit:
+    name: fm-drive unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run the fm-drive unit tests
+        run: node --test tools/fm-drive/test/
+
   # Two duration-balanced portable parallel shards of the Phase 2 proven-isolated
   # set only. Composition owner: bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
   tests-portable-parallel-1:

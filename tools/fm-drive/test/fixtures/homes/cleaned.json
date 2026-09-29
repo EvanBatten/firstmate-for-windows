@@ -1,0 +1,10 @@
+{
+  "dirs": ["projects/greeter/.git/refs/heads", "data/t1"],
+  "files": {
+    "state/.lock": "6060\n",
+    "data/projects.md": "# Projects\n\n- greeter [local-only] - a throwaway project\n",
+    "projects/greeter/.git/refs/heads/main": "cccccccccccccccccccccccccccccccccccccccc\n",
+    "state/t1.status": "working: implementing\ndone: landed on main\n",
+    "data/t1/report.md": ""
+  }
+}
