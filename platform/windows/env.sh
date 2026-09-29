@@ -11,8 +11,10 @@
 #     upstream's private-mode checks and `mkdir -m 700` pass. What keeps the
 #     files private is the directory ACL.
 
-case ${BASH_SOURCE[0]} in
-  */*) _fm_win_dir=${BASH_SOURCE[0]%/*} ;;
+_fm_win_dir=${BASH_SOURCE[0]}
+case $_fm_win_dir in [A-Za-z]:*) _fm_win_dir=$(cygpath -u -- "$_fm_win_dir") ;; esac
+case $_fm_win_dir in
+  */*) _fm_win_dir=${_fm_win_dir%/*} ;;
   *) _fm_win_dir=. ;;
 esac
 case $_fm_win_dir in /*) ;; *) _fm_win_dir=$PWD/$_fm_win_dir ;; esac
