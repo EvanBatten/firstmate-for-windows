@@ -183,6 +183,7 @@ So a truncated digest does neither of these:
 - They source `bin/fm-gate-refuse-lib.sh` and stay silent for a no-mistakes gate agent identified by `NO_MISTAKES_GATE` or a `.no-mistakes/repos/*.git` git-common-dir.
 - They share `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so every hook uses one primary-detection owner.
 - Both wrappers check only the primary root, not the state directory, because the session start creates `state/` and a fresh clone has none yet.
+  In place of `state/`, they require `bin/fm-session-start.sh`, so they stay silent in an ordinary project checkout that also has `AGENTS.md` and `bin/`.
 
 The Guard Predicates section of [`turnend-guard.md`](turnend-guard.md#guard-predicates) owns marker validation, plain-checkout detection, and required Firstmate-shaped paths.
 
@@ -383,6 +384,7 @@ It proves the nudge wrapper's silence for these cases:
 - Both gate signals.
 - An unmarked linked worktree.
 - A git checkout that is not a Firstmate home and has no state directory.
+- A project checkout that has `AGENTS.md` and `bin/` but no `bin/fm-session-start.sh`.
 - An already-owned lock.
 
 It also proves the nudge wrapper's exact U+2063 `FIRSTMATE_OP:`-prefixed, `session-start`-typed one-line output.
@@ -390,7 +392,7 @@ It proves that the nudge wrapper nudges a fresh clone that has no state director
 
 It separately proves the run wrapper's silence for the gate environment and an unmarked linked worktree, including the internal Pi prerequisite's explicit silent stand-down.
 It proves that the run wrapper takes the helm in a fresh clone that has no state directory.
-It also proves that the run wrapper stays silent in a git checkout that is not a Firstmate home, and creates no state directory there.
+It also proves that the run wrapper stays silent in a git checkout that is not a Firstmate home, including a project checkout that has `AGENTS.md` and `bin/`, and creates no state directory there.
 
 It proves the run wrapper's source routing end to end against a real `fm-session-start.sh`, including:
 

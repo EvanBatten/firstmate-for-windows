@@ -44,6 +44,17 @@ make_primary() {
   git init -q "$dir"
   git -C "$dir" commit -q --allow-empty -m init
   : > "$dir/AGENTS.md"
+  : > "$dir/bin/fm-session-start.sh"
+}
+
+make_plain_project() {
+  local dir=$1
+  mkdir -p "$dir/bin"
+  git init -q -b main "$dir"
+  printf '# project\n' > "$dir/AGENTS.md"
+  printf '#!/bin/sh\necho hi\n' > "$dir/bin/run"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m init
 }
 
 run_nudge() {
@@ -88,6 +99,7 @@ test_gate_common_dir_is_silent() {
   git --git-dir="$bare" worktree add --quiet -b gate-test "$root" HEAD
   mkdir -p "$root/bin" "$root/state"
   : > "$root/AGENTS.md"
+  : > "$root/bin/fm-session-start.sh"
   printf 'gate-test\n' > "$root/.fm-secondmate-home"
   expect_silent_zero "gate common-dir nudge" env FM_GATE_REFUSE_BYPASS=0 \
     FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
@@ -99,6 +111,7 @@ test_unmarked_linked_worktree_is_silent() {
   fm_git_worktree "$base" "$root" fm/sessionstart-linked
   mkdir -p "$root/bin" "$root/state"
   : > "$root/AGENTS.md"
+  : > "$root/bin/fm-session-start.sh"
   expect_silent_zero "linked worktree nudge" run_nudge "$root"
   pass "fm-sessionstart-nudge: an unmarked linked task worktree is silent"
 }
@@ -108,6 +121,7 @@ test_linked_secondmate_primary_nudges() {
   fm_git_worktree "$base" "$root" fm/sessionstart-secondmate
   mkdir -p "$root/bin" "$root/state"
   : > "$root/AGENTS.md"
+  : > "$root/bin/fm-session-start.sh"
   printf 'sessionstart-sm\n' > "$root/.fm-secondmate-home"
   out=$(run_nudge "$root") || status=$?
   expect_code 0 "$status" "linked secondmate nudge"
@@ -138,9 +152,18 @@ test_non_home_without_state_is_silent() {
   fm_git_worktree "$base" "$linked" fm/sessionstart-stateless-linked
   mkdir -p "$linked/bin"
   : > "$linked/AGENTS.md"
+  : > "$linked/bin/fm-session-start.sh"
   expect_silent_zero "stateless linked worktree nudge" run_nudge "$linked"
   assert_absent "$linked/state" "an unmarked task worktree without state/ got a state directory"
   pass "fm-sessionstart-nudge: a checkout that is not a firstmate home stays silent without state/"
+}
+
+test_plain_project_checkout_is_silent() {
+  local root="$TMP_ROOT/plain-project"
+  make_plain_project "$root"
+  expect_silent_zero "plain project nudge" run_nudge "$root"
+  assert_absent "$root/state" "a plain project checkout with AGENTS.md and bin/ got a state directory"
+  pass "fm-sessionstart-nudge: a plain project checkout with AGENTS.md and bin/ stays silent"
 }
 
 test_owned_lock_is_silent() {
@@ -239,6 +262,7 @@ make_run_primary() {
   git init -q -b main "$dir"
   git -C "$dir" commit -q --allow-empty -m init
   : > "$dir/AGENTS.md"
+  : > "$dir/bin/fm-session-start.sh"
 }
 
 run_hook() {  # <root> [args...]
@@ -1048,6 +1072,7 @@ test_run_gate_and_scope_are_silent() {
   fm_git_worktree "$base" "$linked" fm/run-linked
   mkdir -p "$linked/bin" "$linked/state"
   : > "$linked/AGENTS.md"
+  : > "$linked/bin/fm-session-start.sh"
   expect_silent_zero "linked worktree run" run_hook "$linked" --source startup
   status=0
   out=$(run_hook "$linked" --source startup --pi-prerequisite 2>&1) || status=$?
@@ -1080,9 +1105,18 @@ test_run_non_home_without_state_is_silent() {
   fm_git_worktree "$base" "$linked" fm/run-stateless-linked
   mkdir -p "$linked/bin"
   : > "$linked/AGENTS.md"
+  : > "$linked/bin/fm-session-start.sh"
   expect_silent_zero "stateless linked worktree run" run_hook "$linked" --source startup
   assert_absent "$linked/state" "an unmarked task worktree without state/ got a state directory"
   pass "run wrapper: a checkout that is not a firstmate home stays silent and untouched"
+}
+
+test_run_plain_project_checkout_is_silent() {
+  local root="$TMP_ROOT/run-plain-project"
+  make_plain_project "$root"
+  expect_silent_zero "plain project run" run_hook "$root" --source startup
+  assert_absent "$root/state" "a plain project checkout with AGENTS.md and bin/ got a state directory"
+  pass "run wrapper: a plain project checkout with AGENTS.md and bin/ stays silent and untouched"
 }
 
 test_run_reports_a_failed_session_start_as_digest_text() {
@@ -1103,6 +1137,7 @@ test_unmarked_linked_worktree_is_silent
 test_linked_secondmate_primary_nudges
 test_fresh_clone_without_state_nudges
 test_non_home_without_state_is_silent
+test_plain_project_checkout_is_silent
 test_owned_lock_is_silent
 test_namespace_pid1_lock_holder_is_silent
 test_opencode_plugin_delivers_exact_nudge_once
@@ -1118,6 +1153,7 @@ test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
 test_run_fresh_clone_without_state_takes_the_helm
 test_run_non_home_without_state_is_silent
+test_run_plain_project_checkout_is_silent
 test_run_reports_a_failed_session_start_as_digest_text
 test_pi_startup_classifies_cli_continuations
 test_pi_sessionstart_generation_prerequisite
