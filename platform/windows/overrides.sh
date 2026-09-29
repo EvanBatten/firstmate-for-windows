@@ -9,6 +9,9 @@
 # fixture that puts its own fake `ps` first keeps the upstream bodies, which
 # read that fake exactly as they do on Linux.
 
+# shellcheck source=platform/windows/herdr.sh
+! declare -F fm_backend_herdr_cli >/dev/null || . "${FM_PLATFORM_OVERLAY%/*}/herdr.sh"
+
 IFS=: read -r -a _fm_win_dirs <<< "$PATH"
 for _fm_win_d in "${_fm_win_dirs[@]}"; do
   [ -n "$_fm_win_d" ] && [ -x "$_fm_win_d/ps" ] && break
