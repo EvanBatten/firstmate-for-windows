@@ -19,6 +19,13 @@ case $_fm_win_dir in
 esac
 case $_fm_win_dir in /*) ;; *) _fm_win_dir=$PWD/$_fm_win_dir ;; esac
 
+# A native parent such as claude.exe hands CLAUDE_CONFIG_DIR down in drive
+# spelling, which upstream refuses as a relative path. A native child gets the
+# POSIX spelling converted back.
+case ${CLAUDE_CONFIG_DIR:-} in
+  [A-Za-z]:*) CLAUDE_CONFIG_DIR=$(cygpath -u -- "$CLAUDE_CONFIG_DIR") && export CLAUDE_CONFIG_DIR ;;
+esac
+
 _fm_win_path=":$PATH:"
 _fm_win_path=${_fm_win_path//":$_fm_win_dir/bin:"/:}
 _fm_win_path=${_fm_win_path#:}
