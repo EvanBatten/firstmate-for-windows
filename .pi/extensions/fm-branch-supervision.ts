@@ -2150,6 +2150,23 @@ ${context.command}
     return stockOutcomesPreviewLines ?? undefined;
   };
 
+  // Pi's stock call row for a tool without a call renderer. Its shape moves
+  // between releases (0.99.0 added the arguments), so borrow Pi's own fallback
+  // rather than copy it.
+  const stockCallFallback = (
+    ToolExecutionComponent.prototype as unknown as {
+      createCallFallback?: (this: { toolName: string; args: unknown; expanded: boolean }) => Text;
+    }
+  ).createCallFallback;
+  const renderStockToolCall = (
+    toolName: string,
+    theme: Parameters<NonNullable<ToolDefinition["renderCall"]>>[1],
+    context: Parameters<NonNullable<ToolDefinition["renderCall"]>>[2],
+  ): Text =>
+    stockCallFallback
+      ? stockCallFallback.call({ toolName, args: context.args, expanded: context.expanded })
+      : new Text(theme.fg("toolTitle", theme.bold(toolName)), 0, 0);
+
   type OutcomesToolShellState = {
     shell?: Box;
     call?: Text;
@@ -2188,7 +2205,7 @@ ${context.command}
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_outcomes")), 0, 0);
+      shellState.call = renderStockToolCall("fm_branch_outcomes", theme, context);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
@@ -2250,7 +2267,7 @@ ${context.command}
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_processed")), 0, 0);
+      shellState.call = renderStockToolCall("fm_branch_processed", theme, context);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
