@@ -5,16 +5,12 @@
 # What it sets up, for this shell and every MSYS child it starts:
 #   - bin/ first on PATH, so upstream's `ps` and `jq` calls reach the shims.
 #   - MSYS=winsymlinks:nativestrict, so `ln -s` makes a real symlink, not a copy.
-#   - Private state with real modes. Git Bash mounts every drive noacl, so
-#     `mkdir -m 700` exits 1 and leaves 755. A user mount with acl needs no
-#     admin, but it is shared by every Git Bash of this Windows user until the
-#     last one exits, and it redirects cygpath for every path beneath it. So
-#     only directories firstmate owns are mounted: FM_HOME and a dedicated temp
-#     directory, each at /tmp/fm-acl/<its drive spelling>, and FM_HOME and
-#     TMPDIR are exported in that spelling. A mount only takes effect outside
-#     the /c drive prefix, and only where its parent directory really exists,
-#     which /tmp provides. The /tmp mount itself is a system entry a user
-#     cannot replace, so any other literal /tmp path stays noacl.
+#   - umask 077, and BASH_ENV so every bash below a native program such as
+#     claude.exe gets it too. Git Bash mounts drives noacl: chmod changes
+#     nothing, and stat reports the mode the reading process's umask implies,
+#     not a mode stored on the file. At 077 every file reads as 600 or 700, so
+#     upstream's private-mode checks and `mkdir -m 700` pass. What keeps the
+#     files private is the directory ACL, which private-root.sh checks.
 #   - FM_PLATFORM_OVERLAY, which the one-line hooks in upstream libraries source.
 
 case ${BASH_SOURCE[0]} in
@@ -34,31 +30,13 @@ for _fm_win_word in ${MSYS:-}; do
 done
 MSYS="winsymlinks:nativestrict$_fm_win_msys"
 
-# Set _fm_win_acl to the acl spelling of Windows path $1 (C:/x/y), mounting it
-# unless /proc/mounts already has it.
-_fm_win_acl_mount() {
-  local win=$1 drive=${1%%:*} line
-  _fm_win_acl=/tmp/fm-acl/${drive,,}${win#?:}
-  while IFS= read -r line; do
-    case $line in "$win $_fm_win_acl "*) return 0 ;; esac
-  done < /proc/mounts
-  mkdir -p "$win" "$_fm_win_acl" 2>/dev/null
-  mount -o binary,posix=0,acl "$win" "$_fm_win_acl" 2>/dev/null
-}
-
-_fm_win_home='' _fm_win_tmp=''
-case ${FM_HOME:-} in /tmp/fm-acl/*) ;; *) _fm_win_home=${FM_HOME:-$_fm_win_dir/../..} ;; esac
-case ${TMPDIR:-} in /tmp/fm-acl/*) ;; *) _fm_win_tmp=/tmp/fm-platform-windows ;; esac
-if [ -n "$_fm_win_home$_fm_win_tmp" ]; then
-  {
-    [ -z "$_fm_win_home" ] || read -r _fm_win_home
-    [ -z "$_fm_win_tmp" ] || read -r _fm_win_tmp
-  } < <(cygpath -m ${_fm_win_home:+"$_fm_win_home"} ${_fm_win_tmp:+"$_fm_win_tmp"})
-  if [ -n "$_fm_win_home" ]; then _fm_win_acl_mount "$_fm_win_home"; FM_HOME=$_fm_win_acl; fi
-  if [ -n "$_fm_win_tmp" ]; then _fm_win_acl_mount "$_fm_win_tmp"; TMPDIR=$_fm_win_acl; fi
+umask 077
+# A native parent hands BASH_ENV back in drive spelling, so compare files.
+if [ -z "${BASH_ENV:-}" ] || [ ! "$BASH_ENV" -ef "$_fm_win_dir/bash-env.sh" ]; then
+  FM_WIN_PRIOR_BASH_ENV=${BASH_ENV:-}
 fi
+BASH_ENV=$_fm_win_dir/bash-env.sh
 
 FM_PLATFORM_OVERLAY=$_fm_win_dir/overrides.sh
-export PATH MSYS FM_HOME TMPDIR FM_PLATFORM_OVERLAY
-unset -f _fm_win_acl_mount
-unset _fm_win_dir _fm_win_path _fm_win_msys _fm_win_word _fm_win_home _fm_win_tmp _fm_win_acl
+export PATH MSYS FM_PLATFORM_OVERLAY BASH_ENV FM_WIN_PRIOR_BASH_ENV
+unset _fm_win_dir _fm_win_path _fm_win_msys _fm_win_word
