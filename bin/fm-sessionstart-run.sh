@@ -86,8 +86,10 @@ stand_down() {
 # agent and an unmarked task worktree can never run a session start for a home
 # they do not own. Pi's preflight-only status preserves that intentional silence
 # without mistaking it for a failed eligible attempt that needs the manual nudge.
+# The root check alone, because a fresh clone has no state/ until the session
+# start below creates it.
 fm_is_gate_agent "$FM_ROOT" && stand_down
-fm_primary_scope_matches "$FM_ROOT" "$STATE" || stand_down
+fm_primary_root_matches "$FM_ROOT" || stand_down
 
 session_start_completed() {
   local lock_pid completion_pid
