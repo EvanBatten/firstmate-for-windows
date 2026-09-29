@@ -14,18 +14,13 @@
     },
     {
       "say": "$relaunch",
-      "until": "tasks.count>=1 && worker.alive",
+      "until": "tasks.count>=1 && worker.alive && lock.rotated",
       "budgetSec": 90
     },
     {
       "say": "ahoy, I'm back. carry on where we left off: when the greeter worker is done, verify its result and land it on main, you have my approval, then clean up and tell me.",
-      "until": "lock.rotated",
-      "budgetSec": 60
-    },
-    {
-      "say": "",
       "until": "git.ahead:greeter>=1",
-      "budgetSec": 420
+      "budgetSec": 480
     },
     {
       "say": "",

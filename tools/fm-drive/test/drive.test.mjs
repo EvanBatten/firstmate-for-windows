@@ -138,7 +138,7 @@ describe('trace refusal', () => {
   test('the shipped traces validate through check', () => {
     const shipped = readdirSync(join(HERE, '..', 'traces')).sort();
     assert.deepEqual(shipped, ['register.json', 'restart-primary.json', 'scout-report.json']);
-    const steps = { register: 1, 'restart-primary': 6, 'scout-report': 6 };
+    const steps = { register: 1, 'restart-primary': 5, 'scout-report': 6 };
     for (const [name, count] of Object.entries(steps)) {
       const r = runDrive(['check', join(HERE, '..', 'traces', `${name}.json`)], process.env);
       assert.equal(r.status, 0, r.stderr);
@@ -341,8 +341,7 @@ describe('fake-herdr end to end', () => {
       steps: [
         { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
         { say: 'now dispatch a worker', until: 'tasks.count>=1 && status.verb:working', budgetSec: 10 },
-        { say: '$relaunch', until: 'tasks.count>=1 && worker.alive', budgetSec: 10 },
-        { say: "I'm back", until: 'lock.rotated', budgetSec: 10 },
+        { say: '$relaunch', until: 'tasks.count>=1 && worker.alive && lock.rotated', budgetSec: 10 },
         { say: 'land it', until: 'status.verb:done', budgetSec: 10 },
         { say: 'clean up', until: 'home.clean && tabs.clean', budgetSec: 10 },
       ],
@@ -357,7 +356,7 @@ describe('fake-herdr end to end', () => {
     assert.equal(typeof j.operableMs, 'number');
     assert.equal(typeof j.predicateMs, 'number');
     assert.equal(j.overhead.operableMs, j.operableMs);
-    assert.equal(j.steps.length, 6);
+    assert.equal(j.steps.length, 5);
     for (const [i, s] of j.steps.entries()) {
       assert.equal(s.until, trace.steps[i].until);
       assert.equal(typeof s.ms, 'number');
@@ -538,7 +537,7 @@ describe('fake-herdr end to end', () => {
     assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     const j = r.json;
     assert.equal(j.pass, true);
-    assert.equal(j.steps.length, 6);
+    assert.equal(j.steps.length, 5);
     assert.ok(j.steps.every((s) => s.ok), JSON.stringify(j.steps));
     assert.equal(j.overhead.gitSpawns, 1, 'git.ahead cost exactly one git process');
     // Measured fake restart-primary wall: 49206 ms on Windows vs ~1734 ms on Linux.

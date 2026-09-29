@@ -1,7 +1,9 @@
 {
   "add my project from": [
     { "cloneFromSay": "projects/greeter" },
-    { "path": "data/projects.md", "content": "# Projects\n\n- greeter [local-only] - a throwaway project\n" },
+    { "path": "data/projects.md", "content": "# Projects\n\n- greeter [local-only] - a throwaway project\n" }
+  ],
+  "ship one change": [
     { "delayMs": 300 },
     { "path": "state/t1.meta", "content": "kind=ship\nproject=greeter\nherdr_pane_id=pane-w1\n" },
     { "path": "state/t1.status", "content": "working: building greet.sh\n" },

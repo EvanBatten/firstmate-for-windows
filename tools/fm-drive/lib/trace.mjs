@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { parseUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
 
 export class TraceError extends Error {
   constructor(message) {
@@ -12,14 +13,39 @@ export class TraceError extends Error {
 export const RELAUNCH = '$relaunch';
 export const INTERPOLATIONS = ['projectOrigin', 'home'];
 
-const STEERING = [
+const NORMALIZED_STEERING = [
   { pattern: /\bbin\//, what: 'a bin/ path' },
-  { pattern: /\bfm-[A-Za-z0-9_-]+\.sh\b/, what: 'a firstmate script' },
-  { pattern: /\btasks-axi\b/, what: 'tasks-axi' },
-  { pattern: /session[ -]start/i, what: 'session start' },
+  { pattern: /\bstate\//, what: 'a state/ path' },
+  { pattern: /\bfm-[a-z0-9]/, what: 'a firstmate script' },
+  { pattern: /\btasks-?axi\b/, what: 'tasks-axi' },
+  { pattern: /\bsession-?start/, what: 'session start' },
 ];
 
-export function loadTrace(filePath) {
+export function normalizeSay(say) {
+  return say.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/\\/g, '/').replace(/[_\s]+/g, '-');
+}
+
+export function agentOnlySkills(root) {
+  const dir = join(root, '.agents', 'skills');
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  return names.filter((name) => {
+    let text;
+    try { text = readFileSync(join(dir, name, 'SKILL.md'), 'utf8'); } catch { return false; }
+    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+    return Boolean(front && /^user-invocable:\s*false\s*$/m.test(front[1]));
+  }).sort();
+}
+
+function steeringIn(say, agentSkills) {
+  const said = normalizeSay(say);
+  const hit = NORMALIZED_STEERING.find(({ pattern }) => pattern.test(said));
+  if (hit) return hit.what;
+  const skill = agentSkills.find((name) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(said));
+  return skill ? `the agent-only skill ${skill}` : null;
+}
+
+export function loadTrace(filePath, options) {
   let text;
   try {
     text = readFileSync(filePath, 'utf8');
@@ -32,10 +58,10 @@ export function loadTrace(filePath) {
   } catch (err) {
     throw new TraceError(`trace ${filePath} is not JSON: ${err.message}`);
   }
-  return validateTrace(raw);
+  return validateTrace(raw, options);
 }
 
-export function validateTrace(raw) {
+export function validateTrace(raw, { agentSkills = [] } = {}) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new TraceError('trace must be a JSON object');
   }
@@ -65,9 +91,9 @@ export function validateTrace(raw) {
     if (step.say.startsWith('$') && step.say !== RELAUNCH) {
       throw new TraceError(`${at}.say: unknown reserved verb ${JSON.stringify(step.say)}; only ${RELAUNCH} is defined`);
     }
-    const steer = STEERING.find(({ pattern }) => pattern.test(step.say));
+    const steer = steeringIn(step.say, agentSkills);
     if (steer) {
-      throw new TraceError(`${at}.say names ${steer.what}; that steers the primary with internals, so the run would prove obedience rather than the product`);
+      throw new TraceError(`${at}.say names ${steer}; that steers the primary with internals, so the run would prove obedience rather than the product`);
     }
     for (const m of step.say.matchAll(/\{\{\s*([^}]*?)\s*\}\}/g)) {
       if (!INTERPOLATIONS.includes(m[1])) {
@@ -101,6 +127,15 @@ export function validateTrace(raw) {
     throw new TraceError(`lock.rotated needs a ${RELAUNCH} step before it; nothing rotates the lock otherwise`);
   }
   return { feature: raw.feature, ...(project ? { project } : {}), steps };
+}
+
+export function refuseVacuousOnFreshHome(trace, home) {
+  const snap = snapshotHome(home);
+  snap.herdr = { tabLabels: [], panes: {} };
+  const ctx = { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() };
+  if (trace.steps.every((s) => evaluateUntil(s.parsed, snap, ctx).ok)) {
+    throw new TraceError(`every until already holds on a fresh clone of the home (${trace.steps.map((s) => s.until).join('; ')}), so the trace would pass with firstmate doing nothing`);
+  }
 }
 
 export function interpolate(trace, vars) {

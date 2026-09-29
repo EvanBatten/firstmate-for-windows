@@ -118,6 +118,27 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
   });
 }
 
+export async function holdsNow({ home, parsed, ctx, deps, onSnapshot }) {
+  const snap = snapshotHome(home);
+  snap.gitAhead = deps.gitAhead;
+  onSnapshot?.(snap);
+  const fetched = new Set();
+  for (;;) {
+    const r = evaluateUntil(parsed, snap, ctx);
+    const fact = r.needs === 'git' ? `git:${r.atom.args.name}` : r.needs;
+    if (r.ok || !r.needs || fetched.has(fact)) return r;
+    fetched.add(fact);
+    if (r.needs === 'git') {
+      const name = r.atom.args.name;
+      const sha = snap.projects[name]?.mainSha;
+      deps.gitAhead[name] = { sha, count: await gitAheadCount(home, name, deps.seeds?.[name], sha, deps.counters) };
+    } else {
+      snap.herdr = snap.herdr ?? {};
+      await deps.fetchHerdr(r.needs, snap, recordedPaneIds(snap));
+    }
+  }
+}
+
 // `git rev-list --count <seed>..<sha>` in the project clone inside the home;
 // one spawn per observed sha change, never per tick. Without a seed the count
 // is 1 when main moved at all.

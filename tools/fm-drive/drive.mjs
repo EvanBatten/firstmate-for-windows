@@ -2,13 +2,13 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadTrace, interpolate, TraceError, RELAUNCH } from './lib/trace.mjs';
-import { Session } from './lib/session.mjs';
-import { waitUntil } from './lib/wait.mjs';
+import { loadTrace, interpolate, agentOnlySkills, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
+import { Session, driveRoot } from './lib/session.mjs';
+import { waitUntil, holdsNow } from './lib/wait.mjs';
 import { HerdrError } from './lib/herdr.mjs';
 
 const T0 = Date.now();
-const CAPTAIN_PATH = { hooks: 'repo', captainMd: 'untouched' };
+const CAPTAIN_PATH = { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched' };
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {
@@ -20,26 +20,39 @@ function emit(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
+function refuse(err) {
+  process.stderr.write(`fm-drive: trace rejected: ${err.message}\n`);
+  emit({ feature: null, pass: false, rejected: err.message });
+  return 2;
+}
+
 async function main(argv) {
   const [cmd, file] = argv;
   if (!cmd || !file || !['run', 'check'].includes(cmd)) usage(2);
 
   let trace;
   try {
-    trace = loadTrace(file);
+    trace = loadTrace(file, { agentSkills: agentOnlySkills(driveRoot(process.env)) });
   } catch (err) {
-    if (err instanceof TraceError) {
-      process.stderr.write(`fm-drive: trace rejected: ${err.message}\n`);
-      emit({ feature: null, pass: false, rejected: err.message });
-      return 2;
-    }
+    if (err instanceof TraceError) return refuse(err);
     throw err;
   }
-  if (cmd === 'check') {
-    emit({ feature: trace.feature, ok: true, steps: trace.steps.map((s) => ({ say: s.say, until: s.until, budgetSec: s.budgetSec ?? null })) });
-    return 0;
+  return cmd === 'check' ? check(trace) : run(trace);
+}
+
+async function check(trace) {
+  const session = new Session({ trace, env: process.env, log });
+  try {
+    await session.cloneFresh();
+    refuseVacuousOnFreshHome(trace, session.home);
+  } catch (err) {
+    if (err instanceof TraceError) return refuse(err);
+    throw err;
+  } finally {
+    session.removeScratch();
   }
-  return run(trace);
+  emit({ feature: trace.feature, ok: true, steps: trace.steps.map((s) => ({ say: s.say, until: s.until, budgetSec: s.budgetSec ?? null })) });
+  return 0;
 }
 
 async function run(trace) {
@@ -61,7 +74,7 @@ async function run(trace) {
   let exitCode = 1;
   let closing = null;
   const finish = async () => {
-    if (!closing) closing = session.close().catch((err) => { log(`cleanup problem: ${err.message}`); return 0; });
+    if (!closing) closing = session.close({ keepEvidence: !result.rejected }).catch((err) => { log(`cleanup problem: ${err.message}`); return 0; });
     return closing;
   };
   const onSignal = async (sig) => {
@@ -75,6 +88,13 @@ async function run(trace) {
 
   try {
     const setupStart = Date.now();
+    await session.prepare();
+    refuseVacuousOnFreshHome(trace, session.home);
+    result.fidelity = await session.fidelity();
+    const broken = Object.entries(CAPTAIN_PATH).filter(([field, want]) => result.fidelity[field] !== want);
+    if (broken.length) {
+      throw new Error(`the prepared home is not the captain path: ${broken.map(([field]) => `fidelity.${field} is ${result.fidelity[field]}`).join(', ')}`);
+    }
     await session.open();
     result.overhead.setupMs = Date.now() - setupStart;
     const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home };
@@ -82,11 +102,6 @@ async function run(trace) {
 
     result.readyMs = await session.launch();
     log(`primary ready in ${result.readyMs} ms (pid ${session.primaryPid}, lock ${session.lockAtReady})`);
-    result.fidelity = await session.fidelity();
-    const broken = Object.entries(CAPTAIN_PATH).filter(([field, want]) => result.fidelity[field] !== want);
-    if (broken.length) {
-      throw new Error(`the launched home is not the captain path: ${broken.map(([field]) => `fidelity.${field} is ${result.fidelity[field]}`).join(', ')}`);
-    }
 
     const gitAhead = {};
     const deps = {
@@ -97,26 +112,42 @@ async function run(trace) {
       seeds: session.seeds,
       counters: session.counters,
     };
+    const onSnapshot = (snap) => session.noteTaskIds(snap);
+    const ctxNow = () => ({ lockBaseline: session.lockBaseline, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
+    const short = (text) => JSON.stringify(text.length > 60 ? `${text.slice(0, 57)}...` : text);
 
     let allOk = true;
     let firstSay = true;
     for (const [i, step] of steps.entries()) {
       const rec = { say: step.say, until: step.until, ms: 0, ok: false, reason: '' };
       result.steps.push(rec);
+      const heldBefore = async () => {
+        const ctx = step.say === RELAUNCH ? { ...ctxNow(), lockBaseline: session.lockText() } : ctxNow();
+        const pre = await holdsNow({ home: session.home, parsed: step.parsed, ctx, deps, onSnapshot });
+        return pre.ok ? `vacuous: ${step.until} already held before its say, so this step proves nothing` : null;
+      };
+      let withheld = null;
       if (step.say === RELAUNCH) {
-        rec.relaunchMs = await session.relaunch();
-        log(`step ${i + 1}: relaunched in ${rec.relaunchMs} ms; waiting for ${step.until}`);
+        withheld = await heldBefore();
+        if (!withheld) {
+          rec.relaunchMs = await session.relaunch();
+          log(`step ${i + 1}: relaunched in ${rec.relaunchMs} ms; waiting for ${step.until}`);
+        }
       } else if (step.say !== '') {
         if (firstSay) {
-          const op = await session.sayWhenOperable(step.say);
+          const op = await session.sayWhenOperable(step.say, heldBefore);
+          withheld = op.withheld;
           rec.sayMs = op.sayMs;
           result.operableMs = op.operableMs;
           result.readyMs += op.operableMs;
           firstSay = false;
-          log(`home operable in ${op.operableMs} ms; said ${JSON.stringify(step.say.length > 60 ? `${step.say.slice(0, 57)}...` : step.say)}; waiting for ${step.until}`);
+          if (!withheld) log(`home operable in ${op.operableMs} ms; said ${short(step.say)}; waiting for ${step.until}`);
         } else {
-          rec.sayMs = await session.say(step.say);
-          log(`step ${i + 1}: said ${JSON.stringify(step.say.length > 60 ? `${step.say.slice(0, 57)}...` : step.say)}; waiting for ${step.until}`);
+          withheld = await heldBefore();
+          if (!withheld) {
+            rec.sayMs = await session.say(step.say);
+            log(`step ${i + 1}: said ${short(step.say)}; waiting for ${step.until}`);
+          }
         }
       } else {
         if (firstSay && result.operableMs == null) {
@@ -127,9 +158,16 @@ async function run(trace) {
         }
         log(`step ${i + 1}: waiting for ${step.until}`);
       }
+      if (withheld) {
+        rec.vacuous = true;
+        rec.reason = withheld;
+        allOk = false;
+        log(`step ${i + 1}: FAILED (${withheld})`);
+        await session.snapshotAll(`step${i + 1}-vacuous`);
+        break;
+      }
       const budgetMs = step.budgetSec ? Math.round(step.budgetSec * 1000) : defaultBudgetMs;
-      const ctx = { lockBaseline: session.lockBaseline, seeds: session.seeds, seenTaskIds: session.seenTaskIds };
-      const r = await waitUntil({ home: session.home, parsed: step.parsed, ctx, budgetMs, deps, onSnapshot: (snap) => session.noteTaskIds(snap) });
+      const r = await waitUntil({ home: session.home, parsed: step.parsed, ctx: ctxNow(), budgetMs, deps, onSnapshot });
       rec.ms = r.ms;
       rec.ok = r.ok;
       rec.reason = r.reason;
@@ -146,9 +184,14 @@ async function run(trace) {
     result.pass = allOk && result.steps.length === steps.length && result.steps.at(-1).ok;
     exitCode = result.pass ? 0 : 1;
   } catch (err) {
-    result.error = err.message;
+    if (err instanceof TraceError) {
+      result.rejected = err.message;
+      process.stderr.write(`fm-drive: trace rejected: ${err.message}\n`);
+    } else {
+      result.error = err.message;
+      log(`run failed: ${err.message}`);
+    }
     exitCode = err instanceof HerdrError || err instanceof TraceError ? err.exitCode : 3;
-    log(`run failed: ${err.message}`);
   } finally {
     const closeStart = Date.now();
     await finish();
@@ -168,7 +211,9 @@ async function run(trace) {
       closeMs: result.overhead.closeMs,
     };
     result.wallMs = Date.now() - T0;
-    try { writeFileSync(join(session.evidenceDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch {}
+    if (!result.rejected) {
+      try { writeFileSync(join(session.evidenceDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch {}
+    }
     emit(result);
   }
   return exitCode;

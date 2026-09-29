@@ -77,6 +77,33 @@ export function prepareClaudeConfig(config, home, env = process.env) {
   return config;
 }
 
+const DRIVER_CLAUDE_JSON_KEYS = ['hasCompletedOnboarding', 'bypassPermissionsModeAccepted', 'projects'];
+const DRIVER_SETTINGS = { theme: null, env: ['PATH', 'FM_PANE_PATH'] };
+
+export function measureClaudeConfig(config) {
+  const extra = [];
+  for (const name of readdirSync(config).sort()) {
+    if (isCredentialFileName(name)) continue;
+    if (name === '.claude.json') {
+      const json = readJsonQuiet(join(config, name)) ?? {};
+      for (const key of Object.keys(json)) {
+        if (!isAuthStateKey(key) && !DRIVER_CLAUDE_JSON_KEYS.includes(key)) extra.push(`${name}:${key}`);
+      }
+    } else if (name === 'settings.json') {
+      const json = readJsonQuiet(join(config, name)) ?? {};
+      for (const [key, value] of Object.entries(json)) {
+        if (!(key in DRIVER_SETTINGS)) extra.push(`${name}:${key}`);
+        else if (DRIVER_SETTINGS[key]) {
+          for (const sub of Object.keys(value ?? {})) if (!DRIVER_SETTINGS[key].includes(sub)) extra.push(`${name}:${key}.${sub}`);
+        }
+      }
+    } else {
+      extra.push(name);
+    }
+  }
+  return extra.length ? `carries ${extra.join(', ')}` : 'clean';
+}
+
 function userHome(env) {
   if (process.platform === 'win32') return env.USERPROFILE || env.HOME || homedir();
   return env.HOME || env.USERPROFILE || homedir();
@@ -170,6 +197,7 @@ export function archiveClaudeConfig(src, dest) {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROCESS_POLL_EVERY_N_TICKS = 3;
 export const DEFAULT_ROOT = resolve(HERE, '..', '..', '..');
+export const driveRoot = (env) => env.FM_DRIVE_ROOT || DEFAULT_ROOT;
 
 export class Session {
   constructor({ trace, env = process.env, log = () => {} }) {
@@ -186,7 +214,7 @@ export class Session {
     if (!this.env.CLAUDE_CODE_OAUTH_TOKEN && this.env.CLAUDE_CODE_OATH_TOKEN) {
       this.env = { ...this.env, CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OATH_TOKEN };
     }
-    this.root = env.FM_DRIVE_ROOT || DEFAULT_ROOT;
+    this.root = driveRoot(env);
     this.scratch = null;
     this.home = null;
     this.herdr = null;
@@ -210,15 +238,22 @@ export class Session {
     this.evidenceDir = env.FM_DRIVE_EVIDENCE || join(tmpdir(), 'fm-drive-artifacts', `${trace.feature}-${stamp}`);
   }
 
-  async open() {
-    mkdirSync(this.evidenceDir, { recursive: true });
+  async cloneFresh() {
     this.scratch = mkdtempSync(join(tmpdir(), `fm-drive-${this.trace.feature}-`));
     this.home = join(this.scratch, 'firstmate');
     await this.cloneHome();
+  }
+
+  async prepare() {
+    this.evidenceCreated = mkdirSync(this.evidenceDir, { recursive: true }) !== undefined;
+    await this.cloneFresh();
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
     this.claudeConfigDir = prepareClaudeConfig(join(this.scratch, 'claude-config'), this.home, this.env);
+  }
+
+  async open() {
     this.herdr = await Herdr.attach(this.env, { log: this.log });
     try {
       const list = await this.herdr.call('workspace.list');
@@ -365,7 +400,7 @@ export class Session {
     try { settings = readFileSync(join(this.home, '.claude', 'settings.json')); } catch {}
     const same = committed === null ? settings === null : settings !== null && committed.equals(settings);
     return {
-      claudeConfig: 'clean',
+      claudeConfig: measureClaudeConfig(this.claudeConfigDir),
       hooks: same ? 'repo' : 'modified',
       captainMd: existsSync(join(this.home, 'data', 'captain.md')) ? 'present' : 'untouched',
       model: this.model,
@@ -514,23 +549,26 @@ export class Session {
   // stood down and the first say is what starts session-start; send it and
   // keep waiting for the lock. If the pane already shows fm-session-start
   // (including a persistent-cd denial), leave it alone and wait.
-  async sayWhenOperable(text) {
+  async sayWhenOperable(text, withholdReason = async () => null) {
     const t0 = Date.now();
     const deadline = t0 + this.operableBudgetMs;
     let sayMs = 0;
     let said = false;
+    let withheld = null;
     const send = async () => {
       if (said || text === '') return;
-      sayMs = await this.say(text);
       said = true;
+      withheld = await withholdReason();
+      if (!withheld) sayMs = await this.say(text);
     };
+    const done = () => ({ sayMs, withheld, operableMs: Math.max(0, Date.now() - t0 - sayMs) });
 
     while (Date.now() < deadline) {
       const pane = await this.paneText().catch(() => '');
       if (await this.answerDialog(pane)) { await sleep(400); continue; }
       if (this.homeOperable()) {
         if (!said) await send();
-        return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
+        return done();
       }
       if (atShellPrompt(pane) && (this.primaryPid || /claude --dangerously/.test(pane))) {
         this.snapshot('exited-before-operable', pane);
@@ -541,11 +579,12 @@ export class Session {
         continue;
       }
       await send();
+      if (withheld) return done();
       await sleep(1000);
     }
     if (this.homeOperable()) {
       if (!said) await send();
-      return { sayMs, operableMs: Math.max(0, Date.now() - t0 - sayMs) };
+      return done();
     }
     const pane = await this.paneText().catch(() => '');
     this.snapshot('not-operable', pane);
@@ -714,13 +753,18 @@ export class Session {
     }
   }
 
-  async close() {
+  async close({ keepEvidence = true } = {}) {
     if (this.closed) return 0;
     this.closed = true;
     const t0 = Date.now();
     if (this.statusPoll) clearInterval(this.statusPoll);
     if (this.dialogPoll) clearInterval(this.dialogPoll);
-    if (!this.herdr) { this.archive(); this.removeScratch(); return Date.now() - t0; }
+    if (!this.herdr) {
+      if (keepEvidence) this.archive();
+      else if (this.evidenceCreated) rmSync(this.evidenceDir, { recursive: true, force: true });
+      this.removeScratch();
+      return Date.now() - t0;
+    }
     const keep = this.env.FM_DRIVE_KEEP === '1';
     try { this.snapshot('final', await this.paneText()); } catch {}
     if (!keep) {
