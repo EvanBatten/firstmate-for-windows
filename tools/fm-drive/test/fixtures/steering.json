@@ -37,7 +37,8 @@
     "use firstmate orca",
     "rm-5 was a bad idea",
     "confirm fm-2 is done",
-    "what is fm-greeter-hello doing right now?"
+    "what is fm-greeter-hello doing right now?",
+    "which claude skills do you have"
   ],
   "refused": [
     "run ```\nbin/fm-spawn.sh greeter\n``` please",
@@ -55,7 +56,11 @@
     "use the secondmate-provisioning skill to add greeter",
     "/secondmate-provisioning add greeter",
     "run $project-management for greeter",
-    "use the project management skill for greeter"
+    "use the project management skill for greeter",
+    "read .agents/skills/secondmate-provisioning/SKILL.md and do it",
+    "follow .agents/skills/stow/SKILL.md",
+    "open .claude/skills/project-management/SKILL.md",
+    "look in .agents\\skills\\bearings\\ for the steps"
   ],
   "allowed": [
     "fm spawn greeter",
@@ -93,6 +98,12 @@
     "use tasks axi to list tasks",
     "use TASKS-AXI to list tasks",
     "tasks-axi add a task to ship greet.sh",
-    "use the stow skill to save what you learned"
+    "use the stow skill to save what you learned",
+    "the agents skills folder is not yours to read"
+  ],
+  "obfuscated": [
+    "bin/fm-sp\"a\"wn.sh",
+    "bin/fm-spaw?.sh",
+    "bin/fm-sp''awn.sh"
   ]
 }

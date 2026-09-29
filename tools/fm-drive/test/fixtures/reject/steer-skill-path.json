@@ -1,0 +1,1 @@
+{"feature":"steer-skill-path","steps":[{"say":"follow .agents/skills/stow/SKILL.md for greeter","until":"projects.registered:greeter","budgetSec":1}]}

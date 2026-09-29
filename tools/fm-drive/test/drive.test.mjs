@@ -84,7 +84,7 @@ describe('trace refusal', () => {
   test('check refuses a say that steers the primary with internals, before any herdr call', () => {
     const steering = rejects.filter((f) => f.startsWith('steer-')).sort();
     assert.deepEqual(steering, [
-      'steer-agent-skill.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json', 'steer-fm-brief.json',
+      'steer-agent-skill.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json', 'steer-fm-brief.json', 'steer-skill-path.json',
     ]);
     for (const f of steering) {
       const { dir, env } = fakeEnv();
@@ -129,7 +129,7 @@ describe('trace refusal', () => {
     assert.deepEqual(refused, []);
   });
 
-  test('a path to a script in bin/ or an agent-only skill invoked as a skill is refused however it is spelled', () => {
+  test('a path to a script in bin/ or a skill, or an agent-only skill invoked as a skill, is refused in any folded spelling', () => {
     const allowed = STEERING.refused.filter((say) => !/steers the primary/.test(refusal(say) ?? ''));
     assert.deepEqual(allowed, []);
   });
@@ -139,21 +139,29 @@ describe('trace refusal', () => {
     assert.deepEqual(refused, []);
   });
 
+  test('the skill doc lists the shell-obfuscated script names it leaves to the reviewer instead of claiming every spelling', () => {
+    const doc = readFileSync(join(REPO, '.agents', 'skills', 'control-firstmate', 'SKILL.md'), 'utf8');
+    assert.deepEqual(STEERING.obfuscated.map((say) => [say, refusal(`run ${say} greeter`)]).filter(([, why]) => why), []);
+    assert.deepEqual(STEERING.obfuscated.filter((name) => !doc.includes(`\`${name}\``)), []);
+    assert.doesNotMatch(doc, /every spelling/);
+  });
+
   test('bin scripts and agent-only skills come from the driven root at check time', () => {
     const rich = makeRoot({
       'bin/zebra-run.sh': '#!/bin/sh\n',
       '.agents/skills/zebra-runbook/SKILL.md': '---\nname: zebra-runbook\nuser-invocable: false\n---\n# zebra\n',
+      '.agents/skills/zebra-guide/SKILL.md': '---\nname: zebra-guide\n---\n# zebra\n',
     });
     const plain = makeRoot();
     const verdicts = {};
-    for (const [label, say] of [['script', 'run bin/zebra-run.sh for greeter'], ['skill', '/zebra-runbook for greeter'], ['words', 'open the Zebra Runbook for greeter']]) {
+    for (const [label, say] of [['script', 'run bin/zebra-run.sh for greeter'], ['skill', '/zebra-runbook for greeter'], ['path', 'read .agents/skills/zebra-guide/SKILL.md for greeter'], ['words', 'open the Zebra Runbook for greeter']]) {
       const trace = writeTrace(tmp('trace'), { feature: 'zebra', steps: [{ say, until: 'projects.registered:greeter', budgetSec: 1 }] });
       const r = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: rich }).env);
       verdicts[label] = { rich: r.status, why: r.json?.rejected ?? '', plain: runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: plain }).env).status };
     }
     assert.deepEqual(
-      Object.fromEntries(Object.entries(verdicts).map(([k, v]) => [k, [v.rich, /zebra-run/.test(v.why), v.plain]])),
-      { script: [2, true, 0], skill: [2, true, 0], words: [0, false, 0] },
+      Object.fromEntries(Object.entries(verdicts).map(([k, v]) => [k, [v.rich, /zebra-run|skill file \.agents\/skills\/zebra-guide\//.test(v.why), v.plain]])),
+      { script: [2, true, 0], skill: [2, true, 0], path: [2, true, 0], words: [0, false, 0] },
       JSON.stringify(verdicts),
     );
   });
