@@ -43,8 +43,10 @@ The shipped `register` trace is the smallest real one.
 ```
 
 - `say` is captain text typed into the primary; `""` waits without typing; `$relaunch` exits the primary with `/exit` and starts it again in the same pane, the home and any worker untouched.
-- A `say` must read as the captain. The driver lowercases it and turns backslashes into slashes and underscores, spaces and camel case into dashes. It then refuses, with exit 2, a say that names a `bin/` or `state/` path, an `fm-<name>` script with or without `.sh`, `tasks-axi`, session start, or a skill that the driven root's `.agents/skills` marks `user-invocable: false`. Such a run would prove obedience rather than the product.
-- Right before each say, `$relaunch` included, the driver evaluates that step's `until`. A claim that already holds fails the step as vacuous, and the say is never typed. A `""` step is not checked, because it waits on the say before it.
+- A `say` must read as the captain. The driver refuses, with exit 2, only a say that invokes internals outright. It applies NFKC to the say, lowercases it, and folds every run of characters that are not letters or digits into one separator. It then refuses a path to a file that exists under the driven root's `bin/` (`bin/fm-spawn.sh`, `bin/fm-spawn`, or `fm-spawn.sh`) and a skill that the root's `.agents/skills` marks `user-invocable: false` when it is invoked as a skill (`/name`, `$name`, or `the name skill`). Both sets are read from the root at check time.
+- Everything else passes on purpose, because a string matcher cannot tell coaching from captain language. That includes bare stems (`fm spawn`, `fm–spawn`, `FMSpawn`), `session start` in any spelling, `state/` paths, `tasks-axi`, a `bin/` path to a file that does not exist (`bin/wake-drain`), and bare skill words (`project management`, `stuck crewmate recovery`). Worker tab names such as `fm-greeter-hello` are what the captain sees, so they pass too. [`test/fixtures/steering.json`](../../../tools/fm-drive/test/fixtures/steering.json) lists the refused and allowed spellings.
+- **Review rule.** Whoever verifies a trace reads every `say` and rejects coaching, meaning any say that tells the primary which internal command, script, file or skill to use. A string matcher cannot decide this, so the reviewer does.
+- Right before each say, `$relaunch` included, the driver evaluates that step's `until`. A claim that already holds fails the step as vacuous, and the say is never typed. At the same moment it evaluates the `until` of every `""` step that waits on that say, and a `""` step whose claim already held then fails as vacuous. A `""` step before any say gets the same check just before Claude launches.
 - `until` is one predicate or a `&&` conjunction from the closed catalog at the top of [`tools/fm-drive/lib/predicates.mjs`](../../../tools/fm-drive/lib/predicates.mjs); that file is the single owner of the catalog.
 - `budgetSec` is the step's deadline; without it `FM_DRIVE_UNTIL_MS` (default 180000, three minutes) applies.
 - `{{projectOrigin}}` is the bare origin of a throwaway project seeded with one commit before launch, named by `project` (default `greeter`); `{{home}}` is the throwaway home's path.
@@ -76,6 +78,7 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 ```json
 { "feature": "register", "wallMs": 0, "pass": true, "readyMs": 0, "operableMs": 0, "predicateMs": 0,
   "fidelity": { "claudeConfig": "clean", "hooks": "repo", "captainMd": "untouched", "model": "opus" },
+  "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched" },
   "steps": [ { "say": "...", "until": "...", "ms": 0, "ok": true, "reason": "...", "sayMs": 0 } ],
   "overhead": { "transport": "socket", "herdrCalls": 0, "spawns": 0, "herdrSpawns": 0, "gitSpawns": 0, "setupSpawns": 0, "cleanupSpawns": 0, "setupMs": 0, "operableMs": 0, "closeMs": 0 },
   "evidence": "/tmp/fm-drive-artifacts/register-<utc>" }
@@ -84,8 +87,10 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 The driver measures `fidelity` on the prepared home, before Herdr or Claude starts.
 `claudeConfig` is `clean` when the throwaway `CLAUDE_CONFIG_DIR` holds only what the driver wrote: the onboarding, trust and login keys in `.claude.json`, the theme and PATH in `settings.json`, and the inherited credentials file. Anything else reads `carries <entry>, <file>:<key>`.
 `hooks` is `repo` when the home's `.claude/settings.json` is byte for byte the clone's committed one, else `modified`.
-`captainMd` is `untouched` when no `data/captain.md` exists, else `present`.
+`captainMd` is `untouched` when no `data/captain.md` exists, `written-after-say` when its mtime is at or after the first typed say, and `present` otherwise.
 Any other value fails the run with exit 3 before Claude launches, and `error` names the field.
+The driver measures `hooks` and `captainMd` again at close as `fidelityAtClose`, before it archives the home.
+There `hooks` must still be `repo`, and `captainMd` may be `untouched` or `written-after-say`, because firstmate records captain preferences in that file itself. A `captain.md` that appeared before the captain said anything is `present`, and it fails the run with exit 3, as a changed hook does.
 `pass` is true only when the last `until` held.
 `readyMs` is the first launch plus the wait for an operable home (`state/.lock` or `state/.session-start-complete`), and `operableMs` reports that wait alone.
 `predicateMs` is the total time spent waiting for claims, and the rest of `wallMs` is the driver's setup, typing, relaunch, and cleanup, which `overhead` breaks down.
@@ -115,5 +120,5 @@ It never writes to the checkout it clones and never merges anything; the primary
 ## Tests
 
 `node --test tools/fm-drive/test/` runs without Herdr or Claude.
-Refusals, including every respelling of a steering say and a trace that holds on a fresh home, exit 2 with zero Herdr spawns, every predicate yields a literal boolean over fixture homes, and a scripted stand-in for the `herdr` binary drives whole traces, including the shipped `restart-primary` one.
-The suite also checks that a driven home keeps the committed hooks and gets no `data/captain.md`, that a clone which breaks either fails with exit 3 before Claude launches, that a claim already true before its say fails as vacuous, that the Claude config dir lands beside the home without touching `~/.claude.json`, that host login files are inherited by presence and shape only, that evidence archival omits credentials, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.
+Refusals, including every spelling of a `bin/` script path or an invoked agent-only skill and a trace that holds on a fresh home, exit 2 with zero Herdr spawns. Real captain lines and the deliberately allowed respellings pass. Every predicate yields a literal boolean over fixture homes, and a scripted stand-in for the `herdr` binary drives whole traces, including the shipped `restart-primary` one.
+The suite also checks that a driven home keeps the committed hooks and gets no `data/captain.md`, that a clone which breaks either fails with exit 3 before Claude launches, that a hook change or an early `captain.md` during the run fails it at close, that a claim already true before its say, or before the say a `""` step waits on, fails as vacuous, that the Claude config dir lands beside the home without touching `~/.claude.json`, that host login files are inherited by presence and shape only, that evidence archival omits credentials, and that the shell-prompt patterns match Git Bash, Linux cwd, and Windows shells.
