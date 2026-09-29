@@ -230,6 +230,7 @@ export class Session {
     this.baselineWorkspaces = new Set();
     this.signals = { blocked: null, status: null, shellDead: null };
     this.claudeConfigDir = null;
+    this.code = null;
     this.statusPoll = null;
     this.counters = { gitSpawns: 0, setupSpawns: 0, cleanupSpawns: 0 };
     this.captainLog = [];
@@ -358,6 +359,7 @@ export class Session {
     } catch {
       throw new HerdrError("the clone's harness skill link does not resolve, so the primary would have no skills");
     }
+    this.code = { sha, dirty: dirty !== '' };
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
   }
 

@@ -77,7 +77,9 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 ## Read the result
 
 ```json
-{ "feature": "register", "wallMs": 0, "pass": true, "readyMs": 0, "operableMs": 0, "predicateMs": 0,
+{ "feature": "register", "trace": "register", "proves": {}, "code": { "sha": "<40 hex>", "dirty": false },
+  "wallMs": 0, "pass": true, "readyMs": 0, "operableMs": 0, "predicateMs": 0,
+  "health": { "until": "home.clean && tabs.clean && wake.empty", "ok": true, "reason": "holds" },
   "fidelity": { "claudeConfig": "clean", "hooks": "repo", "captainMd": "untouched", "model": "opus" },
   "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched" },
   "steps": [ { "say": "...", "until": "...", "ms": 0, "ok": true, "reason": "...", "sayMs": 0 } ],
@@ -107,7 +109,9 @@ The evidence directory keeps `result.json`, `captain.log`, a pane snapshot at ev
 
 A trace is the session tier of `verify-firstmate`.
 It uses the same throwaway-home clone, the same real primary in Herdr, and the same claims read from `state/`, `data/`, Herdr's tab list and the project's git refs, kept as evidence under the temp directory.
-The shell scripts under `tests/verification/*.verify.sh` remain the inventory's `kind=entry` rows; this driver proves nothing to the inventory on its own.
+A trace names the inventory rows it proves in `proves`, a map from row id to that row's last proving step.
+`trace` is the trace file's name, `code` is the commit the home was cloned from and whether the checkout had uncommitted changes, and `health` is the home's cleanliness checked once after the last step held.
+`node tools/fm-drive/drive.mjs record <result.json>` turns a result into inventory rows as `verify-firstmate` describes; nothing else flips a trace row.
 A session script may call the driver instead of `session-lib.sh`'s poll loop when it wants deadlines, file-watch waits and a machine-readable timing record; wire that through `verify.sh` and `coverage.tsv` as `verify-firstmate` describes, and keep one owner for each feature's claims.
 Report the result JSON verbatim, then the outcome in the captain's terms.
 

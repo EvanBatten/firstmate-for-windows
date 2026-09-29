@@ -6,8 +6,11 @@
 # status, ref, evidence. source names where the claim comes from (a README
 # feature bullet, an AGENTS.md lifecycle step, a bin/ entry point coverage.tsv
 # names, or a feature file under features/). status is one of proven,
-# unproven, broken, or blocked-here; ref names the verification script for a
-# proven row or the issue number otherwise.
+# unproven, broken, or blocked-here; ref names the proof of a proven row,
+# either a session script tests/verification/<ref>.verify.sh or a drive trace
+# tools/fm-drive/traces/<ref>.json whose proves lists the row, which
+# `node tools/fm-drive/drive.mjs record` writes from a run; a broken row names
+# the trace that regressed or an issue; any other row names an issue number.
 #
 # Usage:
 #   inventory.sh check              exit 0 when every source above has a row
@@ -31,6 +34,7 @@ COVERAGE="$ROOT/tests/verification/coverage.tsv"
 FEATURES_DIR="$HERE/features"
 README="$ROOT/README.md"
 SUITE="$ROOT/tests/verification"
+TRACES="$ROOT/tools/fm-drive/traces"
 
 die() { printf 'inventory: %s\n' "$*" >&2; exit 2; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'; }
@@ -41,6 +45,11 @@ usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,
 BAD=0
 n_ok()  { printf 'ok - %s\n' "$1"; }
 n_bad() { printf 'not ok - %s\n' "$1"; BAD=$((BAD + 1)); }
+
+trace_proves() {
+  case "$1" in '' | *[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -f "$TRACES/$1.json" ] && grep -q "\"$2\"[[:space:]]*:" "$TRACES/$1.json"
+}
 
 row_source_exists() {
   awk -F'\t' -v want="$1" 'NR>1 && $2==want{f=1} END{exit !f}' "$TSV"
@@ -100,16 +109,26 @@ cmd_check() {
     esac
     case "$status" in
       proven)
-        [ -f "$SUITE/$ref.verify.sh" ] \
-          || n_bad "row '$id' is proven but ref '$ref' names no tests/verification/$ref.verify.sh"
-        # A drive plays firstmate; only a real session proves a behavior.
-        [ ! -f "$SUITE/$ref.verify.sh" ] || grep -q "session-lib.sh" "$SUITE/$ref.verify.sh" \
-          || n_bad "row '$id' is proven by '$ref', which drives scripts itself instead of running a session; only a session script proves a behavior"
+        if [ -f "$SUITE/$ref.verify.sh" ]; then
+          # A drive plays firstmate; only a real session proves a behavior.
+          grep -q "session-lib.sh" "$SUITE/$ref.verify.sh" \
+            || n_bad "row '$id' is proven by '$ref', which drives scripts itself instead of running a session; only a session script proves a behavior"
+        else
+          trace_proves "$ref" "$id" \
+            || n_bad "row '$id' is proven but ref '$ref' names no tests/verification/$ref.verify.sh and no tools/fm-drive/traces/$ref.json that proves it"
+        fi
         ;;
-      unproven | broken)
+      unproven)
         case "$ref" in
           '#'[0-9]*) ;;
           *) n_bad "row '$id' is $status but ref '$ref' is not an issue number (#NN)" ;;
+        esac
+        ;;
+      broken)
+        case "$ref" in
+          '#'[0-9]*) ;;
+          *) trace_proves "$ref" "$id" \
+               || n_bad "row '$id' is broken but ref '$ref' is neither an issue number (#NN) nor a tools/fm-drive/traces/$ref.json that proves it" ;;
         esac
         ;;
       blocked-here)
@@ -141,6 +160,11 @@ cmd_verdict() {
   while IFS=$'\t' read -r id _source _behavior status ref _evidence; do
     case "$status" in
       proven)
+        if [ ! -f "$SUITE/$ref.verify.sh" ]; then
+          # A trace-proven row's proof is the run record wrote, not this log.
+          proven=$((proven + 1))
+          continue
+        fi
         outcome=$(awk -v want="$ref" '$1=="result:" && $2==want{o=$3} END{print (o=="" ? "missing" : o)}' "$log")
         case "$outcome" in
           passed) proven=$((proven + 1)) ;;
