@@ -84,7 +84,7 @@ describe('trace refusal', () => {
   test('check refuses a say that steers the primary with internals, before any herdr call', () => {
     const steering = rejects.filter((f) => f.startsWith('steer-')).sort();
     assert.deepEqual(steering, [
-      'steer-agent-skill.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json', 'steer-fm-brief.json', 'steer-skill-path.json',
+      'steer-agent-skill.json', 'steer-bin-mixed-case.json', 'steer-bin-spawn.json', 'steer-bin-upper.json', 'steer-fm-brief.json', 'steer-skill-dotdot.json', 'steer-skill-path.json', 'steer-skill-top-level.json',
     ]);
     for (const f of steering) {
       const { dir, env } = fakeEnv();
@@ -134,6 +134,11 @@ describe('trace refusal', () => {
     assert.deepEqual(allowed, []);
   });
 
+  test('a say where the word skills is followed by a skill name is refused as a path into that skill, even in plain words', () => {
+    const allowed = STEERING.wordsRefused.filter((say) => !/invokes the skill file .*steers the primary/.test(refusal(say) ?? ''));
+    assert.deepEqual(allowed, []);
+  });
+
   test('respellings that name no bin/ script and invoke no skill are left to the trace reviewer', () => {
     const refused = STEERING.allowed.map((say) => [say, refusal(say)]).filter(([, why]) => why);
     assert.deepEqual(refused, []);
@@ -146,22 +151,42 @@ describe('trace refusal', () => {
     assert.doesNotMatch(doc, /every spelling/);
   });
 
-  test('bin scripts and agent-only skills come from the driven root at check time', () => {
+  test('bin scripts and skills come from every skill directory of the driven root at check time', () => {
     const rich = makeRoot({
       'bin/zebra-run.sh': '#!/bin/sh\n',
       '.agents/skills/zebra-runbook/SKILL.md': '---\nname: zebra-runbook\nuser-invocable: false\n---\n# zebra\n',
       '.agents/skills/zebra-guide/SKILL.md': '---\nname: zebra-guide\n---\n# zebra\n',
+      'skills/zebra-top/SKILL.md': '---\nname: zebra-top\n---\n# zebra\n',
+      'skills/zebra-guide/SKILL.md': '---\nname: zebra-guide\n---\n# zebra\n',
+      'skills/zebra-notes.md': '# not a skill\n',
     });
+    const claudeOnly = makeRoot({
+      '.claude/skills/zebra-claude/SKILL.md': '---\nname: zebra-claude\nuser-invocable: false\n---\n# zebra\n',
+    }, { claudeSkillsLink: false });
     const plain = makeRoot();
+    const cases = {
+      script: ['run bin/zebra-run.sh for greeter', /the script bin\/zebra-run\.sh/],
+      skill: ['/zebra-runbook for greeter', /the agent-only skill zebra-runbook/],
+      path: ['read skills/zebra-guide/SKILL.md for greeter', /the skill file \.agents\/skills\/zebra-guide\/SKILL\.md or skills\/zebra-guide\/SKILL\.md;/],
+      claudePath: ['read .claude/skills/zebra-claude/SKILL.md for greeter', /the skill file \.claude\/skills\/zebra-claude\//],
+      claudeSkill: ['/zebra-claude for greeter', /the agent-only skill zebra-claude/],
+      topPath: ['follow skills/zebra-top/SKILL.md for greeter', /the skill file skills\/zebra-top\//],
+      dotdot: ['follow .agents/skills/zebra-guide/../zebra-top/SKILL.md for greeter', /the skill file skills\/zebra-top\//],
+      words: ['open the Zebra Runbook for greeter', /^$/],
+      file: ['read skills/zebra-notes.md for greeter', /^$/],
+    };
     const verdicts = {};
-    for (const [label, say] of [['script', 'run bin/zebra-run.sh for greeter'], ['skill', '/zebra-runbook for greeter'], ['path', 'read .agents/skills/zebra-guide/SKILL.md for greeter'], ['words', 'open the Zebra Runbook for greeter']]) {
+    for (const [label, [say]] of Object.entries(cases)) {
       const trace = writeTrace(tmp('trace'), { feature: 'zebra', steps: [{ say, until: 'projects.registered:greeter', budgetSec: 1 }] });
-      const r = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: rich }).env);
+      const r = runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: label.startsWith('claude') ? claudeOnly : rich }).env);
       verdicts[label] = { rich: r.status, why: r.json?.rejected ?? '', plain: runDrive(['check', trace], fakeEnv({ FM_DRIVE_ROOT: plain }).env).status };
     }
     assert.deepEqual(
-      Object.fromEntries(Object.entries(verdicts).map(([k, v]) => [k, [v.rich, /zebra-run|skill file \.agents\/skills\/zebra-guide\//.test(v.why), v.plain]])),
-      { script: [2, true, 0], skill: [2, true, 0], path: [2, true, 0], words: [0, false, 0] },
+      Object.fromEntries(Object.entries(verdicts).map(([k, v]) => [k, [v.rich, cases[k][1].test(v.why), v.plain]])),
+      {
+        script: [2, true, 0], skill: [2, true, 0], path: [2, true, 0], claudePath: [2, true, 0],
+        claudeSkill: [2, true, 0], topPath: [2, true, 0], dotdot: [2, true, 0], words: [0, true, 0], file: [0, true, 0],
+      },
       JSON.stringify(verdicts),
     );
   });
@@ -336,7 +361,7 @@ const REPO_SETTINGS = `${JSON.stringify({
   },
 }, null, 2)}\n`;
 
-function makeRoot(extraFiles = {}) {
+function makeRoot(extraFiles = {}, { claudeSkillsLink = true } = {}) {
   const root = tmp('root');
   const git = (...a) => {
     const r = spawnSync('git', ['-C', root, ...a], { encoding: 'utf8' });
@@ -348,7 +373,7 @@ function makeRoot(extraFiles = {}) {
   mkdirSync(join(root, '.agents', 'skills', 'sample'), { recursive: true });
   writeFileSync(join(root, '.agents', 'skills', 'sample', 'SKILL.md'), '# sample\n');
   mkdirSync(join(root, '.claude'));
-  symlinkSync(join('..', '.agents', 'skills'), join(root, '.claude', 'skills'), 'dir');
+  if (claudeSkillsLink) symlinkSync(join('..', '.agents', 'skills'), join(root, '.claude', 'skills'), 'dir');
   writeFileSync(join(root, '.claude', 'settings.json'), REPO_SETTINGS);
   writeFileSync(join(root, 'AGENTS.md'), '# test root\n');
   mkdirSync(join(root, 'bin'));

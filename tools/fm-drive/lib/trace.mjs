@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
 
@@ -16,16 +16,37 @@ export const INTERPOLATIONS = ['projectOrigin', 'home'];
 const fold = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-');
 const holds = (folded, needle) => `-${folded}-`.includes(`-${needle}-`);
 
+const withoutDotDot = (text) => {
+  let out = text.normalize('NFKC').replace(/\\/g, '/').replace(/\/\.(?=\/)/g, '');
+  for (let prev; prev !== out;) {
+    prev = out;
+    out = out.replace(/(?<![^/\s])(?!\.\.?\/)[^/\s]+\/+\.\.(?![\p{L}\p{N}.])/u, '');
+  }
+  return out;
+};
+
+function rootSkills(root) {
+  const dirs = new Map();
+  for (const dir of ['.agents/skills', '.claude/skills', 'skills']) {
+    let names;
+    try {
+      if (lstatSync(join(root, dir)).isSymbolicLink()) continue;
+      names = readdirSync(join(root, dir));
+    } catch { continue; }
+    for (const name of names) {
+      if (statSync(join(root, dir, name), { throwIfNoEntry: false })?.isDirectory()) dirs.set(name, [...(dirs.get(name) ?? []), dir]);
+    }
+  }
+  return [...dirs].map(([name, found]) => ({ name, dirs: found }));
+}
+
 function agentOnlySkills(root) {
-  const dir = join(root, '.agents', 'skills');
-  let names;
-  try { names = readdirSync(dir); } catch { return []; }
-  return names.filter((name) => {
+  return rootSkills(root).filter(({ name, dirs: [dir] }) => {
     let text;
-    try { text = readFileSync(join(dir, name, 'SKILL.md'), 'utf8'); } catch { return false; }
+    try { text = readFileSync(join(root, dir, name, 'SKILL.md'), 'utf8'); } catch { return false; }
     const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
     return Boolean(front && /^user-invocable:\s*false\s*$/m.test(front[1]));
-  });
+  }).map(({ name }) => name);
 }
 
 function binScripts(root) {
@@ -42,17 +63,15 @@ function binScripts(root) {
 }
 
 function skillPaths(root) {
-  let names;
-  try { names = readdirSync(join(root, '.agents', 'skills')); } catch { return []; }
-  return names.flatMap((name) => ['agents', 'claude'].map((dir) => ({
-    needle: `${dir}-skills-${fold(name)}`,
-    what: `the skill file .${dir}/skills/${name}/SKILL.md`,
-  })));
+  return rootSkills(root).map(({ name, dirs }) => ({
+    needle: `skills-${fold(name)}`,
+    what: `the skill file ${dirs.map((dir) => `${dir}/${name}/SKILL.md`).join(' or ')}`,
+  }));
 }
 
 function steeringIn(say, root) {
   if (!root) return null;
-  const folded = fold(say);
+  const folded = fold(withoutDotDot(say));
   const path = [...binScripts(root), ...skillPaths(root)].find(({ needle }) => holds(folded, needle));
   if (path) return path.what;
   const lowered = say.normalize('NFKC').toLowerCase();

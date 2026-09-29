@@ -38,7 +38,11 @@
     "rm-5 was a bad idea",
     "confirm fm-2 is done",
     "what is fm-greeter-hello doing right now?",
-    "which claude skills do you have"
+    "which claude skills do you have",
+    "which skills do you have?",
+    "my skills are rusty, stow what you learned",
+    "put the notes in the skills/ folder of greeter",
+    "cd ../greeter and run the tests"
   ],
   "refused": [
     "run ```\nbin/fm-spawn.sh greeter\n``` please",
@@ -60,7 +64,15 @@
     "read .agents/skills/secondmate-provisioning/SKILL.md and do it",
     "follow .agents/skills/stow/SKILL.md",
     "open .claude/skills/project-management/SKILL.md",
-    "look in .agents\\skills\\bearings\\ for the steps"
+    "look in .agents\\skills\\bearings\\ for the steps",
+    "follow skills/stow/SKILL.md for greeter",
+    "read ./skills/stow/ and do it",
+    "read .agents/skills/../skills/stow/SKILL.md",
+    "open .claude/skills/tmp/../bearings/SKILL.md",
+    "follow .agents\\skills\\x\\..\\stow\\SKILL.md",
+    "open .codex/skills/stow/SKILL.md",
+    "read `.agents/skills/x/..`/stow/SKILL.md",
+    "follow .agents/skills/x/..,/stow"
   ],
   "allowed": [
     "fm spawn greeter",
@@ -99,7 +111,20 @@
     "use TASKS-AXI to list tasks",
     "tasks-axi add a task to ship greet.sh",
     "use the stow skill to save what you learned",
-    "the agents skills folder is not yours to read"
+    "the agents skills folder is not yours to read",
+    "read skills/zebra/SKILL.md",
+    "claude skillset stow",
+    "the ../skills folder of greeter is empty",
+    "skills stowaway",
+    "show me the .claude/skills folder of greeter"
+  ],
+  "wordsRefused": [
+    "claude skills stow",
+    "can your claude skills stow what we learned?",
+    "do the agents skills afk while I am out",
+    "Claude, skills: bearings please",
+    "skills: stow it",
+    "your skills quiet down"
   ],
   "obfuscated": [
     "bin/fm-sp\"a\"wn.sh",
