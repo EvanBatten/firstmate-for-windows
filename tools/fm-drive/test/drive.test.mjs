@@ -468,6 +468,40 @@ describe('fake-herdr end to end', () => {
     .filter((s) => s.text !== undefined && !/claude --dangerously|^\/exit$/.test(s.text))
     .map((s) => s.text);
 
+  test('a result names its trace, the rows it proves, the code it drove and the home health, and record flips those rows', () => {
+    const tsvRel = '.agents/skills/verify-firstmate/behaviors.tsv';
+    const header = 'id\tsource\tbehavior\tstatus\tref\tevidence';
+    const traceRel = 'tools/fm-drive/traces/e2e-proves.json';
+    const recRoot = makeRoot({
+      [tsvRel]: `${header}\nrow-register\treadme:features\tregisters a project\tunproven\t#83\t\n`,
+      [traceRel]: JSON.stringify({ ...registerTrace('e2e-proves'), proves: { 'row-register': 1 } }),
+    });
+    const origin = tmp('origin');
+    const g = (cwd, ...a) => {
+      const r = spawnSync('git', ['-C', cwd, ...a], { encoding: 'utf8' });
+      assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    g(origin, 'init', '-q', '--bare', '-b', 'main');
+    g(recRoot, 'remote', 'add', 'origin', origin);
+    g(recRoot, 'push', '-q', 'origin', 'main');
+    g(recRoot, 'fetch', '-q', 'origin');
+    const sha = g(recRoot, 'rev-parse', 'HEAD');
+
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: recRoot, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', join(recRoot, traceRel)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.equal(r.json.trace, 'e2e-proves');
+    assert.deepEqual(r.json.proves, { 'row-register': 1 });
+    assert.deepEqual(r.json.code, { sha, dirty: false });
+    assert.deepEqual(r.json.health, { until: 'home.clean && tabs.clean && wake.empty', ok: true, reason: 'holds' });
+
+    const rec = runDrive(['record', join(env.FM_DRIVE_EVIDENCE, 'result.json')], env);
+    assert.equal(rec.status, 0, rec.stderr);
+    assert.equal(readFileSync(join(recRoot, tsvRel), 'utf8'),
+      `${header}\nrow-register\treadme:features\tregisters a project\tproven\te2e-proves\t${sha} held through step 1, health clean; ${env.FM_DRIVE_EVIDENCE}\n`);
+  });
+
   test('a driven home keeps the repo hooks, gets no captain.md, and reports its fidelity', () => {
     const { dir, env } = fakeEnv({
       FM_DRIVE_ROOT: root,
