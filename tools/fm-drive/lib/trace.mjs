@@ -41,11 +41,20 @@ function binScripts(root) {
   });
 }
 
+function skillPaths(root) {
+  let names;
+  try { names = readdirSync(join(root, '.agents', 'skills')); } catch { return []; }
+  return names.flatMap((name) => ['agents', 'claude'].map((dir) => ({
+    needle: `${dir}-skills-${fold(name)}`,
+    what: `the skill file .${dir}/skills/${name}/SKILL.md`,
+  })));
+}
+
 function steeringIn(say, root) {
   if (!root) return null;
   const folded = fold(say);
-  const script = binScripts(root).find(({ needle }) => holds(folded, needle));
-  if (script) return script.what;
+  const path = [...binScripts(root), ...skillPaths(root)].find(({ needle }) => holds(folded, needle));
+  if (path) return path.what;
   const lowered = say.normalize('NFKC').toLowerCase();
   const skill = agentOnlySkills(root).find((name) => {
     const words = fold(name);
