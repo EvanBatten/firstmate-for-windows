@@ -57,8 +57,10 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-The serial hints were refreshed from successful per-script records in the `fm-test-timing-portable-serial-*` artifacts of the complete green [run 35279383618](https://github.com/kunchenguid/firstmate/actions/runs/35279383618) and the available completed shards of [run 35282466441](https://github.com/kunchenguid/firstmate/actions/runs/35282466441) on 2026-09-17.
-Together these cover all 176 serial scripts at refresh time; retain the slower successful sample where both exist.
+The serial hints were refreshed on 2026-09-29 from successful per-script records in the `fm-test-timing-portable-serial-*` artifacts of nine complete green nine-shard CI runs on EvanBatten/firstmate-for-windows.
+Four ran on `main` pushes ([36520146039](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36520146039), [36534296860](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36534296860), [36548079551](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36548079551), [36555728253](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36555728253)).
+Five ran on pull requests into `main` the same day ([36552166903](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36552166903), [36555768835](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36555768835), [36555993672](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36555993672), [36556127160](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36556127160), and [36556469578](https://github.com/EvanBatten/firstmate-for-windows/actions/runs/36556469578)).
+Every run covers all 199 serial scripts, and each hint is the slowest successful sample across them.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 An unfinished or failed invocation is not a healthy duration sample.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
@@ -69,8 +71,8 @@ That is not hypothetical: by 2026-09-01 the lane had grown from 116 to 139 scrip
 Refresh the hints whenever the serial lane gains scripts, rather than waiting for that bound to trip.
 
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
-Nine serial runners pack the refreshed measurements into a longest modeled script sum of 697969 ms (11m38s), with other shards near 10m36s.
-The longest script, `tests/fm-watch-triage.test.sh`, legitimately occupies one whole shard and is the indivisible floor for this layout.
+Nine serial runners pack the refreshed measurements into a longest modeled script sum of 1038115 ms (17m18s), with other shards near 16m01s.
+The two longest scripts, `tests/fm-watch-triage.test.sh` at 1038115 ms and `tests/fm-supervision-host.test.sh` at 973894 ms, each occupy one whole shard, and the first is the indivisible floor for this layout.
 This is a packing estimate, not measured new-workflow execution or an end-to-end latency guarantee.
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
