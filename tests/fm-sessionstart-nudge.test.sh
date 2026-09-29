@@ -115,12 +115,32 @@ test_linked_secondmate_primary_nudges() {
   pass "fm-sessionstart-nudge: a marked linked secondmate home is a primary"
 }
 
-test_missing_state_is_silent() {
-  local root="$TMP_ROOT/missing-state"
+test_fresh_clone_without_state_nudges() {
+  local root="$TMP_ROOT/fresh-clone" out status=0
   make_primary "$root"
   rmdir "$root/state"
-  expect_silent_zero "missing state nudge" run_nudge "$root"
-  pass "fm-sessionstart-nudge: a checkout without state is silent"
+  out=$(run_nudge "$root") || status=$?
+  expect_code 0 "$status" "fresh clone nudge"
+  [ "$out" = "$NUDGE_LINE" ] || fail "a fresh clone without state/ got no session-start nudge, got: $out"
+  assert_absent "$root/state" "the nudge wrapper created state/ instead of leaving that to session start"
+  pass "fm-sessionstart-nudge: a fresh clone with no state/ yet gets its nudge"
+}
+
+test_non_home_without_state_is_silent() {
+  local root="$TMP_ROOT/non-home"
+  mkdir -p "$root/bin"
+  git init -q -b main "$root"
+  git -C "$root" commit -q --allow-empty -m init
+  expect_silent_zero "non-home nudge" run_nudge "$root"
+  assert_absent "$root/state" "a directory that is not a firstmate home got a state directory"
+
+  local base="$TMP_ROOT/stateless-linked-base" linked="$TMP_ROOT/stateless-linked"
+  fm_git_worktree "$base" "$linked" fm/sessionstart-stateless-linked
+  mkdir -p "$linked/bin"
+  : > "$linked/AGENTS.md"
+  expect_silent_zero "stateless linked worktree nudge" run_nudge "$linked"
+  assert_absent "$linked/state" "an unmarked task worktree without state/ got a state directory"
+  pass "fm-sessionstart-nudge: a checkout that is not a firstmate home stays silent without state/"
 }
 
 test_owned_lock_is_silent() {
@@ -1081,7 +1101,8 @@ test_gate_env_is_silent
 test_gate_common_dir_is_silent
 test_unmarked_linked_worktree_is_silent
 test_linked_secondmate_primary_nudges
-test_missing_state_is_silent
+test_fresh_clone_without_state_nudges
+test_non_home_without_state_is_silent
 test_owned_lock_is_silent
 test_namespace_pid1_lock_holder_is_silent
 test_opencode_plugin_delivers_exact_nudge_once
