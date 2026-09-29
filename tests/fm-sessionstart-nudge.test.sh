@@ -1037,6 +1037,34 @@ test_run_gate_and_scope_are_silent() {
   pass "run wrapper: ordinary ineligible opens stay silent-zero and Pi preflight gets an explicit silent stand-down"
 }
 
+test_run_fresh_clone_without_state_takes_the_helm() {
+  local root="$TMP_ROOT/run-fresh-clone" out status=0
+  make_run_primary "$root"
+  rmdir "$root/state"
+  out=$(run_hook "$root" --source startup </dev/null) || status=$?
+  expect_code 0 "$status" "run wrapper in a fresh clone"
+  assert_contains "$out" "$FULL_BANNER$root" "a fresh clone without state/ stood down instead of taking the helm"
+  assert_contains "$out" "lock acquired: harness pid" "a fresh clone's session start did not take the fleet lock"
+  pass "run wrapper: a fresh clone with no state/ yet takes the helm on its first session"
+}
+
+test_run_non_home_without_state_is_silent() {
+  local root="$TMP_ROOT/run-non-home"
+  mkdir -p "$root/bin"
+  git init -q -b main "$root"
+  git -C "$root" commit -q --allow-empty -m init
+  expect_silent_zero "non-home run" run_hook "$root" --source startup
+  assert_absent "$root/state" "a directory that is not a firstmate home got a state directory"
+
+  local base="$TMP_ROOT/run-stateless-linked-base" linked="$TMP_ROOT/run-stateless-linked"
+  fm_git_worktree "$base" "$linked" fm/run-stateless-linked
+  mkdir -p "$linked/bin"
+  : > "$linked/AGENTS.md"
+  expect_silent_zero "stateless linked worktree run" run_hook "$linked" --source startup
+  assert_absent "$linked/state" "an unmarked task worktree without state/ got a state directory"
+  pass "run wrapper: a checkout that is not a firstmate home stays silent and untouched"
+}
+
 test_run_reports_a_failed_session_start_as_digest_text() {
   local root="$TMP_ROOT/run-unwritable" out status=0
   make_run_primary "$root"
@@ -1067,6 +1095,8 @@ test_run_resume_delegates_to_the_nudge
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
+test_run_fresh_clone_without_state_takes_the_helm
+test_run_non_home_without_state_is_silent
 test_run_reports_a_failed_session_start_as_digest_text
 test_pi_startup_classifies_cli_continuations
 test_pi_sessionstart_generation_prerequisite
