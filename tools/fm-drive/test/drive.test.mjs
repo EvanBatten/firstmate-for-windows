@@ -1090,3 +1090,14 @@ test('no module spawns a shell', () => {
     assert.ok(!/execSync|exec\(/.test(src), `${f} never uses exec`);
   }
 });
+
+describe('repo checkout', () => {
+  test('a clone made with core.autocrlf=true, the Git for Windows default, checks every file out with LF', () => {
+    const dest = join(tmp('autocrlf'), 'home');
+    const clone = spawnSync('git', ['clone', '-q', '-c', 'core.autocrlf=true', REPO, dest], { encoding: 'utf8' });
+    assert.equal(clone.status, 0, clone.stderr);
+    const eol = spawnSync('git', ['-C', dest, 'ls-files', '--eol'], { encoding: 'utf8' }).stdout;
+    const crlf = eol.split('\n').filter((line) => /\bw\/crlf\b/.test(line)).map((line) => line.split('\t').pop());
+    assert.deepEqual(crlf, []);
+  });
+});
