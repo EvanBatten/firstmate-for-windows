@@ -114,13 +114,18 @@ for ($i = 0; $i -lt 16 -and $p; $i++) {
   [ -n "${_FM_W32_PPID[$root]+x}" ]
 }
 
-# Describe pid $1 in whichever space holds it, with the native boundary's parent
-# resolved to its Win32 parent.
+# Describe pid $1, with the native boundary's parent resolved to its Win32
+# parent. The two pid spaces overlap, so a walk passes $2=w32 once it has
+# crossed that boundary, and FM_PROC_PSPACE names the space of FM_PROC_PPID.
+# Without $2 an MSYS process of that number wins.
+# shellcheck disable=SC2034 # FM_PROC_PSPACE is read by the walks in overrides.sh.
 fm_win_proc() {
   local pid=$1
-  if fm_win_msys_proc "$pid"; then
+  FM_PROC_PSPACE=msys
+  if [ "${2:-}" != w32 ] && fm_win_msys_proc "$pid"; then
     if [ "$FM_PROC_PPID" -le 1 ] && fm_win32_chain_load "$FM_PROC_WINPID"; then
       FM_PROC_PPID=${_FM_W32_PPID[$FM_PROC_WINPID]}
+      FM_PROC_PSPACE=w32
     fi
     return 0
   fi
@@ -131,6 +136,8 @@ fm_win_proc() {
   FM_PROC_PGID=$pid
   FM_PROC_COMM=${_FM_W32_COMM[$pid]}
   FM_PROC_ARGS=$FM_PROC_COMM
+  FM_PROC_WINPID=$pid
+  FM_PROC_PSPACE=w32
 }
 
 # True when Win32 pid $1 is running now, with FM_PROC_COMM set to its image.

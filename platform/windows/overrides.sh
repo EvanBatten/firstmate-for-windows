@@ -48,33 +48,87 @@ _FM_WIN_PS_FN=1
 if declare -F fm_harness_ancestry_pids >/dev/null; then
   # bin/fm-session-lock-lib.sh: the contiguous harness run above $$, innermost
   # first. The Win32 half of the chain is what makes claude.exe reachable.
+  # Every pid printed is a Win32 pid, an MSYS hop's own winpid, because the
+  # MSYS and Win32 pid spaces overlap: a lock that could hold either kind can
+  # read a dead MSYS holder as a live Win32 process of the same number.
   fm_harness_ancestry_pids() {
-    local pid=$$ extending=0 printed=0 hop
+    local pid=$$ space=msys extending=0 printed=0 hop
     for ((hop = 0; hop < 16; hop++)); do
-      fm_win_proc "$pid" || break
+      fm_win_proc "$pid" "$space" || break
       if _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"; then
-        printf '%s\n' "$pid"
+        printf '%s\n' "$FM_PROC_WINPID"
         printed=1
         [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
         extending=1
       elif [ "$extending" -eq 1 ]; then
         break
       fi
-      pid=$FM_PROC_PPID
+      pid=$FM_PROC_PPID space=$FM_PROC_PSPACE
       case "$pid" in '' | *[!0-9]*) break ;; esac
       [ "$pid" -ge 1 ] || break
     done
     [ "$printed" -eq 1 ]
   }
 
-  # A recorded lock pid can be an MSYS pid or a Win32 pid, and the two spaces
-  # overlap, so a harness in either one keeps the lock live. `kill -0` cannot
-  # see a Win32 pid at all.
+  # A recorded lock pid is a Win32 pid (above), so liveness asks only the Win32
+  # space. `kill -0` cannot see a Win32 pid at all.
   fm_harness_pid_alive() {
-    local pid=$1
-    case "$pid" in '' | *[!0-9]*) return 1 ;; esac
-    fm_win_msys_proc "$pid" && _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS" && return 0
-    fm_win32_alive "$pid" && _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"
+    fm_win32_alive "$1" && _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"
+  }
+
+  # Upstream's body with its `kill -0` and `ps` probes answered in the Win32
+  # space: a live harness is held, any other live process is unknown, and a
+  # pid no process holds is stale.
+  # shellcheck disable=SC2034 # Output globals, read by fm-lock.sh status and fm-inbox.sh ready.
+  fm_session_lock_inspect() {  # <state>
+    local state=$1 lock pid
+    FM_LOCK_INSPECT_STATE=unknown
+    FM_LOCK_INSPECT_PID=
+    FM_LOCK_INSPECT_LIVE_HARNESS=unknown
+    lock="$state/.lock"
+    if [ ! -e "$lock" ]; then
+      FM_LOCK_INSPECT_STATE=free
+      FM_LOCK_INSPECT_LIVE_HARNESS=false
+      return 0
+    fi
+    if [ ! -f "$lock" ] || [ -L "$lock" ]; then
+      FM_LOCK_INSPECT_STATE=unreadable
+      return 0
+    fi
+    pid=$(cat "$lock" 2>/dev/null) || {
+      FM_LOCK_INSPECT_STATE=unreadable
+      return 0
+    }
+    pid=${pid%%$'\n'*}
+    FM_LOCK_INSPECT_PID=$pid
+    case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+    if fm_win32_alive "$pid"; then
+      if _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"; then
+        FM_LOCK_INSPECT_STATE=held
+        FM_LOCK_INSPECT_LIVE_HARNESS=true
+      else
+        FM_LOCK_INSPECT_LIVE_HARNESS=false
+      fi
+      return 0
+    fi
+    FM_LOCK_INSPECT_STATE=stale
+    FM_LOCK_INSPECT_LIVE_HARNESS=false
+  }
+fi
+
+if declare -F fm_lock_abs_path >/dev/null; then
+  # bin/fm-wake-lib.sh: a lock is a symlink to its owner directory, claimed
+  # only when readlink returns the exact path written. A native symlink reads
+  # back through the mount table, so a directory that /tmp also maps reads back
+  # as /tmp/... even when it was written as /c/.../Temp/..., and the claim spins.
+  # Spell the owner the way readlink will: the Windows path, then back.
+  fm_lock_abs_path() {
+    local path=$1 dir base
+    fm_dirname_to dir "$path"
+    fm_basename_to base "$path"
+    dir=$(cd "$dir" 2>/dev/null && pwd -W) || return 1
+    dir=$(cygpath -u -- "$dir") || return 1
+    printf '%s/%s\n' "$dir" "$base"
   }
 fi
 
@@ -94,9 +148,9 @@ if declare -F harness_process_verdict >/dev/null; then
   unset _fm_win_body _fm_win_re
 
   harness_ancestry() {  # [<pid>]
-    local pid=${1:-$$} verdict text name hop
+    local pid=${1:-$$} space=msys verdict text name hop
     for ((hop = 0; hop < 8; hop++)); do
-      fm_win_proc "$pid" || break
+      fm_win_proc "$pid" "$space" || break
       text="$FM_PROC_COMM ${FM_PROC_ARGS%% *}"
       for name in $_fm_win_verdict_names; do
         case $text in *"$name"*) break ;; esac
@@ -106,7 +160,7 @@ if declare -F harness_process_verdict >/dev/null; then
         verdict=$(harness_process_verdict "$pid")
         [ -z "$verdict" ] || { echo "$verdict"; return; }
       fi
-      pid=$FM_PROC_PPID
+      pid=$FM_PROC_PPID space=$FM_PROC_PSPACE
       case "$pid" in '' | *[!0-9]*) break ;; esac
       [ "$pid" -ge 1 ] || break
     done
