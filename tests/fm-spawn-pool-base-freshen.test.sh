@@ -474,6 +474,33 @@ test_attached_branch_with_commits_on_no_other_ref_refuses_until_detached() {
   pass "a pooled branch holding a commit on no other ref is refused with a recovery command that works"
 }
 
+test_attached_branch_sharing_a_tag_name_refuses_until_detached() {
+  local rec id out status tip
+  id='pool-attached-tag-name-r18'
+  rec=$(make_case attached-tag-name "$id")
+  read_case_record "$rec"
+  git -C "$PROJECT_DIR" tag wip "$INITIAL_SHA"
+  git -C "$POOL_DIR" switch --quiet -c wip
+  pool_commit wip-work
+  tip=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn reset branch wip, whose name a tag shares, and orphaned its commit"$'\n'"$out"
+  assert_contains "$out" "git -C '$POOL_DIR' switch --detach" \
+    "the refusal did not give the command that frees the slot and keeps the commit"$'\n'"$out"
+  [ "$(git -C "$PROJECT_DIR" rev-parse refs/heads/wip)" = "$tip" ] || fail "the refused spawn moved branch wip"
+
+  git -C "$POOL_DIR" switch --quiet --detach
+  id='pool-attached-tag-name-retry-r18'
+  fm_test_spawn_brief "$HOME_DIR" "$id"
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should launch once the refused slot is detached"$'\n'"$out"
+  assert_on_a_ref "$tip" "the retried spawn orphaned the commit on branch wip"
+  pass "a pooled branch whose name a tag shares is refused with a recovery command that works"
+}
+
 test_detached_slot_with_a_commit_on_no_ref_refuses_until_kept() {
   local rec id out status tip keep
   id='pool-detached-unique-r16'
@@ -850,6 +877,7 @@ test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_attached_branch_with_commits_on_no_other_ref_refuses_until_detached
+test_attached_branch_sharing_a_tag_name_refuses_until_detached
 test_detached_slot_with_a_commit_on_no_ref_refuses_until_kept
 test_attached_branch_whose_commits_live_elsewhere_refreshes
 test_unresolved_remote_default_refuses_pool
