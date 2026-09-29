@@ -44,7 +44,7 @@ if declare -F fm_harness_ancestry_pids >/dev/null; then
   # reached only through the Win32 chain is printed by the MSYS pid Cygwin
   # gave it when an MSYS shell started it; one with none cannot own a lock.
   fm_harness_ancestry_pids() {
-    local pid=$$ space=msys extending=0 printed=0 hop
+    local pid=$$ space=msys extending=0 printed=0 severed=0 hop
     for ((hop = 0; hop < 16; hop++)); do
       fm_win_proc "$pid" "$space" || break
       if _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"; then
@@ -57,11 +57,28 @@ if declare -F fm_harness_ancestry_pids >/dev/null; then
       elif [ "$extending" -eq 1 ]; then
         break
       fi
+      [ "$space.$FM_PROC_PSPACE.$FM_PROC_PPID" != msys.w32.0 ] || severed=1
       pid=$FM_PROC_PPID space=$FM_PROC_PSPACE
       case "$pid" in '' | *[!0-9]*) break ;; esac
       [ "$pid" -ge 1 ] || break
     done
+    [ "$printed" -eq 0 ] && [ "$severed" -eq 1 ] && _fm_win_env_claude && printed=1
     [ "$printed" -eq 1 ]
+  }
+
+  # An MSYS exec replaces a process's Win32 image, and the image a native
+  # parent started exits, so a Claude hook that execs its script has no live
+  # Win32 parent and the walk cannot reach claude.exe. Claude names itself in
+  # CLAUDE_PID, which is trusted only when the walk broke there and it names a
+  # live Claude that an MSYS shell started.
+  _fm_win_env_claude() {
+    local msys
+    case ${CLAUDE_PID:-} in '' | *[!0-9]*) return 1 ;; esac
+    fm_win_msys_pid "$CLAUDE_PID" || return 1
+    msys=$FM_WIN_MSYS_PID
+    fm_win_proc "$msys" msys || return 1
+    _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS" && [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || return 1
+    printf '%s\n' "$msys"
   }
 fi
 
