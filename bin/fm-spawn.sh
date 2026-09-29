@@ -246,9 +246,9 @@
 #   task worktree. When an origin configuration is detected, spawn fetches it,
 #   resolves the current remote default branch, and resets to its tip. When none
 #   is detected, spawn skips that remote freshness check and launches from the
-#   clean worktree's current HEAD. A worktree attached to a branch that holds
-#   commits the remote default lacks is refused rather than reset, so those
-#   commits are never orphaned. Relaunch reuses the recorded worktree without
+#   clean worktree's current HEAD. A worktree whose HEAD holds commits that no
+#   other branch, remote-tracking ref or tag has is refused rather than reset,
+#   and the refusal prints the git command that keeps them. Relaunch reuses the recorded worktree without
 #   fetching or resetting its base. An unreachable detected origin, unresolved
 #   default branch, or non-clean worktree refuses a fresh spawn rather than
 #   risking a PR based on stale history or discarding local work.
@@ -3313,7 +3313,7 @@ spawn_worktree_has_origin_config() { # <worktree>
 }
 
 freshen_spawn_worktree_base() { # <worktree>
-  local worktree=$1 default target expected actual status branch
+  local worktree=$1 default target expected actual status branch lost keep
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
     echo "error: could not inspect pooled worktree '$worktree' before refreshing its base" >&2
     return 1
@@ -3351,8 +3351,14 @@ freshen_spawn_worktree_base() { # <worktree>
     return 1
   }
   branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=
-  if [ -n "$branch" ] && ! git -C "$worktree" merge-base --is-ancestor HEAD "$expected"; then
-    echo "error: pooled worktree '$worktree' is attached to branch '$branch', which holds commits '$target' lacks; refusing to reset it and orphan them" >&2
+  lost=$(git -C "$worktree" rev-list -n1 HEAD --not ${branch:+"--exclude=$branch"} --branches --remotes --tags) || lost=unknown
+  if [ -n "$lost" ]; then
+    if [ -n "$branch" ]; then
+      keep="switch --detach"
+    else
+      keep="branch fm-kept-$(git -C "$worktree" rev-parse --short HEAD)"
+    fi
+    echo "error: pooled worktree '$worktree' holds commits that no other branch, remote or tag has, so resetting it would orphan them; keep them with: git -C '$worktree' $keep, then spawn again" >&2
     return 1
   fi
   if ! git -C "$worktree" reset --hard "$target" >/dev/null; then
