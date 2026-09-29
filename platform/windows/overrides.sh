@@ -39,16 +39,19 @@ ps() { fm_win_ps "$@"; }
 _FM_WIN_PS_FN=1
 
 if declare -F fm_harness_ancestry_pids >/dev/null; then
-  # Every pid printed is a Win32 pid, an MSYS hop's own winpid, because the
-  # MSYS and Win32 pid spaces overlap: a lock that could hold either kind can
-  # read a dead MSYS holder as a live Win32 process of the same number.
+  # Every pid printed is an MSYS pid, the space upstream's kill -0, /proc and
+  # ps checks read, because the MSYS and Win32 pid spaces overlap. A harness
+  # reached only through the Win32 chain is printed by the MSYS pid Cygwin
+  # gave it when an MSYS shell started it; one with none cannot own a lock.
   fm_harness_ancestry_pids() {
     local pid=$$ space=msys extending=0 printed=0 hop
     for ((hop = 0; hop < 16; hop++)); do
       fm_win_proc "$pid" "$space" || break
       if _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"; then
-        printf '%s\n' "$FM_PROC_WINPID"
-        printed=1
+        if [ "$space" = msys ]; then
+          printf '%s\n' "$pid"
+          printed=1
+        fi
         [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
         extending=1
       elif [ "$extending" -eq 1 ]; then
@@ -59,47 +62,6 @@ if declare -F fm_harness_ancestry_pids >/dev/null; then
       [ "$pid" -ge 1 ] || break
     done
     [ "$printed" -eq 1 ]
-  }
-
-  # `kill -0` cannot see a Win32 pid.
-  fm_harness_pid_alive() {
-    fm_win32_alive "$1" && _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"
-  }
-
-  # shellcheck disable=SC2034 # Output globals, read by fm-lock.sh status and fm-inbox.sh ready.
-  fm_session_lock_inspect() {  # <state>
-    local state=$1 lock pid
-    FM_LOCK_INSPECT_STATE=unknown
-    FM_LOCK_INSPECT_PID=
-    FM_LOCK_INSPECT_LIVE_HARNESS=unknown
-    lock="$state/.lock"
-    if [ ! -e "$lock" ]; then
-      FM_LOCK_INSPECT_STATE=free
-      FM_LOCK_INSPECT_LIVE_HARNESS=false
-      return 0
-    fi
-    if [ ! -f "$lock" ] || [ -L "$lock" ]; then
-      FM_LOCK_INSPECT_STATE=unreadable
-      return 0
-    fi
-    pid=$(cat "$lock" 2>/dev/null) || {
-      FM_LOCK_INSPECT_STATE=unreadable
-      return 0
-    }
-    pid=${pid%%$'\n'*}
-    FM_LOCK_INSPECT_PID=$pid
-    case "$pid" in '' | *[!0-9]*) return 0 ;; esac
-    if fm_win32_alive "$pid"; then
-      if _fm_win_is_harness "$FM_PROC_COMM" "$FM_PROC_ARGS"; then
-        FM_LOCK_INSPECT_STATE=held
-        FM_LOCK_INSPECT_LIVE_HARNESS=true
-      else
-        FM_LOCK_INSPECT_LIVE_HARNESS=false
-      fi
-      return 0
-    fi
-    FM_LOCK_INSPECT_STATE=stale
-    FM_LOCK_INSPECT_LIVE_HARNESS=false
   }
 fi
 

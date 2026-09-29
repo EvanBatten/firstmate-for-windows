@@ -95,26 +95,51 @@ for ($i = 0; $i -lt 16 -and $p; $i++) {
   [ -n "${_FM_W32_PPID[$root]+x}" ]
 }
 
+# Firstmate records and checks pids in MSYS space only: kill -0, /proc and ps
+# all read that space. A native program started from an MSYS process, such as
+# claude.exe started from Git Bash, has an MSYS pid too, whose /proc winpid is
+# the program's Win32 pid. Set FM_WIN_MSYS_PID to the MSYS pid of Win32 pid $1,
+# or return 1 when the process has none.
+fm_win_msys_pid() {
+  local p w
+  for p in /proc/[0-9]*; do
+    w=''
+    { read -r w < "$p/winpid"; } 2>/dev/null
+    [ "$w" = "$1" ] || continue
+    FM_WIN_MSYS_PID=${p#/proc/}
+    return 0
+  done
+  return 1
+}
+
+# A parent reached through the Win32 chain is named by its MSYS pid when it has
+# one, so a walk leaves Win32 space as soon as it can.
+_fm_win_parent() {
+  if fm_win_msys_pid "$1"; then
+    FM_PROC_PPID=$FM_WIN_MSYS_PID FM_PROC_PSPACE=msys
+  else
+    FM_PROC_PPID=$1 FM_PROC_PSPACE=w32
+  fi
+}
+
 # shellcheck disable=SC2034 # FM_PROC_PSPACE is read by the walks in overrides.sh.
 fm_win_proc() {
   local pid=$1
   FM_PROC_PSPACE=msys
   if [ "${2:-}" != w32 ] && fm_win_msys_proc "$pid"; then
     if [ "$FM_PROC_PPID" -le 1 ] && fm_win32_chain_load "$FM_PROC_WINPID"; then
-      FM_PROC_PPID=${_FM_W32_PPID[$FM_PROC_WINPID]}
-      FM_PROC_PSPACE=w32
+      _fm_win_parent "${_FM_W32_PPID[$FM_PROC_WINPID]}"
     fi
     return 0
   fi
   [ -n "${_FM_W32_PPID[$pid]+x}" ] || _fm_win32_cache_load
   [ -n "${_FM_W32_PPID[$pid]+x}" ] || fm_win32_alive "$pid" || return 1
   fm_win32_chain_load "$pid" || return 1
-  FM_PROC_PPID=${_FM_W32_PPID[$pid]}
+  _fm_win_parent "${_FM_W32_PPID[$pid]}"
   FM_PROC_PGID=$pid
   FM_PROC_COMM=${_FM_W32_COMM[$pid]}
   FM_PROC_ARGS=$FM_PROC_COMM
   FM_PROC_WINPID=$pid
-  FM_PROC_PSPACE=w32
 }
 
 # Windows pids are multiples of 4, so anything else is answered without a fork.
