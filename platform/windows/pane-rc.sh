@@ -10,12 +10,20 @@
 # command itself sources env.sh once per shell and reports the cwd.
 
 # Herdr drops a PATH passed with --env, so the creating shell's PATH arrives
-# under this name.
-[ -z "${FM_PANE_PATH:-}" ] || PATH=$FM_PANE_PATH
+# under this name: MSYS spelling from herdr.sh, Windows spelling from a native
+# creator such as fm-drive.
+case ${FM_PANE_PATH:-} in
+  '') ;;
+  *\;* | [A-Za-z]:*) PATH=$(cygpath -u -p -- "$FM_PANE_PATH") ;;
+  *) PATH=$FM_PANE_PATH ;;
+esac
+# A native creator names this file in drive spelling, which env.sh would take
+# for a relative path.
+_fm_win_env=$(cygpath -u -- "${BASH_SOURCE[0]%/*}")/env.sh
 # shellcheck source=/dev/null
 [ ! -r ~/.bashrc ] || . ~/.bashrc
 # shellcheck source=platform/windows/env.sh
-. "${BASH_SOURCE[0]%/*}/env.sh"
+. "$_fm_win_env"
 _FM_WIN_PANE_SHELL=1
 
 # A native program such as treehouse.exe needs the Windows spelling.
@@ -23,7 +31,6 @@ SHELL=$(cygpath -w "$BASH")
 
 # Herdr's pane cwd on Windows is whatever the shell last reported with OSC 9;9.
 # _FM_WIN_PANE_SHELL stays unexported, so each nested shell sees it unset.
-_fm_win_env=${BASH_SOURCE[0]%/*}/env.sh
 # shellcheck disable=SC2016,SC2089 # A command string, expanded at each prompt.
 printf -v PROMPT_COMMAND '[ -n "${_FM_WIN_PANE_SHELL-}" ] || { _FM_WIN_PANE_SHELL=1; . %q; }; printf %q "$(cygpath -w "$PWD")"%s' \
   "$_fm_win_env" $'\e]9;9;%s\a' "${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
