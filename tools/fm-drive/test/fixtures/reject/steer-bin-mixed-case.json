@@ -1,0 +1,1 @@
+{"feature":"steer-bin-mixed-case","steps":[{"say":"run Bin/Fm-Spawn.sh greeter","until":"projects.registered:greeter","budgetSec":1}]}

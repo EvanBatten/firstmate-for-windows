@@ -1,0 +1,164 @@
+script	kind	real	run_by	tests_naming_it
+fm-afk-launch.sh	entry	no		3
+fm-afk-return.sh	entry	no		2
+fm-afk-start.sh	entry	no		3
+fm-arm-pretool-check.sh	entry	no		5
+fm-backend-hometag-lib.sh	library	no		0
+fm-backend.sh	entry	no		29
+fm-backlog-handoff.sh	entry	no		4
+fm-backlog-receive.sh	entry	no		1
+fm-backlog-transition-lib.sh	library	yes	real-session vanished-endpoint-recovery	3
+fm-bearings-board.sh	entry	no		2
+fm-bearings-snapshot.sh	entry	no		4
+fm-bootstrap.sh	entry	no		19
+fm-branch-outcome.sh	entry	no		3
+fm-branch-prompt.sh	entry	no		2
+fm-brief.sh	entry	yes	real-session secondmate-home	9
+fm-busy-event.sh	entry	yes	real-session	13
+fm-busy-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	10
+fm-captain-hold.sh	entry	yes	captain-decision condition-watch	3
+fm-cd-pretool-check.sh	entry	no		4
+fm-check-lib.sh	library	no		2
+fm-check-register.sh	entry	no		4
+fm-classify-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	16
+fm-claude-stop-autoarm.sh	entry	no		7
+fm-composer-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	6
+fm-config-inherit-lib.sh	library	yes	real-session vanished-endpoint-recovery	5
+fm-config-push.sh	entry	no		4
+fm-control-lib.sh	library	yes	real-session steer-guard vanished-endpoint-recovery	3
+fm-control.sh	entry	yes	vanished-endpoint-recovery	4
+fm-crew-state.sh	entry	yes	real-session vanished-endpoint-recovery	8
+fm-cursor-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	10
+fm-decision-hold.sh	entry	no		3
+fm-doc-audience-check.sh	entry	no		1
+fm-dod-lib.sh	library	yes	real-session secondmate-home	0
+fm-ensure-agents-md.sh	entry	no		1
+fm-extension.sh	entry	no		1
+fm-ff-lib.sh	library	yes	real-session vanished-endpoint-recovery	2
+fm-fleet-snapshot.sh	entry	yes	real-session	5
+fm-fleet-sync.sh	entry	no		6
+fm-fleet-view.sh	entry	no		1
+fm-gate-refuse-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	7
+fm-guard.sh	entry	yes	captain-inbox condition-watch local-only-landing real-session steer-guard vanished-endpoint-recovery wake-queue	13
+fm-harness.sh	entry	yes	captain-inbox condition-watch local-only-landing real-session steer-guard vanished-endpoint-recovery wake-queue	11
+fm-herdr-ci-cleanup.sh	entry	no		0
+fm-herdr-lab.sh	entry	yes	herdr-lab-pane	13
+fm-herdr-session-cleanup.sh	entry	no		2
+fm-home-seed.sh	entry	yes	secondmate-home	7
+fm-home-summary-refresh.sh	entry	yes	real-session	1
+fm-hook-host-lib.sh	library	no		7
+fm-inactive-reconcile.sh	entry	no		1
+fm-inbox.sh	entry	yes	captain-inbox wake-queue	1
+fm-install-actionlint.sh	entry	no		1
+fm-install-herdr.sh	entry	no		0
+fm-install-shellcheck.sh	entry	no		1
+fm-install-treehouse.sh	entry	no		0
+fm-jq-lib.sh	library	no		3
+fm-kimi-turnend-hook.sh	entry	no		1
+fm-lease-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	3
+fm-lease.sh	entry	no		3
+fm-line-cap-lib.sh	library	yes	captain-inbox condition-watch real-session steer-guard wake-queue	1
+fm-lint-workflows.sh	entry	no		1
+fm-lint.sh	entry	no		4
+fm-lock-lib.sh	library	yes	real-session	2
+fm-lock.sh	entry	no		11
+fm-marker-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	9
+fm-merge-local.sh	entry	yes	local-only-landing real-session	1
+fm-merge-outcome-lib.sh	library	no		2
+fm-nm-run-lib.sh	library	yes	real-session vanished-endpoint-recovery	1
+fm-on.sh	entry	no		12
+fm-operational-input.sh	entry	no		15
+fm-path-lib.sh	library	yes	real-session vanished-endpoint-recovery	2
+fm-peek.sh	entry	no		8
+fm-pending-reply-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	11
+fm-pr-check.sh	entry	no		4
+fm-pr-lib.sh	library	yes	condition-watch real-session vanished-endpoint-recovery	5
+fm-pr-merge.sh	entry	no		3
+fm-pr-poll.sh	entry	no		1
+fm-primary-scope-lib.sh	library	no		8
+fm-private-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	18
+fm-proc-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	29
+fm-procevent-lavish.sh	entry	no		5
+fm-procevent-lib.sh	library	yes	condition-watch	3
+fm-procevent-remote-reply.sh	entry	no		3
+fm-procevent-when.sh	entry	yes	condition-watch	1
+fm-procevent.sh	entry	yes	condition-watch	13
+fm-project-mode.sh	entry	yes	real-session vanished-endpoint-recovery	4
+fm-project-origin-lib.sh	library	no		1
+fm-promote.sh	entry	no		3
+fm-public-followup-emit.sh	entry	no		1
+fm-public-followup-lib.sh	library	yes	real-session	2
+fm-public-followup.sh	entry	no		3
+fm-push-transition-lib.sh	library	no		2
+fm-quota-axi-lib.sh	library	no		0
+fm-remote-delta-read.sh	entry	no		2
+fm-remote-doctor.sh	entry	no		6
+fm-remote-entrypoint.sh	entry	no		14
+fm-remote-file.sh	entry	no		2
+fm-remote-home-provision.sh	entry	no		2
+fm-remote-home-seed.sh	entry	no		3
+fm-remote-inherit-push.sh	entry	no		0
+fm-remote-inherit.sh	entry	no		3
+fm-remote-job-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	9
+fm-remote-job-reap-orphans.sh	entry	yes	real-session	1
+fm-remote-job-worker.sh	entry	no		7
+fm-remote-readiness-lib.sh	library	yes	real-session vanished-endpoint-recovery	0
+fm-remote-secondmate-control.sh	entry	no		8
+fm-repo-invariants.sh	entry	no		2
+fm-review-diff.sh	entry	no		1
+fm-secondmate-charter-lib.sh	library	yes	secondmate-home	0
+fm-secondmate-nudge-lib.sh	library	yes	real-session vanished-endpoint-recovery	0
+fm-secondmate-parent-lib.sh	library	yes	real-session secondmate-home	1
+fm-secondmate-reconcile.sh	entry	no		1
+fm-secondmate-registry-lib.sh	library	yes	real-session secondmate-home vanished-endpoint-recovery	1
+fm-secondmate-report.sh	entry	no		3
+fm-send.sh	entry	yes	real-session steer-guard	28
+fm-session-lock-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	10
+fm-session-start.sh	entry	no		12
+fm-sessionstart-cursor.sh	entry	no		1
+fm-sessionstart-nudge.sh	entry	no		5
+fm-sessionstart-run.sh	entry	no		8
+fm-spawn.sh	entry	yes	real-session vanished-endpoint-recovery	47
+fm-startup-memory-budget-lib.sh	library	yes	real-session vanished-endpoint-recovery	0
+fm-startup-memory-budget.sh	entry	no		2
+fm-startup-network.sh	entry	no		3
+fm-stow-cascade.sh	entry	no		1
+fm-subagent-pretool-check.sh	entry	no		3
+fm-supervise-daemon.sh	entry	no		8
+fm-supervision-instructions.sh	entry	yes	condition-watch local-only-landing real-session vanished-endpoint-recovery	4
+fm-supervision-lib.sh	library	yes	captain-inbox condition-watch local-only-landing real-session steer-guard vanished-endpoint-recovery wake-queue	5
+fm-supervisor-target-lib.sh	library	no		1
+fm-tangle-lib.sh	library	yes	captain-inbox condition-watch local-only-landing real-session steer-guard vanished-endpoint-recovery wake-queue	1
+fm-task-inbox-lib.sh	library	yes	real-session secondmate-home steer-guard	16
+fm-tasks-axi-lib.sh	library	yes	captain-decision condition-watch real-session vanished-endpoint-recovery	4
+fm-teardown.sh	entry	yes	real-session	29
+fm-test-isolation-proof.sh	entry	no		1
+fm-test-run.sh	entry	no		2
+fm-timeout-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	6
+fm-timing-lib.sh	library	no		7
+fm-tmux-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	9
+fm-tool-update-check.sh	entry	no		1
+fm-trace-context-lib.sh	library	yes	real-session vanished-endpoint-recovery	4
+fm-transition-lib.sh	library	no		2
+fm-turnend-guard-cursor.sh	entry	no		2
+fm-turnend-guard-grok.sh	entry	no		1
+fm-turnend-guard.sh	entry	no		6
+fm-update.sh	entry	no		1
+fm-vendor-auth-probe.sh	entry	no		1
+fm-wake-drain.sh	entry	yes	captain-inbox condition-watch wake-queue	26
+fm-wake-grant.sh	entry	no		2
+fm-wake-lib.sh	library	yes	captain-decision captain-inbox condition-watch local-only-landing real-session secondmate-home steer-guard vanished-endpoint-recovery wake-queue	39
+fm-watch-arm.sh	entry	no		18
+fm-watch-checkpoint.sh	entry	no		7
+fm-watch.sh	entry	no		23
+fm-x-dismiss.sh	entry	no		1
+fm-x-followup.sh	entry	no		2
+fm-x-lib.sh	library	yes	real-session	4
+fm-x-link.sh	entry	no		3
+fm-x-poll.sh	entry	no		2
+fm-x-reply.sh	entry	no		1
+backends/cmux.sh	entry	no		2
+backends/herdr.sh	entry	no		17
+backends/orca.sh	entry	no		1
+backends/tmux.sh	entry	no		7
+backends/zellij.sh	entry	no		2

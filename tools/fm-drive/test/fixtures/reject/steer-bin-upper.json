@@ -1,0 +1,1 @@
+{"feature":"steer-bin-upper","steps":[{"say":"run BIN/FM-SPAWN.SH greeter","until":"projects.registered:greeter","budgetSec":1}]}

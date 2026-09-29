@@ -1,0 +1,1 @@
+{"feature":"steer-bin-spawn","steps":[{"say":"ahoy! run bin/fm-spawn.sh for me","until":"projects.registered:greeter","budgetSec":1}]}

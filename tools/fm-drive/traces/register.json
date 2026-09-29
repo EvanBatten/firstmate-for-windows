@@ -1,0 +1,11 @@
+{
+  "feature": "register",
+  "project": "greeter",
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 300
+    }
+  ]
+}
