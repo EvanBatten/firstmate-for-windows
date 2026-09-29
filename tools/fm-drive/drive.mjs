@@ -9,6 +9,7 @@ import { HerdrError } from './lib/herdr.mjs';
 
 const T0 = Date.now();
 const CAPTAIN_PATH = { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched' };
+const CAPTAIN_PATH_AT_CLOSE = { hooks: ['repo'], captainMd: ['untouched', 'written-after-say'] };
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {
@@ -72,6 +73,7 @@ async function run(trace) {
     evidence: session.evidenceDir,
   };
   let exitCode = 1;
+  let recheckAtClose = false;
   let closing = null;
   const finish = async () => {
     if (!closing) closing = session.close({ keepEvidence: !result.rejected }).catch((err) => { log(`cleanup problem: ${err.message}`); return 0; });
@@ -95,6 +97,7 @@ async function run(trace) {
     if (broken.length) {
       throw new Error(`the prepared home is not the captain path: ${broken.map(([field]) => `fidelity.${field} is ${result.fidelity[field]}`).join(', ')}`);
     }
+    recheckAtClose = true;
     await session.open();
     result.overhead.setupMs = Date.now() - setupStart;
     const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home };
@@ -204,6 +207,18 @@ async function run(trace) {
     }
     exitCode = err instanceof HerdrError || err instanceof TraceError ? err.exitCode : 3;
   } finally {
+    if (recheckAtClose) {
+      const { hooks, captainMd } = await session.fidelity();
+      result.fidelityAtClose = { hooks, captainMd };
+      const changed = Object.entries(CAPTAIN_PATH_AT_CLOSE).filter(([field, allowed]) => !allowed.includes(result.fidelityAtClose[field]));
+      if (changed.length) {
+        const why = `the home left the captain path during the run: ${changed.map(([field]) => `fidelityAtClose.${field} is ${result.fidelityAtClose[field]}`).join(', ')}`;
+        log(why);
+        result.error = result.error ? `${result.error}; ${why}` : why;
+        result.pass = false;
+        exitCode = 3;
+      }
+    }
     const closeStart = Date.now();
     await finish();
     result.overhead.closeMs = Date.now() - closeStart;

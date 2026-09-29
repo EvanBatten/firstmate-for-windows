@@ -11,7 +11,7 @@
 //   FM_DRIVE_PANE_PATH_EXTRA  extra PATH entries for the pane, before the inherited PATH
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, copyFileSync, chmodSync, linkSync, readlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, statSync, copyFileSync, chmodSync, linkSync, readlinkSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -395,14 +395,21 @@ export class Session {
   }
 
   async fidelity() {
-    const committed = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
+    if (this.committedHooks === undefined) {
+      this.committedHooks = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
+    }
     let settings = null;
     try { settings = readFileSync(join(this.home, '.claude', 'settings.json')); } catch {}
-    const same = committed === null ? settings === null : settings !== null && committed.equals(settings);
+    const same = this.committedHooks === null ? settings === null : settings !== null && this.committedHooks.equals(settings);
+    let captainMd = 'untouched';
+    try {
+      const { mtimeMs } = statSync(join(this.home, 'data', 'captain.md'));
+      captainMd = this.firstSaidAt !== undefined && mtimeMs >= this.firstSaidAt ? 'written-after-say' : 'present';
+    } catch {}
     return {
       claudeConfig: measureClaudeConfig(this.claudeConfigDir),
       hooks: same ? 'repo' : 'modified',
-      captainMd: existsSync(join(this.home, 'data', 'captain.md')) ? 'present' : 'untouched',
+      captainMd,
       model: this.model,
     };
   }
@@ -656,6 +663,7 @@ export class Session {
 
   async say(text) {
     const t0 = Date.now();
+    this.firstSaidAt ??= t0;
     this.captainLog.push(`${new Date().toISOString()}\t${text}`);
     appendFileSync(join(this.evidenceDir, 'captain.log'), `${this.captainLog.at(-1)}\n`);
     if (this.signals.blocked) {
