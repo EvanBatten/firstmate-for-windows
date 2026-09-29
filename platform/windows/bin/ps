@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Answers upstream's `ps -o <field>= -p <pid>` forms, which MSYS ps rejects.
+# shellcheck source=platform/windows/proc.sh
+. "${BASH_SOURCE[0]%/*}/../proc.sh"
+fm_win_ps "$@"

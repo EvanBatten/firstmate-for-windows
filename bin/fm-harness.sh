@@ -528,6 +528,7 @@ validate_native_effort() {
   return 1
 }
 
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'
 case "${1:-}" in
   validate-native-effort) shift; validate_native_effort "$@" ;;
   ancestry)
