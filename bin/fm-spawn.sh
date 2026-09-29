@@ -3350,7 +3350,7 @@ freshen_spawn_worktree_base() { # <worktree>
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   }
-  branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=
+  branch=$(git -C "$worktree" symbolic-ref --quiet HEAD 2>/dev/null) && branch=${branch#refs/heads/} || branch=
   lost=$(git -C "$worktree" rev-list -n1 HEAD --not ${branch:+"--exclude=$branch"} --branches --remotes --tags) || lost=unknown
   if [ -n "$lost" ]; then
     if [ -n "$branch" ]; then
