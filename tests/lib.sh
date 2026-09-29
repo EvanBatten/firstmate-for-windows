@@ -774,3 +774,4 @@ fm_test_base_path_sans() {
   done
   printf '%s\n' "$dir"
 }
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "${FM_PLATFORM_OVERLAY%/*}/test-lib.sh"'
