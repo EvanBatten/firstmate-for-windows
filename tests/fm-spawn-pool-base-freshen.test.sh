@@ -432,6 +432,37 @@ test_dirty_pool_refuses_without_discarding_work() {
   pass "a dirty pooled worktree is refused without discarding its local work"
 }
 
+test_attached_pool_branch_with_unique_commits_refuses() {
+  local rec id out status branch_tip fresh_id
+  id='pool-attached-branch-r15'
+  rec=$(make_case attached-branch "$id")
+  read_case_record "$rec"
+  git -C "$POOL_DIR" switch --quiet -c wip
+  printf 'work only this branch holds\n' > "$POOL_DIR/wip.txt"
+  git -C "$POOL_DIR" add wip.txt
+  git -C "$POOL_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm wip-work
+  branch_tip=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn reset a pooled worktree whose branch holds commits the base lacks"
+  assert_contains "$out" "attached to branch 'wip'" "spawn did not name the branch it refused to reset"
+  [ "$(git -C "$PROJECT_DIR" rev-parse refs/heads/wip)" = "$branch_tip" ] \
+    || fail "spawn moved branch wip and orphaned its commit"
+  [ "$(git -C "$POOL_DIR" symbolic-ref HEAD)" = refs/heads/wip ] \
+    || fail "spawn detached the refused pooled worktree"
+
+  fresh_id='pool-attached-fresh-branch-r15'
+  fm_test_spawn_brief "$HOME_DIR" "$fresh_id"
+  git -C "$POOL_DIR" switch --quiet -c fresh "$INITIAL_SHA"
+  out=$(run_spawn "$fresh_id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should reset a branch that holds nothing beyond the base"$'\n'"$out"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/main)" ] \
+    || fail "spawn left a fresh branch on stale history"
+  pass "a pooled branch with unique commits is refused, and a fresh branch still refreshes"
+}
+
 test_unresolved_remote_default_refuses_pool() {
   local rec id out status before
   id='pool-unresolved-default-r5'
@@ -750,6 +781,7 @@ test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
+test_attached_pool_branch_with_unique_commits_refuses
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch
