@@ -8,6 +8,7 @@ unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
 
 T=$(mktemp -d /tmp/fm-win-lock.XXXXXX)
 BASH_EXE=$(cygpath -w /usr/bin/bash)
+GIT_BASH_LAUNCHER="$(cygpath -w /)\bin\bash.exe"
 fails=0
 ok() { printf 'ok - %s\n' "$1"; }
 not_ok() { printf 'not ok - %s\n' "$1"; fails=$((fails + 1)); }
@@ -28,36 +29,38 @@ H=$T/home
 mkdir -p "$H/state" "$T/marks"
 cat > "$T/session.sh" <<EOF
 #!/usr/bin/env bash
-cd $(printf '%q' "$ROOT") && . platform/windows/env.sh
+cd $(printf '%q' "$ROOT") || exit 1
+[ "\$3" = hook ] || . platform/windows/env.sh
 unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
 export FM_HOME=\$2
 while :; do
   for go in $(printf '%q' "$T")/marks/\$1.go.*; do
     [ -e "\$go" ] || continue
-    rm -f "\$go"
-    bin/fm-lock.sh > "\${go/.go./.out.}" 2>&1
+    cmd=\$(cat "\$go"); rm -f "\$go"
+    eval "\${cmd:-bin/fm-lock.sh}" > "\${go/.go./.out.}" 2>&1
     echo "rc=\$?" >> "\${go/.go./.out.}"
   done
   sleep 0.2
 done
 EOF
 
-start_session() {
-  local i pid
+start_session() {  # <name> <home> [hook]
+  local i pid winpid bash_exe=$BASH_EXE
   mkdir -p "$T/$1"
+  [ "${3:-}" != hook ] || bash_exe=$GIT_BASH_LAUNCHER
   cp /c/Windows/System32/cmd.exe "$T/$1/claude.exe"
-  MSYS2_ARG_CONV_EXCL='*' "$T/$1/claude.exe" /c "$BASH_EXE" "$(cygpath -m "$T/session.sh")" "$1" "$2" > /dev/null 2>&1 &
+  MSYS2_ARG_CONV_EXCL='*' "$T/$1/claude.exe" /c "$bash_exe" "$(cygpath -m "$T/session.sh")" "$1" "$2" ${3:+"$3"} > /dev/null 2>&1 &
   for ((i = 0; i < 50; i++)); do
-    pid=$(/usr/bin/ps -W | awk -v p="$1/claude" 'index($0, p) {print $4; exit}')
+    read -r pid winpid < <(/usr/bin/ps -W | awk -v p="$1/claude" 'index($0, p) {print $1, $4; exit}')
     [ -n "$pid" ] && break
     sleep 0.2
   done
-  HARNESS_PIDS+=("$pid")
-  SESSION_PID=$pid
+  HARNESS_PIDS+=("$winpid")
+  SESSION_PID=$pid SESSION_WINPID=$winpid
 }
-run_lock() {
+run_lock() {  # <session> <n> [<command>]
   local i
-  : > "$T/marks/$1.go.$2"
+  printf '%s' "${3:-}" > "$T/marks/$1.go.$2"
   for ((i = 0; i < 600; i++)); do
     grep -q '^rc=' "$T/marks/$1.out.$2" 2>/dev/null && break
     sleep 0.1
@@ -74,16 +77,29 @@ start_session s0 "$spelled"; p0=$SESSION_PID
 expect "a home spelled through the drive takes the lock" "lock acquired: harness pid $p0" "$(run_lock s0 1)"
 expect "status agrees for that holder" "held by live harness pid $p0" "$(lock_status "$spelled")"
 
-start_session s1 "$H"; p1=$SESSION_PID
+# Claude runs a hook through Git's bin/bash.exe, which puts /usr/bin ahead of
+# the overlay's bin, and the hook inherits the overlay only through the
+# environment claude.exe was started with.
+hook_home=$T/hook
+mkdir -p "$hook_home/state"
+start_session s9 "$hook_home" hook; p9=$SESSION_PID
+expect "a hook-shaped session takes the lock" "lock acquired: harness pid $p9" "$(run_lock s9 1)"
+
+start_session s1 "$H"; p1=$SESSION_PID w1=$SESSION_WINPID
 start_session s2 "$H"; p2=$SESSION_PID
 
 expect "the first session takes the lock" "lock acquired: harness pid $p1" "$(run_lock s1 1)"
 expect "status names the first session" "held by live harness pid $p1" "$(lock_status "$H")"
 expect "a second session in the same home is refused" "another live firstmate session holds the lock (pid $p1)" "$(run_lock s2 1)"
 expect "the same session re-enters" "lock acquired: harness pid $p1" "$(run_lock s1 2)"
-taskkill //F //T //PID "$p1" >/dev/null 2>&1
+taskkill //F //T //PID "$w1" >/dev/null 2>&1
 expect "status reports a killed holder as stale" "lock: stale (pid $p1" "$(lock_status "$H")"
 expect "a second session takes over from a killed holder" "lock acquired: harness pid $p2" "$(run_lock s2 2)"
 expect "status names the new holder" "held by live harness pid $p2" "$(lock_status "$H")"
+
+expect "the holder claims a task lease" "rc=0" "$(run_lock s2 3 'FM_SUPERVISION_ACTOR=main bin/fm-lease.sh claim t1')"
+expect "the lease reads live while its holder lives" "main $p2 " "$(run_lock s2 4 'bin/fm-lease.sh check t1')"
+expect "the lease reads live, not stale" " live" "$(run_lock s2 5 'bin/fm-lease.sh check t1')"
+expect "another actor cannot claim a live lease" "rc=6" "$(run_lock s2 6 'FM_SUPERVISION_ACTOR=branch bin/fm-lease.sh claim t1 --actor branch')"
 
 [ "$fails" -eq 0 ]

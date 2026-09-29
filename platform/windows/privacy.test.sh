@@ -50,6 +50,14 @@ expect "a bash under a native parent gets 022 for an open home" \
   "umask=0022" \
   "$(clean FM_HOME="$P" bash -c '. platform/windows/env.sh; FM_HOME=$O MSYS2_ARG_CONV_EXCL="*" cmd.exe /c "bash -c umask"' | sed 's/^/umask=/')"
 
+mkdir -p "$T/b/platform"
+cp -r platform/windows "$T/b/platform/windows"
+echo 'echo prior-ran' > "$T/prior.sh"
+export T
+expect "a second checkout's env.sh keeps the user's BASH_ENV once and does not loop" \
+  "[prior-ran|umask=0077|]" \
+  "[$(clean FM_HOME="$P" bash -c 'export BASH_ENV=$T/prior.sh; . platform/windows/env.sh; . "$T/b/platform/windows/env.sh"; bash -c "echo umask=\$(umask)" 2>&1 | tr "\n" "|"')]"
+
 rc_of() { clean PATH="$1" bash platform/windows/private-root.sh check "$2" > /dev/null 2>&1; echo "rc=$?"; }
 expect "without icacls an open root is open" "rc=1" "$(rc_of /usr/bin "$O")"
 expect "without icacls a private root is open" "rc=1" "$(rc_of /usr/bin "$P")"
