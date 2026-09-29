@@ -46,9 +46,14 @@ if [ "$_fm_win_private" = 0 ]; then
     printf '%s\n' "$_fm_win_out" | grep -v '^private ' >&2
   fi
 fi
-# A native parent hands BASH_ENV back in drive spelling, so compare files.
+# A native parent hands BASH_ENV back in drive spelling, so compare files. A
+# BASH_ENV from another checkout's overlay already chains the user's own, and
+# chaining it again would make each bash-env.sh source the other forever.
 _fm_win_ours=0
-[ -n "${BASH_ENV:-}" ] && [ "$BASH_ENV" -ef "$_fm_win_dir/bash-env.sh" ] && _fm_win_ours=1
+if [ -n "${BASH_ENV:-}" ]; then
+  [ "$BASH_ENV" -ef "$_fm_win_dir/bash-env.sh" ] && _fm_win_ours=1
+  [ -n "${FM_PLATFORM_OVERLAY:-}" ] && [ "$BASH_ENV" -ef "${FM_PLATFORM_OVERLAY%/*}/bash-env.sh" ] && _fm_win_ours=1
+fi
 if [ "$_fm_win_private" = 1 ]; then
   umask 077
   [ "$_fm_win_ours" = 1 ] || FM_WIN_PRIOR_BASH_ENV=${BASH_ENV:-}
