@@ -869,6 +869,35 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.deepEqual({ clean, leaked }, { clean: 'clean', leaked: 'carries CLAUDE.md, settings.json:hooks' });
   });
 
+  test('a shell prompt read before a launch does not mark the launched primary dead', async () => {
+    let release;
+    const heldRead = new Promise((r) => { release = r; });
+    const s = new sessionLib.Session({ trace: { feature: 'race', steps: [] }, env: process.env });
+    s.paneId = 'p1';
+    s.home = '/home/captain/firstmate';
+    s.claudeConfigDir = '/home/captain/claude-config';
+    s.herdr = {
+      subscribe: () => null,
+      call: async (method) => {
+        if (method === 'pane.get') return { pane: { agent_status: 'unknown' } };
+        if (method === 'pane.read') { await heldRead; return { read: { text: 'user@host MINGW64 ~\n$ ' } }; }
+        return {};
+      },
+    };
+    s.awaitReady = async () => {};
+    s.watchDialogs = () => {};
+    s.watchPrimaryStatus();
+    try {
+      await new Promise((r) => setImmediate(r));
+      await s.launch();
+      release();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      clearInterval(s.statusPoll);
+    }
+    assert.equal(s.signals.shellDead, null);
+  });
+
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
     const home = buildHome('ship-in-flight');
     const started = Date.now();
