@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# jq on Windows writes CRLF, which leaves a CR on every value upstream reads.
+# -b makes it write LF.
+self=${BASH_SOURCE[0]%/*}
+IFS=: read -r -a dirs <<< "$PATH"
+for d in "${dirs[@]}"; do
+  [ -n "$d" ] && [ ! "$d" -ef "$self" ] && [ -x "$d/jq" ] && exec "$d/jq" -b "$@"
+done
+echo "jq: not found on PATH" >&2
+exit 127

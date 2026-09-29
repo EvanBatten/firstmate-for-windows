@@ -2698,3 +2698,4 @@ EOF
 
   return 0
 }
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'

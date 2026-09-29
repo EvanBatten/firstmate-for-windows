@@ -1,0 +1,187 @@
+file	kind	code
+bin/fm-afk-launch.sh	recorded	actual=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+bin/fm-afk-launch.sh	live	identity=$(fm_pid_identity "$$" 2>/dev/null) || {
+bin/fm-afk-launch.sh	recorded	pid_identity=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+bin/fm-afk-launch.sh	recorded	fm_pid_alive "$pid" || break
+bin/fm-afk-launch.sh	recorded	if [ -n "$pid" ] && fm_pid_alive "$pid"; then
+bin/fm-afk-launch.sh	recorded	current_identity=$(fm_pid_identity "$pid" 2>/dev/null) || {
+bin/fm-afk-start.sh	recorded	current=$(fm_pid_identity "$pid") || return 1
+bin/fm-afk-start.sh	recorded	command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+bin/fm-afk-start.sh	recorded	fm_pid_alive "$pid" || return 1
+bin/fm-afk-start.sh	recorded	if fm_pid_alive "$pid" && [ -n "$pid" ]; then
+bin/fm-backend.sh	live	comm=$(ps -o comm= -p "$pid" 2>/dev/null) || comm=""
+bin/fm-backend.sh	live	ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+bin/fm-backlog-receive.sh	native-tasks-axi	kill -0 "$pid" 2>/dev/null && return 1
+bin/fm-branch-outcome.sh	recorded	fm_pid_alive "$owner_pid" || return 1
+bin/fm-branch-outcome.sh	live	parent=$(ps -o ppid= -p "$pid" 2>/dev/null) || return 1
+bin/fm-claude-stop-autoarm.sh	recorded	fm_harness_pid_alive "$LOCK_PID" && exit 0
+bin/fm-cursor-lib.sh	live	if [ -r "$proc_root/$pid/cmdline" ]; then
+bin/fm-cursor-lib.sh	live	IFS= read -r -d '' argv0 < "$proc_root/$pid/cmdline" || true
+bin/fm-cursor-lib.sh	live	fallback=$(LC_ALL=C ps -p "$pid" -o comm= 2>/dev/null || true)
+bin/fm-gemini-lib.sh	native-herdr	[ -r "/proc/$pid/cmdline" ] || return 1
+bin/fm-gemini-lib.sh	native-herdr	done < "/proc/$pid/cmdline"
+bin/fm-harness.sh	live	comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+bin/fm-harness.sh	live	pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+bin/fm-harness.sh	live	comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
+bin/fm-harness.sh	live	args=$(ps -o args= -p "$pid" 2>/dev/null)
+bin/fm-harness.sh	live	pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+bin/fm-harness.sh	live	pairs=$(ps -eo pid=,ppid= 2>/dev/null) || { printf '%s\n' "$root"; return 0; }
+bin/fm-herdr-lab.sh	native-herdr	LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+bin/fm-herdr-lab.sh	native-herdr	LC_ALL=C ps -p "$1" -o ppid= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+bin/fm-herdr-lab.sh	live	if kill -0 "$pid" 2>/dev/null; then
+bin/fm-herdr-lab.sh	live	while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt "$max_attempts" ]; do
+bin/fm-herdr-lab.sh	live	if kill -0 "$pid" 2>/dev/null; then
+bin/fm-herdr-lab.sh	live	if kill -0 "$pid" 2>/dev/null; then
+bin/fm-herdr-lab.sh	live	while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 10 ]; do
+bin/fm-herdr-lab.sh	live	if kill -0 "$pid" 2>/dev/null; then
+bin/fm-lease-lib.sh	recorded	kill -0 "$FM_LEASE_PID" 2>/dev/null || return 1
+bin/fm-lint.sh	live	if [ -r /proc/loadavg ]; then
+bin/fm-lint.sh	live	awk '{print $1 "/" $2 "/" $3}' /proc/loadavg
+bin/fm-lint.sh	live	ps -A -o %cpu= 2>/dev/null | awk '{sum += $1} END {printf "%.2f", sum + 0}'
+bin/fm-lock.sh	recorded	if fm_harness_pid_alive "$old"; then
+bin/fm-lock.sh	recorded	if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+bin/fm-lock.sh	recorded	if [ "$old" != "$me" ] && fm_harness_pid_alive "$old"; then
+bin/fm-pending-reply-lib.sh	live	identity=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+bin/fm-procevent-lib.sh	recorded	kill -0 -"$1" 2>/dev/null
+bin/fm-procevent-lib.sh	recorded	if ! fm_pid_alive "$pid"; then
+bin/fm-procevent-lib.sh	recorded	if actual=$(fm_pid_identity "$pid" 2>/dev/null); then
+bin/fm-procevent-lib.sh	recorded	fm_pid_alive "$pid" || { fm_procevent_group_alive "$pid" && return 3; return 1; }
+bin/fm-procevent-lib.sh	live	identity=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+bin/fm-procevent.sh	live	"$(fm_pid_identity "$CLAIM_PID")" "$FM_PROCEVENT_RESULT_EXTENSION_BINDING_DIGEST" "$reservation" \
+bin/fm-procevent.sh	live	pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]') \
+bin/fm-procevent.sh	live	identity=$(fm_pid_identity "$$" 2>/dev/null) || die "cannot identify the attached owner"
+bin/fm-procevent.sh	live	"$CLAIM_TOKEN" "$runner" "$out" "$$" "$(fm_pid_identity "$$")" "$MAX_OUTPUT_BYTES" \
+bin/fm-procevent.sh	live	while [ ! -s "$REG/$launch_ready" ] && kill -0 "$launch_pid" 2>/dev/null; do sleep 0.01; done
+bin/fm-procevent.sh	live	identity=$(fm_pid_identity "$$" 2>/dev/null) || return 1
+bin/fm-procevent.sh	recorded	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 2
+bin/fm-procevent.sh	recorded	kill -0 -"$pid" 2>/dev/null || return 0
+bin/fm-procevent.sh	recorded	kill -0 -"$pid" 2>/dev/null || return 0
+bin/fm-remote-doctor.sh	recorded	{ remote_job_existing_state && case "$pid" in ''|*[!0-9]*) false ;; *) kill -0 "$pid" 2>/dev/null ;; esac; }; then
+bin/fm-remote-entrypoint.sh	live	ENTRYPOINT_PPID=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)
+bin/fm-remote-entrypoint.sh	live	current=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)
+bin/fm-remote-herdr-owner-lib.sh	native-herdr	cmd=$(ps -o command= -p "$candidate" 2>/dev/null || true)
+bin/fm-remote-herdr-owner-lib.sh	live	if [ -r "/proc/$pid/environ" ]; then
+bin/fm-remote-herdr-owner-lib.sh	live	tr '\0' '\n' < "/proc/$pid/environ"
+bin/fm-remote-herdr-owner-lib.sh	live	ps -Eww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' || true
+bin/fm-remote-herdr-owner-lib.sh	live	line=$(ps -o ppid=,command= -p "$pid" 2>/dev/null) || return 0
+bin/fm-remote-job-lib.sh	live	value=$("$ps_bin" -p "$pid" -o lstart= 2>/dev/null) || return 1
+bin/fm-remote-job-lib.sh	live	value=$("$ps_bin" -p "$pid" -o command= 2>/dev/null) || return 1
+bin/fm-remote-job-lib.sh	live	value=$("$ps_bin" -p "$pid" -o pgid= 2>/dev/null) || return 1
+bin/fm-remote-job-lib.sh	recorded	while { [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null || [ -z "$pgid" ] && kill -0 "$pid" 2>/dev/null; } \
+bin/fm-remote-job-lib.sh	recorded	kill -0 -- "-$pgid" 2>/dev/null || return 0
+bin/fm-remote-job-lib.sh	recorded	kill -0 "$pid" 2>/dev/null || return 0
+bin/fm-remote-job-lib.sh	recorded	while { [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null || [ -z "$pgid" ] && kill -0 "$pid" 2>/dev/null; } \
+bin/fm-remote-job-lib.sh	recorded	! kill -0 -- "-$pgid" 2>/dev/null
+bin/fm-remote-job-lib.sh	recorded	! kill -0 "$pid" 2>/dev/null
+bin/fm-remote-job-lib.sh	live	command=$("$ps_bin" -p "$pid" -o command= 2>/dev/null) || return 1
+bin/fm-remote-job-lib.sh	recorded	kill -0 "$pid" 2>/dev/null
+bin/fm-remote-job-reap-orphans.sh	live	walk=$(ps -p "$walk" -o ppid= 2>/dev/null | tr -d '[:space:]') || return 0
+bin/fm-remote-job-worker.sh	live	if [ -d /proc/self/fd/9 ]; then
+bin/fm-remote-job-worker.sh	live	WORKER_LOCK_BOUND=/proc/self/fd/9
+bin/fm-remote-job-worker.sh	live	process) kill -0 "$2" 2>/dev/null ;;
+bin/fm-remote-job-worker.sh	live	group) kill -0 -- "-$2" 2>/dev/null ;;
+bin/fm-remote-job-worker.sh	recorded	kill -0 "$pid" 2>/dev/null && return 2
+bin/fm-remote-job-worker.sh	recorded	kill -0 "$pid" 2>/dev/null
+bin/fm-secondmate-restart.sh	live	if kill -0 "${RESTART_PID[i]}" 2>/dev/null; then
+bin/fm-secondmate-restart.sh	live	worker_state=$(ps -p "${RESTART_PID[i]}" -o stat= 2>/dev/null || true)
+bin/fm-session-lock-lib.sh	live	comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
+bin/fm-session-lock-lib.sh	live	args=$(ps -o args= -p "$pid" 2>/dev/null)
+bin/fm-session-lock-lib.sh	live	pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+bin/fm-session-lock-lib.sh	live	kill -0 "$pid" 2>/dev/null || return 1
+bin/fm-session-lock-lib.sh	live	comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+bin/fm-session-lock-lib.sh	live	args=$(ps -o args= -p "$pid" 2>/dev/null)
+bin/fm-session-lock-lib.sh	native-claude	comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+bin/fm-session-lock-lib.sh	native-claude	args=$(ps -o args= -p "$pid" 2>/dev/null)
+bin/fm-session-lock-lib.sh	recorded	fm_harness_pid_alive "$lock_pid"
+bin/fm-session-lock-lib.sh	recorded	fm_harness_pid_alive "$lock_pid" || return 1
+bin/fm-session-lock-lib.sh	recorded	if kill -0 "$pid" 2>/dev/null; then
+bin/fm-session-lock-lib.sh	recorded	if fm_harness_pid_alive "$pid"; then
+bin/fm-session-lock-lib.sh	recorded	if ps -o comm= -p "$pid" >/dev/null 2>&1; then
+bin/fm-sessionstart-nudge.sh	recorded	kill -0 "$lock_pid" 2>/dev/null || return 1
+bin/fm-sessionstart-nudge.sh	recorded	pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+bin/fm-spawn.sh	recorded	if [ "$control_owner" = "$PPID" ] && fm_pid_alive "$control_owner"; then
+bin/fm-startup-network.sh	recorded	kill -0 "$pid" 2>/dev/null || return 1
+bin/fm-startup-network.sh	recorded	*) kill -0 "$claim_pid" 2>/dev/null && claim_live=1 ;;
+bin/fm-supervise-daemon.sh	live	while kill -0 "-$pid" 2>/dev/null; do
+bin/fm-supervise-daemon.sh	live	if ! fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null; then
+bin/fm-supervise-daemon.sh	live	if [ -z "${WATCHER_PID:-}" ] || ! kill -0 "${WATCHER_PID:-}" 2>/dev/null; then
+bin/fm-supervision-engine-lib.sh	recorded	identity=$(fm_pid_identity "$pid" 2>/dev/null) && [ -n "$identity" ] || return 1
+bin/fm-supervision-engine-lib.sh	live	identity=$(fm_pid_identity "$1" 2>/dev/null) || return 1
+bin/fm-supervision-engine-lib.sh	live	ps -A -o pid= -o ppid= 2>/dev/null
+bin/fm-supervision-engine-lib.sh	recorded	fm_pid_alive "$pid" || continue
+bin/fm-supervision-engine-lib.sh	live	while fm_pid_alive "$watched"; do
+bin/fm-supervision-host.sh	recorded	fm_pid_alive "$pid" || return 0
+bin/fm-supervision-host.sh	recorded	while [ "$i" -lt "$limit" ] && fm_pid_alive "$pid"; do
+bin/fm-supervision-host.sh	recorded	if fm_pid_alive "$pid" && [ "$(identity_of "$pid")" = "$identity" ]; then
+bin/fm-supervision-host.sh	recorded	if [ -n "$pid" ] && fm_pid_alive "$pid" && [ "$(identity_of "$pid")" = "$identity" ]; then
+bin/fm-supervision-host.sh	live	while [ -n "$ENGINE_SUBSHELL" ] && fm_pid_alive "$ENGINE_SUBSHELL" && [ "$i" -lt "$limit" ]; do
+bin/fm-supervision-host.sh	live	if [ -n "$pid" ] && fm_pid_alive "$pid"; then
+bin/fm-supervision-host.sh	live	while [ "$i" -lt 100 ] && fm_pid_alive "$pid"; do
+bin/fm-supervision-host.sh	live	fm_pid_alive "$pid" && kill -KILL "$pid" 2>/dev/null
+bin/fm-supervision-host.sh	live	while fm_pid_alive "$ARM_PID"; do
+bin/fm-supervision-host.sh	live	fm_pid_alive "$SUCCESSOR_PID" || return 1
+bin/fm-teardown.sh	live	if [ -r "$proc_root/$pid/stat" ]; then
+bin/fm-teardown.sh	live	stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+bin/fm-teardown.sh	live	value=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+bin/fm-teardown.sh	live	pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || pgid=""
+bin/fm-teardown.sh	live	own_pgid=$(ps -o pgid= -p "$$" 2>/dev/null) || own_pgid=""
+bin/fm-teardown.sh	live	current_pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || current_pgid=""
+bin/fm-teardown.sh	live	&& [ "$(ps -o pgid= -p "$leader" 2>/dev/null | tr -d '[:space:]')" = "$pgid" ] \
+bin/fm-teardown.sh	live	&& kill -0 -- "-$pgid" 2>/dev/null; then
+bin/fm-tmux-lib.sh	live	args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || args=
+bin/fm-turnend-guard-cursor.sh	recorded	fm_harness_pid_alive "$LOCK_PID" && exit 0
+bin/fm-turnend-guard-cursor.sh	live	while kill -0 "$ARM_PID" 2>/dev/null; do
+bin/fm-turnend-guard.sh	recorded	if fm_pid_alive "$pid" && [ "$role" = autoarm ] \
+bin/fm-turnend-guard.sh	recorded	if fm_pid_alive "$pid" && [ "$role" = autoarm ] \
+bin/fm-wake-grant.sh	native-pi	identity=$(fm_pid_identity "$pid" 2>/dev/null) || exit 1
+bin/fm-wake-grant.sh	native-pi	[ "$(fm_pid_identity "$pid" 2>/dev/null || true)" = "$identity" ] || exit 1
+bin/fm-wake-lib.sh	live	kill -0 "$pid" 2>/dev/null
+bin/fm-wake-lib.sh	live	if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
+bin/fm-wake-lib.sh	live	stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+bin/fm-wake-lib.sh	live	cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
+bin/fm-wake-lib.sh	live	out=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+bin/fm-wake-lib.sh	recorded	current_identity=$(fm_pid_identity "$pid") || return 1
+bin/fm-wake-lib.sh	recorded	fm_pid_alive "$pid" || return 1
+bin/fm-wake-lib.sh	recorded	fm_pid_alive "$session_pid"
+bin/fm-wake-lib.sh	recorded	fm_pid_alive "$pid" || return 1
+bin/fm-wake-lib.sh	recorded	current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+bin/fm-wake-lib.sh	recorded	if fm_pid_alive "$actual_pid"; then
+bin/fm-wake-lib.sh	recorded	fm_pid_alive "${tomb##*.reaped.}" && return 1
+bin/fm-wake-lib.sh	recorded	if fm_pid_alive "$pid"; then
+bin/fm-wake-lib.sh	recorded	if fm_pid_alive "$cur"; then
+bin/fm-wake-lib.sh	live	fm_pid_alive "$caller_pid" || return 1
+bin/fm-wake-lib.sh	recorded	if [ "$owner_pid" -gt 0 ] 2>/dev/null && fm_pid_alive "$owner_pid"; then
+bin/fm-wake-lib.sh	recorded	fm_pid_alive "$FM_AUTOARM_OWNER" || return 1
+bin/fm-wake-lib.sh	recorded	current=$(fm_pid_identity "$FM_AUTOARM_OWNER" 2>/dev/null) || return 1
+bin/fm-wake-lib.sh	recorded	fm_pid_alive "$lock_pid" || return 1
+bin/fm-wake-lib.sh	live	identity=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+bin/fm-wake-lib.sh	recorded	if [ -n "$recorded" ] && current=$(fm_pid_identity "$pid" 2>/dev/null) \
+bin/fm-wake-lib.sh	recorded	if [ -n "$recorded" ] && fm_pid_alive "$lock_pid" \
+bin/fm-wake-lib.sh	recorded	&& current=$(fm_pid_identity "$lock_pid" 2>/dev/null) \
+bin/fm-wake-lib.sh	recorded	while [ "$i" -lt 20 ] && fm_pid_alive "$lock_pid"; do
+bin/fm-wake-lib.sh	native-pi	current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
+bin/fm-watch-arm.sh	recorded	fm_pid_alive "$handling_watcher_pid" \
+bin/fm-watch-arm.sh	recorded	fm_pid_alive "$lock_pid" || return 0
+bin/fm-watch-arm.sh	recorded	while [ "$i" -lt 50 ] && fm_pid_alive "$lock_pid"; do
+bin/fm-watch-arm.sh	recorded	if [ -n "$STOPPED_PID" ] && fm_pid_alive "$STOPPED_PID"; then
+bin/fm-watch-arm.sh	live	if [ -n "$child" ] && fm_pid_alive "$child"; then
+bin/fm-watch-arm.sh	live	if [ -n "$child" ] && fm_pid_alive "$child"; then
+bin/fm-watch-arm.sh	live	while fm_pid_alive "$child"; do
+bin/fm-watch-arm.sh	live	cycle_begin "$child" started "$(fm_pid_identity "$child" 2>/dev/null || true)"
+bin/fm-watch-arm.sh	live	if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
+bin/fm-watch.sh	live	while [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null && [ "$i" -lt 20 ]; do
+bin/fm-watch.sh	live	while [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null && [ "$i" -lt 100 ]; do
+bin/fm-watch.sh	live	if [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null; then
+bin/fm-watch.sh	live	pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null | tr -d '[:space:]')
+bin/fm-watch.sh	recorded	while [ "$i" -lt 50 ] && fm_pid_alive "$pid"; do
+bin/fm-watch.sh	recorded	! fm_pid_alive "$pid"
+bin/fm-watch.sh	live	if kill -0 "$HOME_SUMMARY_PID" 2>/dev/null; then
+bin/fm-watch.sh	live	if kill -0 "$RECONCILE_REQUEST_PID" 2>/dev/null; then
+bin/fm-watch.sh	live	FM_WATCH_DELIVERY_IDENTITY=$(fm_pid_identity "$WATCHER_PID" 2>/dev/null || true)
+bin/backends/herdr.sh	native-herdr	comm=$("$1" -p "$2" -o comm= 2>/dev/null) || return 1
+bin/backends/herdr.sh	native-herdr	rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1
+bin/backends/herdr.sh	native-herdr	stat=$("$ps_bin" -p "$shell_pid" -o stat= 2>/dev/null | tr -d '[:space:]') || return 1
+bin/backends/herdr.sh	native-herdr	rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,comm= 2>/dev/null) || { printf 'unreadable'; return 0; }
+bin/backends/herdr.sh	native-herdr	args=$(LC_ALL=C "$ps_bin" -p "$pid" -o args= 2>/dev/null) || continue
+bin/backends/tmux.sh	live	args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
+bin/backends/tmux.sh	live	args=$(LC_ALL=C ps -p "$pid" -o args= 2>/dev/null) || continue
