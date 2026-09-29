@@ -33,4 +33,11 @@ for spelling in posix mixed windows; do
   expect "env.sh sourced by its $spelling path turns the overlay on for a private home" "$want" "${got% }"
 done
 
+src=$(cygpath -m "$ROOT/platform/windows/env.sh")
+roots=$(cygpath -m "$T/home")
+got=$(clean FM_HOME="$T/home" FM_WIN_PRIVATE_ROOTS="$roots" bash -c '. "$1" 2> "$T/err"; eval "$probe"; echo "stderr=$(cat "$T/err")"' _ "$src" | tr '\n' ' ')
+expect "a drive-path re-source of a home already recorded private exports the real bash-env.sh" "$want" "${got% }"
+got=$(clean FM_HOME="$T/home" FM_WIN_PRIVATE_ROOTS="$roots" bash -c '. "$1"; MSYS2_ARG_CONV_EXCL="*" cmd.exe /c "bash -c umask"' _ "$src" | tr -d '\r')
+expect "a bash under a native parent then runs at 077" "0077" "$got"
+
 [ "$fails" -eq 0 ]
