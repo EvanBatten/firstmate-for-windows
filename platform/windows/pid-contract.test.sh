@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# The overlay keeps one pid space: every pid firstmate records is an MSYS pid,
-# which upstream's kill -0, /proc and ps checks read correctly (see proc.sh).
-# That holds only while each upstream check reads a pid of a known kind, so
-# every check in bin/ is listed in pid-sites.tsv with the kind of pid it reads:
-#   live      a pid of this process or a walk it is doing now
-#   recorded  a pid firstmate wrote from $$, $!, BASHPID or its harness walk
-#   native-*  a pid a native program wrote, which is Win32 and must be
-#             translated with fm_win_msys_pid before an MSYS check reads it
-# A check upstream adds, moves or rewrites fails here until it is classified.
 set -u
 ROOT=$(cd "${BASH_SOURCE[0]%/*}/../.." && pwd)
 cd "$ROOT" || exit 1
@@ -31,6 +22,9 @@ bad=$(awk -F'\t' 'NR > 1 && $2 !~ /^(live|recorded|native-(claude|herdr|pi|tasks
 diff=$(diff <(awk -F'\t' 'NR > 1 {print $1 "\t" $3}' "$registry" | sort) <(pid_checks))
 if [ -n "$diff" ]; then
   printf 'not ok - pid checks in bin/ differ from %s (> is new upstream, < is gone):\n%s\n' "$registry" "$diff"
+  printf '%s\n' "Classify each new check by the pid it reads: live (this process, or a walk it is doing now)," \
+    "recorded (firstmate wrote it from \$\$, \$!, BASHPID or the harness walk, so it is an MSYS pid)," \
+    "or native-<writer> (a native program wrote a Win32 pid, which fm_win_msys_pid must translate first)."
   fails=1
 else
   printf 'ok - every pid check in bin/ is classified (%s)\n' "$(($(wc -l < "$registry") - 1))"

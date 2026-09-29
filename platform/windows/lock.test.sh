@@ -48,7 +48,7 @@ cat > "$T/hook.sh" <<EOF
 [ -z "\${GROK_AGENT:-}" ] || exit 0; exec $(printf '%q' "$T/session.sh") "\$@"
 EOF
 
-start_session() {  # <name> <home> [hook]
+start_session() {
   local i pid winpid bash_exe=$BASH_EXE
   mkdir -p "$T/$1"
   local script=$T/session.sh
@@ -63,7 +63,7 @@ start_session() {  # <name> <home> [hook]
   HARNESS_PIDS+=("$winpid")
   SESSION_PID=$pid SESSION_WINPID=$winpid
 }
-run_lock() {  # <session> <n> [<command>]
+run_lock() {
   local i
   printf '%s' "${3:-}" > "$T/marks/$1.go.$2"
   for ((i = 0; i < 600; i++)); do

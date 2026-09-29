@@ -18,10 +18,7 @@ case $mode in check | apply) shift ;; *) echo "usage: $0 check|apply <dir>..." >
 
 me="$USERDOMAIN\\$USERNAME"
 
-# Print each entry of $1's ACL that names a principal outside the private set.
-# An ACL that cannot be read is not known to be private, so a missing or
-# failing icacls, or one that lists no entry, prints "unreadable-acl".
-open_principals() {
+acl_outsiders() {
   local out line entry who entries=0
   out=$(MSYS2_ARG_CONV_EXCL='*' icacls "$1" 2>&1) || { echo unreadable-acl; return; }
   while IFS= read -r line; do
@@ -43,11 +40,11 @@ rc=0
 for dir in "$@"; do
   [ -d "$dir" ] || { echo "missing $dir" >&2; rc=1; continue; }
   win=$(cygpath -w -- "$dir")
-  open=$(open_principals "$win")
+  open=$(acl_outsiders "$win")
   if [ -n "$open" ] && [ "$mode" = apply ]; then
     MSYS2_ARG_CONV_EXCL='*' icacls "$win" /inheritance:r /grant:r \
       "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "$me:(OI)(CI)F" >/dev/null || { rc=1; continue; }
-    open=$(open_principals "$win")
+    open=$(acl_outsiders "$win")
   fi
   if [ -n "$open" ]; then
     printf 'open %s: %s\n' "$dir" "$(printf '%s' "$open" | tr '\n' ';')"

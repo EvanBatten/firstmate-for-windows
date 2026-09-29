@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016 # The quoted scripts run in child shells, which expand them.
+# shellcheck disable=SC2016
 set -u
 ROOT=$(cd "${BASH_SOURCE[0]%/*}/../.." && pwd)
 cd "$ROOT" || exit 1

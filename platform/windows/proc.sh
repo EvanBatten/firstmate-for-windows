@@ -95,11 +95,8 @@ for ($i = 0; $i -lt 16 -and $p; $i++) {
   [ -n "${_FM_W32_PPID[$root]+x}" ]
 }
 
-# Firstmate records and checks pids in MSYS space only: kill -0, /proc and ps
-# all read that space. A native program started from an MSYS process, such as
-# claude.exe started from Git Bash, has an MSYS pid too, whose /proc winpid is
-# the program's Win32 pid. Set FM_WIN_MSYS_PID to the MSYS pid of Win32 pid $1,
-# or return 1 when the process has none.
+# A native program started from an MSYS process, such as claude.exe started
+# from Git Bash, has an MSYS pid too, whose /proc winpid is its Win32 pid.
 fm_win_msys_pid() {
   local p w
   for p in /proc/[0-9]*; do
@@ -112,9 +109,7 @@ fm_win_msys_pid() {
   return 1
 }
 
-# A parent reached through the Win32 chain is named by its MSYS pid when it has
-# one, so a walk leaves Win32 space as soon as it can.
-_fm_win_parent() {
+_fm_win_parent_msys_first() {
   if fm_win_msys_pid "$1"; then
     FM_PROC_PPID=$FM_WIN_MSYS_PID FM_PROC_PSPACE=msys
   else
@@ -128,14 +123,14 @@ fm_win_proc() {
   FM_PROC_PSPACE=msys
   if [ "${2:-}" != w32 ] && fm_win_msys_proc "$pid"; then
     if [ "$FM_PROC_PPID" -le 1 ] && fm_win32_chain_load "$FM_PROC_WINPID"; then
-      _fm_win_parent "${_FM_W32_PPID[$FM_PROC_WINPID]}"
+      _fm_win_parent_msys_first "${_FM_W32_PPID[$FM_PROC_WINPID]}"
     fi
     return 0
   fi
   [ -n "${_FM_W32_PPID[$pid]+x}" ] || _fm_win32_cache_load
   [ -n "${_FM_W32_PPID[$pid]+x}" ] || fm_win32_alive "$pid" || return 1
   fm_win32_chain_load "$pid" || return 1
-  _fm_win_parent "${_FM_W32_PPID[$pid]}"
+  _fm_win_parent_msys_first "${_FM_W32_PPID[$pid]}"
   FM_PROC_PGID=$pid
   FM_PROC_COMM=${_FM_W32_COMM[$pid]}
   FM_PROC_ARGS=$FM_PROC_COMM
