@@ -167,9 +167,11 @@ test_orphan_sweep_reaps_read_only_package_tree() {
 }
 
 # A child suite starts a loop that ignores TERM and detaches from it, the shape
-# of the fixtures that proved tree kills and then outlived their suites.
+# of the fixtures that proved tree kills and then outlived their suites. It is
+# launched the way the runner launches a script: on Linux a forked subshell
+# carries only its suite's exec-time tag.
 start_owned_loop_suite() {  # <pidfile> <then: exit|block>
-  exec bash -c '
+  exec bash "$ROOT/tests/proc-owner.sh" -c '
     # shellcheck source=tests/lib.sh
     . "$1"
     ( trap "" TERM HUP INT; while :; do sleep 0.1; done ) </dev/null >/dev/null 2>&1 &

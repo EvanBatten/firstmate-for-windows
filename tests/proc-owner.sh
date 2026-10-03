@@ -20,10 +20,11 @@
 
 fm_test_proc_starttime() {  # <pid>
   local stat_line
-  local -a fields
+  # A name no suite uses: shellcheck tracks variable types across sourced files.
+  local -a _fm_proc_stat
   { read -r stat_line < "/proc/$1/stat"; } 2>/dev/null || return 1
-  read -r -a fields <<< "${stat_line##*)}"
-  printf '%s\n' "${fields[19]:-}"
+  read -r -a _fm_proc_stat <<< "${stat_line##*)}"
+  printf '%s\n' "${_fm_proc_stat[19]:-}"
 }
 
 # fm_test_proc_owner_tag: print this shell's tag, or nothing without /proc.
