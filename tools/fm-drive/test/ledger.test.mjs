@@ -103,45 +103,24 @@ describe('record', () => {
     assert.equal(second.stdout, 'proven 2 of 4 behaviors; 1 unproven; 0 broken; 1 blocked here\n');
   });
 
-  test('a missed step on a never-proven row leaves it unproven with the run noted, and a failed run proves no earlier row', () => {
-    const { root, sha } = ledgerRepo(BASE);
+  test('a failed run is refused and leaves every row as it was, proven or not', () => {
+    const table = tsv(
+      row('row-register', 'proven', 'register', 'abc held through step 1, health clean; /tmp/old'),
+      row('row-dispatch', 'unproven', '#83', ''),
+    );
+    const { root, sha } = ledgerRepo(table);
     const r = record(root, resultFile('missed-step-2', sha));
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.tsv, tsv(
-      row('row-register', 'unproven', '#83', 'not yet re-proven on main'),
-      row('row-dispatch', 'unproven', '#83', `${sha} missed step 2: tasks.count>=1: 0 task records; /tmp/fm-drive-artifacts/register-20260929T130000Z`),
-      row('row-other', 'unproven', '#84', 'untouched'),
-      row('row-blocked', 'blocked-here', '#97', 'machine: no tmux here'),
-    ));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: the run missed step 2 (tasks.count>=1: 0 task records), and a failed run proves nothing\n');
+    assert.equal(r.tsv, table);
   });
 
-  test('a missed step on a proven row makes it broken, keeping the trace as its ref', () => {
-    const { root, sha } = ledgerRepo(tsv(
-      row('row-register', 'proven', 'register', 'abc held through step 1, health clean; /tmp/old'),
-      row('row-dispatch', 'proven', 'register', 'abc held through step 2, health clean; /tmp/old'),
-    ));
-    const r = record(root, resultFile('missed-step-2', sha));
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.tsv, tsv(
-      row('row-register', 'proven', 'register', 'abc held through step 1, health clean; /tmp/old'),
-      row('row-dispatch', 'broken', 'register', `${sha} missed step 2: tasks.count>=1: 0 task records; /tmp/fm-drive-artifacts/register-20260929T130000Z`),
-    ));
-    assert.match(r.stdout, /^row-dispatch: proven -> broken$/m);
-    assert.match(r.stdout, /^proven 1 of 2 behaviors; 0 unproven; 1 broken; 0 blocked here$/m);
-  });
-
-  test('a run whose health missed flips no row to proven', () => {
+  test('a run whose health check missed is refused and the table is untouched', () => {
     const { root, sha } = ledgerRepo(BASE);
     const r = record(root, resultFile('health-missed', sha));
-    assert.equal(r.status, 0, r.stderr);
-    const note = `${sha} held every step but health missed: home.clean: task records remain: greeter-cli-g1; /tmp/fm-drive-artifacts/register-20260929T160000Z`;
-    assert.equal(r.tsv, tsv(
-      row('row-register', 'unproven', '#83', note),
-      row('row-dispatch', 'unproven', '#83', note),
-      row('row-other', 'unproven', '#84', 'untouched'),
-      row('row-blocked', 'blocked-here', '#97', 'machine: no tmux here'),
-    ));
-    assert.equal(r.stdout, 'proven 0 of 4 behaviors; 3 unproven; 0 broken; 1 blocked here\n');
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, "fm-drive: record refused: the run's home health check missed (home.clean: task records remain: greeter-cli-g1), so it proves nothing\n");
+    assert.equal(r.tsv, BASE);
   });
 
   test('an environment error is refused and the table is untouched', () => {
@@ -206,17 +185,6 @@ describe('record', () => {
     assert.equal(r.stderr, 'fm-drive: record refused: the result names no rows it proves; add proves to trace register and run it again\n');
     assert.equal(r.tsv, BASE);
   });
-
-  test('a missed step never moves a blocked-here row', () => {
-    const blocked = tsv(row('row-register', 'blocked-here', '#97', 'machine: x'), row('row-dispatch', 'blocked-here', '#97', 'machine: y'));
-    const { root, sha } = ledgerRepo(blocked);
-    const r = record(root, resultFile('missed-step-2', sha));
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.tsv, tsv(
-      row('row-register', 'blocked-here', '#97', 'machine: x'),
-      row('row-dispatch', 'blocked-here', '#97', 'machine: y'),
-    ));
-  });
 });
 
 function inventoryTree(behaviors, trace) {
@@ -250,12 +218,6 @@ describe('inventory.sh with trace refs', () => {
     const r = inventory(script, 'check');
     assert.equal(r.status, 1);
     assert.match(r.stdout, /^not ok - row 'row-register' is proven but ref 'register' names no tests\/verification\/register\.verify\.sh and no tools\/fm-drive\/traces\/register\.json that proves it$/m);
-  });
-
-  test('check accepts a broken row whose trace lists it', () => {
-    const script = inventoryTree(tsv(row('row-register', 'broken', 'register', 'sha missed')), registerTrace({ 'row-register': 1 }));
-    const r = inventory(script, 'check');
-    assert.equal(r.status, 0, r.stdout + r.stderr);
   });
 
   test('verdict counts a trace-proven row as proven by its recorded run', () => {
