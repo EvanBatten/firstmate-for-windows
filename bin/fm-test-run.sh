@@ -2323,7 +2323,15 @@ if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
   . "$ROOT/bin/fm-timeout-lib.sh"
 fi
 
+# Every script runs through tests/proc-owner.sh, which tags it before exec so
+# whatever it leaves behind can be found and killed once it is gone.
+PROC_OWNER_SH="$ROOT/tests/proc-owner.sh"
+# shellcheck source=tests/proc-owner.sh
+. "$PROC_OWNER_SH"
+
 RUN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run.XXXXXX")
+# A run killed before its scripts finished leaves their processes behind.
+fm_test_kill_tagged orphans "$RUN_TMP/procs.start"
 RECORDS="$RUN_TMP/records.tsv"
 FAMILIES_TSV="$RUN_TMP/families.tsv"
 : >"$RECORDS"
@@ -2334,6 +2342,7 @@ declare -a WORKER_SCRIPTS=()
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2329
 cleanup_run() {
+  fm_test_kill_tagged orphans "$RUN_TMP/procs.exit"
   rm -rf "$RUN_TMP"
 }
 
@@ -2429,26 +2438,27 @@ run_script_bounded() {  # <script> <out> <stream> <id>
   # shellcheck source=tests/git-config-helpers.sh
   . "$ROOT/tests/git-config-helpers.sh" || return
   local rc
-  : "$id"
   set +e
   if [ "$stream" -eq 1 ]; then
     if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
       # Expansion is intentionally deferred to the child bash passed to -c.
       # shellcheck disable=SC2016
       fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
-        'bash "$1" 2>&1 | tee "$2"; exit "${PIPESTATUS[0]}"' _ "$script" "$out"
+        'bash "$1" "$2" 2>&1 | tee "$3"; exit "${PIPESTATUS[0]}"' _ "$PROC_OWNER_SH" "$script" "$out"
       rc=$?
     else
-      bash "$script" 2>&1 | tee "$out"
+      bash "$PROC_OWNER_SH" "$script" 2>&1 | tee "$out"
       rc=${PIPESTATUS[0]}
     fi
   elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash "$script" >"$out" 2>&1
+    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash "$PROC_OWNER_SH" "$script" >"$out" 2>&1
     rc=$?
   else
-    bash "$script" >"$out" 2>&1
+    bash "$PROC_OWNER_SH" "$script" >"$out" 2>&1
     rc=$?
   fi
+  # The script is gone, so anything it started and left running is an orphan.
+  fm_test_kill_tagged orphans "$RUN_TMP/procs.$id"
   if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ] && [ "$rc" -eq 124 ]; then
     printf 'not ok - %s exceeded the per-script bound of %ss and was terminated\n' \
       "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"

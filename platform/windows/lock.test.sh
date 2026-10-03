@@ -33,7 +33,9 @@ cd $(printf '%q' "$ROOT") || exit 1
 [ "\$3" = hook ] || . platform/windows/env.sh
 unset CLAUDE_CODE_SESSION_ID CLAUDE_PID
 export FM_HOME=\$2
-while :; do
+# Outlive neither this test nor its scratch: cleanup's tree kill misses a session
+# under the Git launcher, and a killed test never runs cleanup at all.
+while kill -0 $$ 2>/dev/null && [ -d $(printf '%q' "$T")/marks ]; do
   for go in $(printf '%q' "$T")/marks/\$1.go.*; do
     [ -e "\$go" ] || continue
     cmd=\$(cat "\$go"); rm -f "\$go"
