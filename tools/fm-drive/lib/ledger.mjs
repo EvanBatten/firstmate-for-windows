@@ -50,23 +50,23 @@ function refuseResult(r, root, heads) {
   if (r === null || typeof r !== 'object' || Array.isArray(r)) return 'the result is not a JSON object';
   if (r.rejected) return `the trace was rejected (${r.rejected}), so no run happened`;
   if (r.error) return `the run failed in its environment (${r.error}), so it proves nothing either way`;
-  if (!Array.isArray(r.steps)) return 'the result has no steps';
-  if (r.pass !== true) {
-    const miss = r.steps.findIndex((s) => !s.ok);
-    return miss < 0 ? 'the run did not pass, and a failed run proves nothing' : `the run missed step ${miss + 1} (${r.steps[miss].reason}), and a failed run proves nothing`;
-  }
-  if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
   if (typeof r.trace !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(r.trace)) return 'the result names no trace';
   if (!r.proves || typeof r.proves !== 'object' || Object.keys(r.proves).length === 0) {
     return `the result names no rows it proves; add proves to trace ${r.trace} and run it again`;
   }
-  if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   const tracePath = join(root, TRACES, `${r.trace}.json`);
   let shipped;
   try { shipped = JSON.parse(readFileSync(tracePath, 'utf8')).proves; } catch { shipped = undefined; }
   if (!shipped || !isDeepStrictEqual(shipped, r.proves)) {
     return `the result's proves do not match tools/fm-drive/traces/${r.trace}.json, so inventory.sh check could not trace its rows`;
   }
+  if (!Array.isArray(r.steps)) return 'the result has no steps';
+  if (r.pass !== true) {
+    const miss = r.steps.findIndex((s) => !s.ok);
+    return miss < 0 ? 'the run did not pass, and a failed run proves nothing' : `the run missed step ${miss + 1} (${r.steps[miss].reason}), and a failed run proves nothing`;
+  }
+  if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
+  if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   if (typeof r.evidence !== 'string' || r.evidence === '') return 'the result names no evidence directory';
   const sha = r.code?.sha;
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return 'the result names no commit it drove';
