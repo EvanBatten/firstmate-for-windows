@@ -185,6 +185,14 @@ describe('record', () => {
     assert.equal(r.stderr, 'fm-drive: record refused: the result names no rows it proves; add proves to trace register and run it again\n');
     assert.equal(r.tsv, BASE);
   });
+
+  test('a failed run of a trace that proves no row is refused for the missing proves', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('missed-step-2', sha, ({ proves, ...rest }) => rest));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: the result names no rows it proves; add proves to trace register and run it again\n');
+    assert.equal(r.tsv, BASE);
+  });
 });
 
 function inventoryTree(behaviors, trace) {
