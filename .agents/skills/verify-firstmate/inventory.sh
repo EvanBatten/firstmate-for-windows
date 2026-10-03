@@ -9,8 +9,8 @@
 # unproven, broken, or blocked-here; ref names the proof of a proven row,
 # either a session script tests/verification/<ref>.verify.sh or a drive trace
 # tools/fm-drive/traces/<ref>.json whose proves lists the row, which
-# `node tools/fm-drive/drive.mjs record` writes from a run; a broken row names
-# the trace that regressed or an issue; any other row names an issue number.
+# `node tools/fm-drive/drive.mjs record` writes from a run; any other row
+# names an issue number.
 #
 # Usage:
 #   inventory.sh check              exit 0 when every source above has a row
@@ -118,17 +118,10 @@ cmd_check() {
             || n_bad "row '$id' is proven but ref '$ref' names no tests/verification/$ref.verify.sh and no tools/fm-drive/traces/$ref.json that proves it"
         fi
         ;;
-      unproven)
+      unproven | broken)
         case "$ref" in
           '#'[0-9]*) ;;
           *) n_bad "row '$id' is $status but ref '$ref' is not an issue number (#NN)" ;;
-        esac
-        ;;
-      broken)
-        case "$ref" in
-          '#'[0-9]*) ;;
-          *) trace_proves "$ref" "$id" \
-               || n_bad "row '$id' is broken but ref '$ref' is neither an issue number (#NN) nor a tools/fm-drive/traces/$ref.json that proves it" ;;
         esac
         ;;
       blocked-here)

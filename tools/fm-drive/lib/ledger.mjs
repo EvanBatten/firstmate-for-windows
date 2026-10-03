@@ -11,46 +11,9 @@ const TRACES = join('tools', 'fm-drive', 'traces');
 const TRUNK = 'origin/main';
 const STATUSES = ['proven', 'unproven', 'broken', 'blocked-here'];
 
-// Per row, its last proving step k decides:
-//   held       every step 1..k held and the run's health held
-//   health     every step 1..k held but the health check missed
-//   missed     step i <= k ran and did not hold
-//   unchecked  steps 1..k held or never ran, but the run failed later, so
-//              health was never checked and the row proves nothing
-function rowVerdicts(proves, result) {
-  const verdicts = {};
-  for (const [id, k] of Object.entries(proves)) {
-    const upTo = result.steps.slice(0, k);
-    const miss = upTo.findIndex((s) => !s.ok);
-    if (miss >= 0) verdicts[id] = { kind: 'missed', step: miss + 1, reason: upTo[miss].reason };
-    else if (upTo.length < k || !result.health) verdicts[id] = { kind: 'unchecked' };
-    else if (result.health.ok) verdicts[id] = { kind: 'held', step: k };
-    else verdicts[id] = { kind: 'health', reason: result.health.reason };
-  }
-  return verdicts;
-}
-
 const cell = (text) => String(text).replace(/[\t\r\n]+/g, ' ');
 
-function nextRow(row, verdict, run) {
-  const note = (what) => cell(`${run.sha} ${what}; ${run.evidence}`);
-  switch (verdict.kind) {
-    case 'held':
-      return { status: 'proven', ref: run.trace, evidence: note(`held through step ${verdict.step}, health clean`) };
-    case 'missed': {
-      const evidence = note(`missed step ${verdict.step}: ${verdict.reason}`);
-      if (row.status === 'proven' || row.status === 'broken') return { status: 'broken', ref: run.trace, evidence };
-      if (row.status === 'unproven') return { ...row, evidence };
-      return null;
-    }
-    case 'health':
-      return row.status === 'unproven' ? { ...row, evidence: note(`held every step but health missed: ${verdict.reason}`) } : null;
-    default:
-      return null;
-  }
-}
-
-function applyVerdicts(text, verdicts, run) {
+function applyProof(text, proves, run) {
   const lines = text.split('\n');
   const changes = [];
   const seen = new Set();
@@ -58,15 +21,13 @@ function applyVerdicts(text, verdicts, run) {
     if (lines[i] === '') continue;
     const cols = lines[i].split('\t');
     const id = cols[0];
-    if (!(id in verdicts)) continue;
+    if (!(id in proves)) continue;
     seen.add(id);
-    const row = { status: cols[3], ref: cols[4], evidence: cols[5] ?? '' };
-    const next = nextRow(row, verdicts[id], run);
-    if (!next) continue;
-    if (next.status !== row.status) changes.push(`${id}: ${row.status} -> ${next.status}`);
-    lines[i] = [...cols.slice(0, 3), next.status, next.ref, next.evidence].join('\t');
+    if (cols[3] !== 'proven') changes.push(`${id}: ${cols[3]} -> proven`);
+    const evidence = cell(`${run.sha} held through step ${proves[id]}, health clean; ${run.evidence}`);
+    lines[i] = [...cols.slice(0, 3), 'proven', run.trace, evidence].join('\t');
   }
-  const unknown = Object.keys(verdicts).filter((id) => !seen.has(id));
+  const unknown = Object.keys(proves).filter((id) => !seen.has(id));
   return { text: lines.join('\n'), changes, unknown };
 }
 
@@ -89,18 +50,23 @@ function refuseResult(r, root, heads) {
   if (r === null || typeof r !== 'object' || Array.isArray(r)) return 'the result is not a JSON object';
   if (r.rejected) return `the trace was rejected (${r.rejected}), so no run happened`;
   if (r.error) return `the run failed in its environment (${r.error}), so it proves nothing either way`;
+  if (!Array.isArray(r.steps)) return 'the result has no steps';
+  if (r.pass !== true) {
+    const miss = r.steps.findIndex((s) => !s.ok);
+    return miss < 0 ? 'the run did not pass, and a failed run proves nothing' : `the run missed step ${miss + 1} (${r.steps[miss].reason}), and a failed run proves nothing`;
+  }
+  if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
   if (typeof r.trace !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(r.trace)) return 'the result names no trace';
   if (!r.proves || typeof r.proves !== 'object' || Object.keys(r.proves).length === 0) {
     return `the result names no rows it proves; add proves to trace ${r.trace} and run it again`;
   }
-  if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1)) return 'the result proves a row at a step that is not a positive step number';
+  if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   const tracePath = join(root, TRACES, `${r.trace}.json`);
   let shipped;
   try { shipped = JSON.parse(readFileSync(tracePath, 'utf8')).proves; } catch { shipped = undefined; }
   if (!shipped || !isDeepStrictEqual(shipped, r.proves)) {
     return `the result's proves do not match tools/fm-drive/traces/${r.trace}.json, so inventory.sh check could not trace its rows`;
   }
-  if (!Array.isArray(r.steps)) return 'the result has no steps';
   if (typeof r.evidence !== 'string' || r.evidence === '') return 'the result names no evidence directory';
   const sha = r.code?.sha;
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return 'the result names no commit it drove';
@@ -131,7 +97,7 @@ export function record({ resultPath, root, heads = [] }) {
   const path = join(root, BEHAVIORS);
   const before = readFileSync(path, 'utf8');
   const run = { sha: result.code.sha, trace: result.trace, evidence: result.evidence };
-  const { text, changes, unknown } = applyVerdicts(before, rowVerdicts(result.proves, result), run);
+  const { text, changes, unknown } = applyProof(before, result.proves, run);
   if (unknown.length) return { refused: `the run claims ${unknown.join(', ')}, which behaviors.tsv has no row for` };
   if (text !== before) writeFileSync(path, text);
   return { lines: [...changes, tally(text)] };

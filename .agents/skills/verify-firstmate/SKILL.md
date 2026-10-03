@@ -67,15 +67,12 @@ Its `status` is exactly one of four words.
 
 - `proven` - a real session drives this behavior, and `ref` names it: a session script `tests/verification/<ref>.verify.sh`, or a drive trace `tools/fm-drive/traces/<ref>.json` whose `proves` lists the row.
 - `unproven` - nothing here drives it yet, and `ref` is the issue that owns closing the gap.
-- `broken` - it is known not to work, and `ref` is the issue that tracks the fix or the trace whose proving step missed.
+- `broken` - it is known not to work, and `ref` is the issue that tracks the fix.
 - `blocked-here` - it needs a harness, backend, Relay, or voice this machine cannot supply, or the operator ruled it out of scope (remote second mates), and `ref` is `#97`.
 
 Only `node tools/fm-drive/drive.mjs record <result.json>` changes a trace row.
-It reads a `run` result, rewrites the status, ref and evidence of each row the trace's `proves` names, and prints `proven N of M behaviors; K unproven; J broken; B blocked here`.
-A row is proven when every step through its last proving step held and the home's health check held.
-A missed proving step makes a proven row broken and leaves a never-proven row unproven with the run noted in its evidence.
-A run that failed at a later step, or whose health check missed, proves no row.
-`record` writes nothing and exits 2 for a rejected trace, a run that failed in its environment, a run on uncommitted changes, a commit that `origin/main` or a given `--head origin/<branch>` does not contain, and a row id the table does not have.
+It reads a passing `run` result whose home health check held, sets each row the trace's `proves` names to `proven` with the trace as `ref` and the run as evidence, and prints `proven N of M behaviors; K unproven; J broken; B blocked here`.
+`record` writes nothing and exits 2 for a rejected trace, a run that failed in its environment, a run that missed a step, a run whose health check missed, a run on uncommitted changes, a commit that `origin/main` or a given `--head origin/<branch>` does not contain, and a row id the table does not have.
 Recording the same result twice leaves the table unchanged.
 
 `verify.sh doctor` runs `inventory.sh check` and refuses a checkout whose table has a hole, whether that is a `bin/` script, a feature file, or a README bullet with no row, a `proven` row whose script does not exist, or a malformed `ref`.
