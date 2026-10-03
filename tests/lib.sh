@@ -116,6 +116,20 @@ FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
   return 1
 }
 
+# --- owned-process reaping --------------------------------------------------
+#
+# tests/proc-owner.sh owns the tag and the sweep. Tagging here covers a suite
+# run directly rather than through bin/fm-test-run.sh, which tags it at exec;
+# a tag that already names this shell is the runner's and stays.
+
+# shellcheck source=tests/proc-owner.sh
+. "$ROOT/tests/proc-owner.sh"
+case ${FM_TEST_PROC_OWNER:-} in
+  "$$":*) ;;
+  *) FM_TEST_PROC_OWNER=$(fm_test_proc_owner_tag) ;;
+esac
+export FM_TEST_PROC_OWNER
+
 # --- process-event runner reaping -------------------------------------------
 #
 # A process-event runner is detached into its own process group and reparents to
@@ -221,6 +235,9 @@ fm_test_cleanup() {
   local d
   fm_test_reap_watchers
   fm_test_reap_procevent_homes
+  # Our own jobs die here too; without this bash reports each one as Killed.
+  disown -a 2>/dev/null || true
+  fm_test_kill_tagged own "$FM_TEST_CLEANUP_REGISTRY.procs"
   for d in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
     [ -n "$d" ] && fm_test_remove_tree "$d"
   done
@@ -289,6 +306,7 @@ fm_test_reap_orphans() {
 # execution window repeating the same global stale-fixture scan.
 if [ "${FM_TEST_SKIP_ORPHAN_REAP:-0}" != 1 ]; then
   fm_test_reap_orphans
+  fm_test_kill_tagged orphans "$FM_TEST_CLEANUP_REGISTRY.procs"
 fi
 
 # --- live-capability gate ---------------------------------------------------

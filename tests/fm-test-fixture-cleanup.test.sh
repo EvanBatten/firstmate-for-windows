@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Behavior tests for tests/lib.sh's shared fixture-tempdir helper
-# (fm_test_tmproot / fm_test_cleanup / fm_test_reap_orphans).
+# (fm_test_tmproot / fm_test_cleanup / fm_test_reap_orphans) and its
+# owned-process reaping (tests/proc-owner.sh), through both tests/lib.sh and
+# bin/fm-test-run.sh.
 #
 # The near-universal call pattern across this suite is
 # `TMP_ROOT=$(fm_test_tmproot prefix)`, which forks a subshell to capture the
@@ -164,9 +166,151 @@ test_orphan_sweep_reaps_read_only_package_tree() {
   pass "the orphan sweep reaps read-only package fixtures"
 }
 
+# A child suite starts a loop that ignores TERM and detaches from it, the shape
+# of the fixtures that proved tree kills and then outlived their suites. It is
+# launched the way the runner launches a script: on Linux a forked subshell
+# carries only its suite's exec-time tag.
+start_owned_loop_suite() {  # <pidfile> <then: exit|block>
+  exec bash "$ROOT/tests/proc-owner.sh" -c '
+    # shellcheck source=tests/lib.sh
+    . "$1"
+    ( trap "" TERM HUP INT; while :; do sleep 0.1; done ) </dev/null >/dev/null 2>&1 &
+    printf "%s\n" "$!" > "$2"
+    [ "$3" = exit ] || while :; do sleep 0.1; done
+  ' _ "$LIB" "$1" "$2"
+}
+
+wait_for_file() {  # <file>
+  local tries=0
+  while [ ! -s "$1" ] && [ "$tries" -lt 100 ]; do sleep 0.05; tries=$((tries + 1)); done
+  [ -s "$1" ] || fail "the child suite never published $1"
+}
+
+pid_gone_within() {  # <pid>
+  local tries=0
+  while kill -0 "$1" 2>/dev/null && [ "$tries" -lt 40 ]; do sleep 0.05; tries=$((tries + 1)); done
+  ! kill -0 "$1" 2>/dev/null
+}
+
+test_owned_processes_gone_after_normal_exit() {
+  local harness loop
+  if [ -z "${FM_TEST_PROC_OWNER:-}" ]; then
+    printf 'skip: no /proc/<pid>/environ to find owned processes by\n'
+    return 0
+  fi
+  harness=$(fm_test_tmproot fm-test-cleanup-procs-exit)
+  (start_owned_loop_suite "$harness/loop" exit)
+  loop=$(cat "$harness/loop")
+  pid_gone_within "$loop" ||
+    { kill -KILL "$loop" 2>/dev/null; fail "a TERM-ignoring loop outlived its suite's normal exit"; }
+  pass "a suite's exit kills every process it started, even one that ignores TERM"
+}
+
+test_hard_killed_suite_processes_reaped_by_next_suite() {
+  local harness loop suite live_loop live_suite
+  if [ -z "${FM_TEST_PROC_OWNER:-}" ]; then
+    printf 'skip: no /proc/<pid>/environ to find owned processes by\n'
+    return 0
+  fi
+  harness=$(fm_test_tmproot fm-test-cleanup-procs-kill)
+  start_owned_loop_suite "$harness/loop" block &
+  suite=$!
+  start_owned_loop_suite "$harness/live-loop" block &
+  live_suite=$!
+  wait_for_file "$harness/loop"
+  wait_for_file "$harness/live-loop"
+  loop=$(cat "$harness/loop")
+  live_loop=$(cat "$harness/live-loop")
+  kill -KILL "$suite"
+  wait "$suite" 2>/dev/null
+  kill -0 "$loop" 2>/dev/null || fail "the loop died with its hard-killed suite, so this case proves nothing"
+
+  bash -c '
+    # shellcheck source=tests/lib.sh
+    . "$1"
+  ' _ "$LIB"
+
+  if ! pid_gone_within "$loop"; then
+    kill -KILL "$loop" "$live_loop" "$live_suite" 2>/dev/null
+    fail "the next suite left a hard-killed suite's loop running"
+  fi
+  kill -0 "$live_loop" 2>/dev/null || fail "the next suite killed a loop whose suite is still running"
+  kill -TERM "$live_suite"
+  wait "$live_suite" 2>/dev/null
+  pid_gone_within "$live_loop" || fail "a TERM-ignoring loop outlived its suite's SIGTERM"
+  pass "the next suite reaps only processes whose suite is gone"
+}
+
+# The runner tags a script before exec, so even a suite that never sources
+# tests/lib.sh, or a subshell it forks, cannot outlive the run.
+test_runner_reaps_what_a_suite_without_lib_leaves() {
+  local harness loop out
+  if [ -z "${FM_TEST_PROC_OWNER:-}" ]; then
+    printf 'skip: no /proc/<pid>/environ to find owned processes by\n'
+    return 0
+  fi
+  harness=$(fm_test_tmproot fm-test-cleanup-procs-runner)
+  cat > "$harness/leaky.test.sh" <<'SH'
+#!/usr/bin/env bash
+( trap "" TERM HUP INT; while :; do sleep 0.1; done ) </dev/null >/dev/null 2>&1 &
+printf '%s\n' "$!" > "$LEAK_PIDFILE"
+printf 'ok - left a loop running\n'
+SH
+  out=$(LEAK_PIDFILE="$harness/loop" bash "$ROOT/bin/fm-test-run.sh" "$harness/leaky.test.sh" 2>&1) ||
+    fail "the runner failed the leaky suite: $out"
+  loop=$(cat "$harness/loop")
+  pid_gone_within "$loop" ||
+    { kill -KILL "$loop" 2>/dev/null; fail "a forked loop outlived its suite's run through bin/fm-test-run.sh"; }
+  pass "the runner kills what a suite leaves running, even without tests/lib.sh"
+}
+
+# The runner tags a suite and then execs it, which on Git Bash starts a new
+# process with a new start time. Another suite's sweep must still see it alive.
+test_sweep_spares_a_live_suite_the_runner_launched() {
+  local harness suite loop
+  if [ -z "${FM_TEST_PROC_OWNER:-}" ]; then
+    printf 'skip: no /proc/<pid>/environ to find owned processes by\n'
+    return 0
+  fi
+  harness=$(fm_test_tmproot fm-test-cleanup-procs-launched)
+  cat > "$harness/blocking.test.sh" <<'SH'
+#!/usr/bin/env bash
+( trap "" TERM HUP INT; while :; do sleep 0.1; done ) </dev/null >/dev/null 2>&1 &
+printf '%s\n' "$!" > "$LEAK_PIDFILE"
+while :; do sleep 0.1; done
+SH
+  LEAK_PIDFILE="$harness/loop" bash "$ROOT/tests/proc-owner.sh" "$harness/blocking.test.sh" &
+  suite=$!
+  wait_for_file "$harness/loop"
+  loop=$(cat "$harness/loop")
+
+  bash -c '
+    # shellcheck source=tests/lib.sh
+    . "$1"
+  ' _ "$LIB"
+
+  if ! kill -0 "$loop" 2>/dev/null; then
+    kill -KILL "$suite" 2>/dev/null
+    fail "a sweep killed the loop of a suite the runner launched while that suite still ran"
+  fi
+  kill -KILL "$suite"
+  wait "$suite" 2>/dev/null
+  bash -c '
+    # shellcheck source=tests/lib.sh
+    . "$1"
+  ' _ "$LIB"
+  pid_gone_within "$loop" ||
+    { kill -KILL "$loop" 2>/dev/null; fail "the loop outlived its hard-killed runner-launched suite"; }
+  pass "a sweep spares a live suite the runner launched and reaps it once it is gone"
+}
+
 test_fixture_root_gone_after_normal_exit
 test_fixture_root_gone_after_sigterm
 test_cleanup_registry_resists_precreation
 test_fixture_registration_failure_rolls_back_root
 test_orphan_sweep_respects_fixture_ownership
 test_orphan_sweep_reaps_read_only_package_tree
+test_owned_processes_gone_after_normal_exit
+test_hard_killed_suite_processes_reaped_by_next_suite
+test_runner_reaps_what_a_suite_without_lib_leaves
+test_sweep_spares_a_live_suite_the_runner_launched
