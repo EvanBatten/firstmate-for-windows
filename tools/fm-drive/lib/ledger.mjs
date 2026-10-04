@@ -1,6 +1,3 @@
-// The one definition of proof: which inventory rows a drive result proves,
-// and how record rewrites .agents/skills/verify-firstmate/behaviors.tsv from it.
-
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
