@@ -1411,6 +1411,35 @@ describe('close', () => {
     }
   });
 
+  test('a pool another process holds open does not stop close from archiving', () => {
+    const user = tmp('pool-user');
+    const home = join(tmp('pool-home'), 'firstmate');
+    mkdirSync(join(home, '.git'), { recursive: true });
+    mkdirSync(join(home, 'state'));
+    writeFileSync(join(home, 'state', 't1.status'), 'done: ready\n');
+    const wt = join(user, '.treehouse', 'greeter-1', '1', 'greeter');
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(join(wt, '.git'), `gitdir: ${join(home, '.git', 'worktrees', 'greeter')}\n`);
+    mkdirSync(join(home, '.git', 'worktrees', 'greeter'), { recursive: true });
+    const holder = spawn(NODE, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: wt, stdio: 'ignore' });
+    try {
+      const evidence = join(tmp('pool-evidence'), 'run');
+      const script = join(tmp('pool-script'), 'close.mjs');
+      writeFileSync(script, `
+        import { Session } from ${JSON.stringify(pathToFileURL(join(HERE, '..', 'lib', 'session.mjs')).href)};
+        const s = new Session({ trace: { feature: 'pool', steps: [] }, env: { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME, PATH: '', FM_DRIVE_EVIDENCE: process.argv[3] } });
+        s.home = process.argv[2];
+        await s.destroyPools();
+        s.archive();
+        console.log('archived');
+      `);
+      const r = spawnSync(NODE, [script, home, evidence], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, USERPROFILE: user, HOME: user } });
+      assert.deepEqual({ status: r.status, out: r.stdout.trim(), kept: existsSync(join(evidence, 'home', 'state', 't1.status')) }, { status: 0, out: 'archived', kept: true }, r.stderr);
+    } finally {
+      holder.kill();
+    }
+  });
+
   test('stopWatcher stops the pid the watcher recorded, including an MSYS pid on Windows', async () => {
     const home = tmp('watcher-home');
     const lock = join(home, 'state', '.watch.lock');
