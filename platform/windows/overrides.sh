@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 # shellcheck source=platform/windows/herdr.sh
 ! declare -F fm_backend_herdr_cli >/dev/null || . "${FM_PLATFORM_OVERLAY%/*}/herdr.sh"
+# herdr() resolves its binary once per PATH, but a call inside $(...) keeps the
+# answer in that subshell, so a script whose herdr calls are all captured forks
+# to resolve again on every call. Resolving here keeps it in the sourcing shell.
+! declare -F _fm_win_herdr_resolve >/dev/null || [ "$PATH" = "${_FM_WIN_HERDR_PATH_KEY-}" ] || _fm_win_herdr_resolve
 
 # A test fixture that puts its own fake `ps` first on PATH keeps the upstream
 # bodies, which read that fake as they do on Linux. MSYS's own ps is not a
