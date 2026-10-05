@@ -17,7 +17,7 @@ clean() { env -u FM_WIN_PRIVATE_ROOTS -u BASH_ENV -u FM_WIN_PRIOR_BASH_ENV -u FM
 # A clone the way Git for Windows makes one by default, with the working tree's
 # overlay copied in so the code under test is this checkout's.
 default_clone() {
-  git clone -q -c core.symlinks=false "$ROOT" "$1" || return 1
+  git -c advice.detachedHead=false clone -q -c core.symlinks=false "$ROOT" "$1" || return 1
   cp -R "$ROOT/platform/windows/." "$1/platform/windows/"
 }
 launch() { (cd "$1" && clean FM_HOME="$1" PATH="${2:-$PATH}" bash -c '. platform/windows/env.sh' 2>&1); }
