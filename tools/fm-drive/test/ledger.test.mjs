@@ -231,6 +231,19 @@ describe('record', () => {
     assert.match(onTime.tsv, /^row-dispatch\t[^\t]*\t[^\t]*\tproven\tregister\t/m);
   });
 
+  test('a step whose ms is not a finite number of milliseconds is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    for (const [ms, shown] of [[null, 'null'], ['1000', '"1000"'], [undefined, 'missing'], [-1, '-1']]) {
+      const r = record(root, resultFile('held', sha, (res) => {
+        res.steps[1] = { ...res.steps[1], ms };
+        return res;
+      }));
+      assert.equal(r.status, 2, `ms ${shown}`);
+      assert.equal(r.stderr, `fm-drive: record refused: step 2 has no elapsed time (ms is ${shown})\n`);
+      assert.equal(r.tsv, BASE);
+    }
+  });
+
   test('a result whose steps all held but which says it did not pass is refused', () => {
     const { root, sha } = ledgerRepo(BASE);
     const r = record(root, resultFile('held', sha, (res) => ({ ...res, pass: false })));
