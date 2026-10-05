@@ -95,6 +95,23 @@ expect "a copy with no .git inside another repo launches silently" "" "$(launch 
 expect "and leaves the enclosing repo's config alone" "$outer_symlinks" "$(git -C "$O" config --local core.symlinks)"
 expect "and its own links as they were" "$all_files" "$(links "$O/fm")"
 
+S=$T/super
+git init -q "$S"
+git -C "$S" config core.symlinks false
+super_config=$(git -C "$S" config --local core.symlinks)
+git -C "$S" -c protocol.file.allow=always -c core.symlinks=false submodule add -q "$ROOT" fm 2>/dev/null
+cp -R "$ROOT/platform/windows/." "$S/fm/platform/windows/"
+sub_config=$(git -C "$S/fm" config --local core.symlinks)
+expect "a submodule checkout of firstmate starts with plain-file links" "$all_files" "$(links "$S/fm")"
+launch "$S/fm" >/dev/null
+case "$(links "$S/fm") $(git -C "$S/fm" config --local core.symlinks)" in
+  "$all_links true" | *" $sub_config") ok "a launch from a submodule restores its links or leaves core.symlinks as it was" ;;
+  *) not_ok "a launch from a submodule restores its links or leaves core.symlinks as it was (got: $(links "$S/fm") $(git -C "$S/fm" config --local core.symlinks))" ;;
+esac
+expect "and the submodule's own links are restored" "$all_links" "$(links "$S/fm")"
+expect "so a commit -a there records no type change" "" "$(tracked_status "$S/fm")"
+expect "and the superproject's config is left alone" "$super_config" "$(git -C "$S" config --local core.symlinks)"
+
 A=$T/archive
 mkdir "$A"
 default_clone "$A/fm"
