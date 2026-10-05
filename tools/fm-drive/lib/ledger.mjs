@@ -58,10 +58,9 @@ function refuseResult(r, root, heads) {
     return `the result's proves do not match tools/fm-drive/traces/${r.trace}.json, so inventory.sh check could not trace its rows`;
   }
   if (!Array.isArray(r.steps)) return 'the result has no steps';
-  if (r.pass !== true) {
-    const miss = r.steps.findIndex((s) => !s.ok);
-    return miss < 0 ? 'the run did not pass, and a failed run proves nothing' : `the run missed step ${miss + 1} (${r.steps[miss].reason}), and a failed run proves nothing`;
-  }
+  const miss = r.steps.findIndex((s) => s?.ok !== true);
+  if (miss >= 0) return `the run missed step ${miss + 1} (${r.steps[miss]?.reason}), and a failed run proves nothing`;
+  if (r.pass !== true) return 'the run did not pass, and a failed run proves nothing';
   if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
   if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   if (typeof r.evidence !== 'string' || r.evidence === '') return 'the result names no evidence directory';
