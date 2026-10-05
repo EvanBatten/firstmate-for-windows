@@ -223,15 +223,16 @@ describe('trace refusal', () => {
     assert.ok(!existsSync(join(dir, 'calls.log')));
   });
 
-  test('the shipped traces validate through check', () => {
-    const shipped = readdirSync(join(HERE, '..', 'traces')).sort();
-    assert.deepEqual(shipped, ['register.json', 'restart-primary.json', 'scout-report.json']);
-    const steps = { register: 1, 'restart-primary': 5, 'scout-report': 6 };
-    for (const [name, count] of Object.entries(steps)) {
-      const r = runDrive(['check', join(HERE, '..', 'traces', `${name}.json`)], process.env);
-      assert.equal(r.status, 0, r.stderr);
-      assert.equal(r.json.feature, name);
-      assert.equal(r.json.steps.length, count);
+  test('every shipped trace validates through check', () => {
+    const dir = join(HERE, '..', 'traces');
+    const shipped = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    assert.ok(shipped.includes('restart-primary.json'), shipped.join(' '));
+    for (const file of shipped) {
+      const want = JSON.parse(readFileSync(join(dir, file), 'utf8'));
+      const r = runDrive(['check', join(dir, file)], process.env);
+      assert.equal(r.status, 0, `${file}: ${r.stderr}`);
+      assert.equal(r.json.feature, want.feature, file);
+      assert.equal(r.json.steps.length, want.steps.length, file);
     }
   });
 
