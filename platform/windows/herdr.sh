@@ -73,31 +73,34 @@ herdr() {
 # from FM_PANE_PATH. FM_WIN_PRIVATE_ROOTS spares env.sh in the pane its
 # icacls check.
 _fm_win_herdr_create() {  # <tab|workspace> create <args...>
-  local kind=$1 arg prev='' session='' workspace='' cwd='' label='' focus=false env root out layout
-  local vars=(--arg FM_PANE_PATH "$PATH")
+  local kind=$1 arg prev='' workspace='' cwd='' label='' focus=false env root out layout session=()
+  local rc=${FM_PLATFORM_OVERLAY%/*}/pane-rc.sh vars=(--arg FM_PANE_PATH "$PATH")
+  [ -r "$rc" ] || { echo "error: no pane-rc.sh at $rc for the pane's Git Bash" >&2; return 1; }
   [ -z "${FM_WIN_PRIVATE_ROOTS:-}" ] || vars+=(--arg FM_WIN_PRIVATE_ROOTS "$FM_WIN_PRIVATE_ROOTS")
   for arg in "${@:3}"; do
     case $prev in
-      --session) session=$arg ;;
+      --session) session=(--session "$arg") ;;
       --workspace) workspace=$arg ;;
       --cwd) cwd=$arg ;;
       --label) label=$arg ;;
       --env) vars+=(--arg "${arg%%=*}" "${arg#*=}") ;;
     esac
-    [ "$arg" != --focus ] || focus=true
+    case $arg in
+      --focus) focus=true ;;
+      --session=*) session=("$arg") ;;
+    esac
     prev=$arg
   done
-  session=${session:-${HERDR_SESSION:-}}
   env=$(MSYS2_ARG_CONV_EXCL='*' jq -nc "${vars[@]}" '$ARGS.named') || return 1
   root=$(jq -nc --argjson env "$env" --arg cwd "$cwd" --arg bash "$(cygpath -w -- "$BASH")" \
-    --arg rc "$(cygpath -w -- "${FM_PLATFORM_OVERLAY%/*}/pane-rc.sh")" \
+    --arg rc "$(cygpath -w -- "$rc")" \
     '{type: "pane", command: [$bash, "--rcfile", $rc, "-i"], env: $env} + if $cwd == "" then {} else {cwd: $cwd} end') || return 1
 
   if [ "$kind" = tab ]; then
-    layout=$(_fm_win_herdr_api "$session" layout.apply "$(jq -nc --argjson root "$root" --argjson focus "$focus" \
+    layout=$(_fm_win_herdr_api layout.apply "$(jq -nc --argjson root "$root" --argjson focus "$focus" \
       --arg ws "$workspace" --arg label "$label" \
       '{root: $root, focus: $focus} + (if $ws == "" then {} else {workspace_id: $ws} end)
-        + if $label == "" then {} else {tab_label: $label} end')") || return 1
+        + if $label == "" then {} else {tab_label: $label} end')" "${session[@]}") || return 1
     jq -c --arg label "$label" '.result.layout as $l | {id: "cli:tab:create", result: {type: "tab_created",
       tab: {tab_id: $l.tab_id, workspace_id: $l.workspace_id, label: $label},
       root_pane: {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}}}' <<< "$layout"
@@ -105,10 +108,10 @@ _fm_win_herdr_create() {  # <tab|workspace> create <args...>
   fi
 
   out=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "$@") || { printf '%s\n' "$out"; return 1; }
-  if ! layout=$(_fm_win_herdr_api "$session" layout.apply "$(jq -c --argjson root "$root" \
-    '{tab_id: .result.tab.tab_id, focus: false, root: $root}' <<< "$out")"); then
+  if ! layout=$(_fm_win_herdr_api layout.apply "$(jq -c --argjson root "$root" \
+    '{tab_id: .result.tab.tab_id, focus: false, root: $root}' <<< "$out")" "${session[@]}"); then
     MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" workspace close "$(jq -r .result.workspace.workspace_id <<< "$out")" \
-      ${session:+--session "$session"} >/dev/null 2>&1
+      "${session[@]}" >/dev/null 2>&1
     return 1
   fi
   jq -c --argjson l "$(jq -c .result.layout <<< "$layout")" '.result.tab.tab_id = $l.tab_id
@@ -116,12 +119,14 @@ _fm_win_herdr_create() {  # <tab|workspace> create <args...>
     | .result.root_pane = {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}' <<< "$out"
 }
 
-# One request on herdr's socket, for a method its CLI does not offer.
-_fm_win_herdr_api() {  # <session> <method> <params-json>
+# One request on herdr's socket, for a method its CLI does not offer. Status
+# takes the create's own session arguments, so it names the socket the CLI
+# picked for the create, HERDR_SOCKET_PATH included.
+_fm_win_herdr_api() {  # <method> <params-json> [session-args...]
   local socket
-  socket=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" status --json ${1:+--session "$1"} | jq -r '.server.socket // empty')
-  [ -n "$socket" ] || { echo "error: herdr session ${1:-default} reported no socket" >&2; return 1; }
-  MSYS2_ARG_CONV_EXCL='*' node "$(cygpath -w -- "${FM_PLATFORM_OVERLAY%/*}/herdr-api.mjs")" "$socket" "$2" "$3"
+  socket=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" status --json "${@:3}" | jq -r '.server.socket // empty')
+  [ -n "$socket" ] || { echo "error: herdr status ${*:3} reported no socket" >&2; return 1; }
+  MSYS2_ARG_CONV_EXCL='*' node "$(cygpath -w -- "${FM_PLATFORM_OVERLAY%/*}/herdr-api.mjs")" "$socket" "$1" "$2"
 }
 
 # Keeps upstream's current body under _fm_win_upstream_<name> for the wrapper
