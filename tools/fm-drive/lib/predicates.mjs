@@ -22,13 +22,16 @@
 //   wake.empty                  state/.wake-queue is missing or has no non-blank line
 //   beacon.fresh                state/.last-watcher-beat was touched within 300 s
 //   file.contains:REL:NEEDLE    <home>/REL exists and contains NEEDLE (REL must stay inside the home)
+//   turn.ended                  the primary started a turn after the say and it came to rest (idle, done
+//                               or blocked); it only times a claim, so pair it with a home record an
+//                               earlier step made true
 //   wake.delivered:REASON>=N    state/.watch-deliveries.log gained at least N (>=1) lines with that reason
 //                               since the say (signal, stale, heartbeat, check, needs-decision,
 //                               captain-held, paused)
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
 //
-// Since-say atoms (lock.rotated, wake.delivered) compare against ctx.since, the Baseline the driver captured right
+// Since-say atoms (lock.rotated, turn.ended, wake.delivered) compare against ctx.since, the Baseline the driver captured right
 // before it typed the say a step waits on. They are false at the say by construction.
 
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'node:fs';
@@ -36,6 +39,8 @@ import { join, resolve, sep } from 'node:path';
 
 export const RESERVED_UNTIL = ['pong', 'bypass permissions on'];
 export const STARTUP_ONLY = ['lock.held'];
+export const TIMING_ONLY = ['turn.ended'];
+export const REST_STATUSES = ['idle', 'done', 'blocked'];
 export const STATUS_VERBS = ['done', 'needs-decision', 'blocked', 'failed', 'working', 'paused', 'resolved', 'note', 'captain-held'];
 export const HERDR_ATOMS = ['tabs.clean', 'worker.alive'];
 export const WAKE_REASONS = ['signal', 'stale', 'heartbeat', 'check', 'needs-decision', 'captain-held', 'paused'];
@@ -60,6 +65,7 @@ const ATOMS = [
   { name: 'wake.empty', re: /^wake\.empty$/, args: [] },
   { name: 'beacon.fresh', re: /^beacon\.fresh$/, args: [] },
   { name: 'file.contains', re: /^file\.contains:([^:]+):(.+)$/, args: ['rel', 'needle'] },
+  { name: 'turn.ended', re: /^turn\.ended$/, args: [] },
   { name: 'wake.delivered', re: new RegExp(`^wake\\.delivered:(${WAKE_REASONS.join('|')})>=(\\d+)$`), args: ['reason', 'n'], int: ['n'], min: { n: 1 } },
 ];
 
@@ -237,6 +243,8 @@ export function snapshotHome(home, nowMs = Date.now()) {
     gitAhead: {},
     // Filled by the wait loop: { [name]: { tips, count } }.
     gitUnlanded: {},
+    // Filled by the wait loop: the primary's turn spans, [{ startedAt, restAt }].
+    turns: [],
   };
 }
 
@@ -255,6 +263,12 @@ export function backlogSectionItems(text, section) {
 export function recordedPaneIds(snap) {
   return Object.values(snap.meta).map((m) => m.herdr_pane_id || (m.window || '').replace(/^[^:]*:/, '')).filter(Boolean);
 }
+
+/**
+ * One primary turn as Herdr showed it. startedAt is the first working observation after a rest
+ * and never moves; restAt is the rest that closed it.
+ * @typedef {{ startedAt: number, restAt: number }} TurnSpan
+ */
 
 /**
  * What the home looked like the moment before the driver typed a say or began a $relaunch.
@@ -357,6 +371,11 @@ export function evaluateAtom(atom, snap, ctx) {
       const text = readText(p);
       if (text === null) return { ok: false, reason: `${a.rel} missing` };
       return { ok: text.includes(a.needle), reason: text.includes(a.needle) ? `${a.rel} contains it` : `${a.rel} lacks it` };
+    }
+    case 'turn.ended': {
+      const span = ctx.since && snap.turns.find((t) => t.startedAt > ctx.since.at);
+      if (!span) return { ok: false, reason: 'no primary turn has ended since the say', needs: 'turn' };
+      return { ok: true, reason: `turn rested ${span.restAt - ctx.since.at} ms after the say` };
     }
     case 'wake.delivered': {
       const n = ctx.since ? deliveriesSince(snap.deliveries, ctx.since, a.reason) : 0;

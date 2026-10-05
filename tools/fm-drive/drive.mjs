@@ -3,7 +3,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { loadTrace, interpolate, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
-import { Session, driveRoot } from './lib/session.mjs';
+import { Session, driveRoot, REST_BEFORE_SAY_MS } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
 import { parseUntil } from './lib/predicates.mjs';
 import { HerdrError } from './lib/herdr.mjs';
@@ -137,6 +137,12 @@ async function run(trace, traceName) {
     const onSnapshot = (snap) => session.noteTaskIds(snap);
     let since = await session.baseline();
     const ctxNow = () => ({ since, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
+    const timed = (i) => {
+      for (let j = i; j < steps.length && (j === i || steps[j].say === ''); j++) {
+        if (steps[j].parsed.atoms.some((a) => a.name === 'turn.ended')) return true;
+      }
+      return false;
+    };
     const short = (text) => JSON.stringify(text.length > 60 ? `${text.slice(0, 57)}...` : text);
     const emptyHeldBefore = new Map();
     const noteEmptyWaiters = async (from, ctx) => {
@@ -181,7 +187,12 @@ async function run(trace, traceName) {
           firstSay = false;
           if (!withheld) log(`home operable in ${op.operableMs} ms; said ${short(step.say)}; waiting for ${step.until}`);
         } else {
-          withheld = await heldBefore();
+          if (timed(i)) {
+            const rest = await session.awaitRest(REST_BEFORE_SAY_MS);
+            rec.restMs = rest.waitedMs;
+            if (!rest.ok) withheld = `the primary never came to rest within ${Math.round(REST_BEFORE_SAY_MS / 1000)} s before the say, so turn.ended could not be timed from it`;
+          }
+          withheld ??= await heldBefore();
           if (!withheld) {
             rec.sayMs = await session.say(step.say);
             log(`step ${i + 1}: said ${short(step.say)}; waiting for ${step.until}`);

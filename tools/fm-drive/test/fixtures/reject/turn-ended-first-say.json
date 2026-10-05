@@ -1,0 +1,1 @@
+{"feature": "turn-ended-first-say", "project": "greeter", "steps": [{"say": "ahoy! add my project from {{projectOrigin}} as greeter", "until": "turn.ended && projects.registered:greeter", "budgetSec": 60}]}

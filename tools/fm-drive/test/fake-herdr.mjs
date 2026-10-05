@@ -102,6 +102,11 @@ async function applyWrites(home, writes, sayText) {
       writeFileSync(join(repo, w.file), w.content ?? '');
       git(repo, 'add', '-A');
       git(repo, '-c', 'user.email=fake@example.invalid', '-c', 'user.name=fake', 'commit', '-qm', `add ${w.file}`);
+    } else if (w.status !== undefined) {
+      const s = load();
+      s.status = w.status;
+      s.statuses = [...(s.statuses ?? []), { status: w.status, t: Date.now() }];
+      save(s);
     } else if (w.killPrimary) {
       const s = load();
       killPrimary(s);
@@ -165,7 +170,7 @@ if (args[0] === '--apply') {
       break;
     }
     case 'pane get':
-      out({ pane: { pane_id: a[2], agent_status: process.env.FAKE_HERDR_STATUS || 'idle' } });
+      out({ pane: { pane_id: a[2], agent_status: s.status ?? (process.env.FAKE_HERDR_STATUS || 'idle') } });
       break;
     case 'pane read':
       if (!primaryAlive(s)) process.stdout.write('\n$ \n');

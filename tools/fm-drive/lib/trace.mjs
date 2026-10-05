@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
+import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, TIMING_ONLY, RESERVED_UNTIL } from './predicates.mjs';
 
 export class TraceError extends Error {
   constructor(message) {
@@ -168,7 +168,24 @@ export function validateTrace(raw, { root } = {}) {
 // Placement rules for atoms whose meaning depends on what the driver set up before a say.
 function refuseMisplacedSinceAtoms(steps, { project }) {
   const seeded = steps.some((s) => s.say.includes('{{projectOrigin}}')) ? (project || 'greeter') : null;
+  const firstTyped = steps.findIndex((s) => s.say !== '' && s.say !== RELAUNCH);
+  let governing = -1;
+  const earlier = new Set();
   for (const [i, step] of steps.entries()) {
+    if (step.say !== '') governing = i;
+    const names = step.parsed.atoms.map((a) => a.name);
+    if (names.includes('turn.ended')) {
+      const at = `steps[${i}].until`;
+      if (governing === -1 || governing === firstTyped || steps[governing].say === RELAUNCH) {
+        throw new TraceError(`${at}: turn.ended needs a typed captain say before it; the primary's own startup turn would satisfy it`);
+      }
+      if (names.every((n) => TIMING_ONLY.includes(n) || STARTUP_ONLY.includes(n))) {
+        throw new TraceError(`${at}: turn.ended only times a claim; pair it with a home record`);
+      }
+      const fresh = step.parsed.atoms.find((a) => !TIMING_ONLY.includes(a.name) && !earlier.has(a.raw));
+      if (fresh) throw new TraceError(`${at}: ${fresh.raw} must hold in an earlier step, so turn.ended keeps something this run made true`);
+    }
+    for (const a of step.parsed.atoms) earlier.add(a.raw);
     for (const atom of step.parsed.atoms) {
       if (atom.name === 'git.ahead' && atom.args.name !== seeded) {
         throw new TraceError(`steps[${i}].until: git.ahead:${atom.args.name} needs the project the driver seeds through {{projectOrigin}}; an unseeded clone counts any main as ahead`);

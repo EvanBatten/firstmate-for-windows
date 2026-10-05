@@ -1,0 +1,1 @@
+{"feature": "turn-ended-fresh-fact", "project": "greeter", "steps": [{"say": "ahoy! add my project from {{projectOrigin}} as greeter", "until": "projects.registered:greeter", "budgetSec": 60}, {"say": "tell me about the greeter project", "until": "turn.ended && file.contains:AGENTS.md:firstmate", "budgetSec": 60}]}

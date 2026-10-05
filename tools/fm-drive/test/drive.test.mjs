@@ -201,6 +201,10 @@ describe('trace refusal', () => {
   test('a since-say or seeded atom in the wrong place is refused with its reason', () => {
     const reasons = {
       'git-ahead-unseeded.json': 'git.ahead:notes needs the project the driver seeds through {{projectOrigin}}',
+      'turn-ended-alone.json': 'turn.ended only times a claim; pair it with a home record',
+      'turn-ended-after-relaunch.json': 'turn.ended needs a typed captain say before it',
+      'turn-ended-first-say.json': 'turn.ended needs a typed captain say before it',
+      'turn-ended-fresh-fact.json': 'file.contains:AGENTS.md:firstmate must hold in an earlier step',
     };
     const got = Object.fromEntries(Object.keys(reasons).map((f) => {
       const { dir, env } = fakeEnv();
@@ -239,7 +243,7 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
@@ -342,6 +346,17 @@ describe('predicates over fixture homes', () => {
     g('merge', '-q', '--ff-only', 'fm/greet-sh');
     const landed = await holdsNow({ home, parsed, ctx: ctx(), deps });
     assert.deepEqual({ ok: landed.ok, reason: landed.reason }, { ok: false, reason: 'git.unlanded:greeter>=1: 0 unlanded commit(s)' });
+  });
+
+  test('a turn span starts on the working edge and never moves', () => {
+    const session = new sessionLib.Session({ trace: { feature: 'turns', steps: [] }, env: { FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') } });
+    for (const [status, at] of [['working', 10], ['working', 18], ['idle', 20], ['idle', 30], ['working', 40], ['working', 50], ['blocked', 55]]) session.noteTurn(status, at);
+    assert.deepEqual(session.signals.turns, [{ startedAt: 10, restAt: 20 }, { startedAt: 40, restAt: 55 }]);
+    const home = buildHome('empty');
+    const at = (t) => ctx({ since: { at: t, lock: null, deliveries: new Map(), firstDelivery: null, remoteSha: null } });
+    assert.equal(check(home, 'turn.ended', at(15), { turns: session.signals.turns }).ok, true);
+    const late = check(home, 'turn.ended', at(45), { turns: session.signals.turns });
+    assert.deepEqual({ ok: late.ok, reason: late.reason, needs: late.needs }, { ok: false, reason: 'turn.ended: no primary turn has ended since the say', needs: 'turn' });
   });
 
   test('herdr-backed atoms request their fact and then decide', () => {
@@ -786,6 +801,52 @@ describe('fake-herdr end to end', () => {
     const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
     assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.deepEqual(r.json.steps.map((s) => s.ok), [true, true, true]);
+  });
+
+  const refusalScript = (cleanup) => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({ 'add my project': base['add my project'], 'dispatch a worker': base['dispatch a worker'], 'clean up the greeter worker': cleanup }));
+    return file;
+  };
+  const refusalTrace = {
+    feature: 'e2e-refusal',
+    steps: [
+      { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+      { say: 'now dispatch a worker', until: 'tasks.count>=1', budgetSec: 10 },
+      { say: 'clean up the greeter worker', until: 'turn.ended && tasks.count>=1', budgetSec: 6 },
+    ],
+  };
+
+  test('a refused cleanup passes only when the primary took a turn and the work survived', () => {
+    const runWith = (cleanup) => {
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: refusalScript(cleanup), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      return runDrive(['run', writeTrace(tmp('trace'), refusalTrace)], env);
+    };
+    const took = runWith([{ status: 'working' }, { delayMs: 2500 }, { status: 'idle' }]);
+    assert.equal(took.status, 0, `stdout: ${took.stdout}\nstderr: ${took.stderr}`);
+    const ignored = runWith([]);
+    assert.equal(ignored.status, 1, ignored.stdout);
+    assert.match(ignored.json.steps.at(-1).reason, /^not within 6 s: turn\.ended: no primary turn has ended since the say/);
+    const discarded = runWith([{ status: 'working' }, { remove: 'state/t1.meta' }, { delayMs: 2500 }, { status: 'idle' }]);
+    assert.equal(discarded.status, 1, discarded.stdout);
+    assert.match(discarded.json.steps.at(-1).reason, /tasks\.count>=1: 0 task record\(s\)/);
+  });
+
+  test('a timed say waits for the primary to rest first', () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const script = join(tmp('script'), 'script.json');
+    writeFileSync(script, JSON.stringify({
+      'add my project': base['add my project'],
+      'dispatch a worker': [{ status: 'working' }, ...base['dispatch a worker'], { delayMs: 3000 }, { status: 'idle' }],
+      'clean up the greeter worker': [{ status: 'working' }, { delayMs: 2500 }, { status: 'idle' }],
+    }));
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), refusalTrace)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const idleAt = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).statuses.find((x) => x.status === 'idle').t;
+    const saidAt = Date.parse(readFileSync(join(env.FM_DRIVE_EVIDENCE, 'captain.log'), 'utf8').split('\n').find((l) => l.endsWith('\tclean up the greeter worker')).split('\t')[0]);
+    assert.ok(saidAt - idleAt >= 2000, `said ${saidAt - idleAt} ms after the primary came to rest`);
   });
 
   test('a dead primary fails its step at once', () => {

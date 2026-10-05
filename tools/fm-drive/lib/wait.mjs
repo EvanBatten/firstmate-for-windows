@@ -6,12 +6,12 @@ export const DEBOUNCE_MS = 40;
 export const SAFETY_TICK_MS = 1000;
 export const LIVENESS_TICK_MS = 500;
 // Minimum gap between two fetches of one fact kind inside one wait.
-export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000 };
+export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000, turn: 1000 };
 
 // deps:
 //   liveness()            -> { alive: boolean, reason: string }   (sync or async)
-//   signals               -> { blocked: string|null }  set by the session's event stream
-//   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes'
+//   signals               -> { blocked: string|null, turns: TurnSpan[] }  set by the session's event stream
+//   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes', or samples the primary for 'turn'
 //   gitAhead              -> shared cache { [name]: { sha, count } } fetchFact fills
 //   gitUnlanded           -> shared cache { [name]: { tips, count } } fetchFact fills
 //   seeds                 -> { [name]: sha }
@@ -20,6 +20,7 @@ function observe(home, deps, onSnapshot) {
   const snap = snapshotHome(home);
   snap.gitAhead = deps.gitAhead;
   snap.gitUnlanded = deps.gitUnlanded;
+  snap.turns = deps.signals?.turns ?? [];
   onSnapshot?.(snap);
   return snap;
 }
