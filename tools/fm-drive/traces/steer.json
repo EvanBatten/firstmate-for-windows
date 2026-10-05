@@ -1,0 +1,34 @@
+{
+  "feature": "steer",
+  "project": "greeter",
+  "proves": {
+    "fm-send": 3
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 150
+    },
+    {
+      "say": "ship one change to greeter: add greet.sh with three subcommands, hello, bye and version, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. wait for my go before landing it.",
+      "until": "tasks.count>=1 && backlog.inflight>=1",
+      "budgetSec": 180
+    },
+    {
+      "say": "one more thing for the greeter worker: greet.sh also needs a fourth subcommand, shout, that prints HELLO FROM THE CREW, documented in the README with the others. please pass that on to it now.",
+      "until": "inbox.handled",
+      "budgetSec": 240
+    },
+    {
+      "say": "when the greeter worker is done, check that shout works, then land it on main; you have my approval. clean up and tell me after.",
+      "until": "git.ahead:greeter>=1 && file.contains:projects/greeter/greet.sh:HELLO FROM THE CREW",
+      "budgetSec": 400
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean",
+      "budgetSec": 120
+    }
+  ]
+}
