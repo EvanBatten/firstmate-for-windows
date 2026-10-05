@@ -132,6 +132,16 @@ describe('record', () => {
     assert.equal(r.tsv, BASE);
   });
 
+  test('a run whose health check waited on anything but the driver\'s health check is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    for (const [until, shown] of [['true', 'true'], ['home.clean', 'home.clean'], [undefined, 'nothing']]) {
+      const r = record(root, resultFile('held', sha, (res) => ({ ...res, health: { until, ok: true, reason: 'holds' } })));
+      assert.equal(r.status, 2, `until ${shown}`);
+      assert.equal(r.stderr, `fm-drive: record refused: the run's home health check waited on ${shown}, not home.clean && tabs.clean && wake.empty\n`);
+      assert.equal(r.tsv, BASE);
+    }
+  });
+
   test('an environment error is refused and the table is untouched', () => {
     const { root, sha } = ledgerRepo(BASE);
     const r = record(root, resultFile('env-error', sha));
