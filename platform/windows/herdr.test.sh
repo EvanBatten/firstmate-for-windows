@@ -93,9 +93,11 @@ fm_backend_herdr_send_key "$target" C-u
 fm_backend_herdr_kill "$target"
 expect_eq "a task kill removes the pane" dead "$(fm_backend_herdr_pane_presence_state "$S" "$pane")"
 
-broken=$(BASH=/c/fm-win-no-such-dir/bash.exe; fm_backend_herdr_cli "$S" tab create --workspace "$ws" --cwd "$T" --label broken --no-focus 2>&1) &&
-  not_ok "a tab whose Git Bash cannot start fails its create (got: $broken)" ||
+if broken=$(BASH=/c/fm-win-no-such-dir/bash.exe; fm_backend_herdr_cli "$S" tab create --workspace "$ws" --cwd "$T" --label broken --no-focus 2>&1); then
+  not_ok "a tab whose Git Bash cannot start fails its create (got: $broken)"
+else
   ok "a tab whose Git Bash cannot start fails its create"
+fi
 
 ws2=$(fm_backend_herdr_cli "$S" workspace create --cwd "$T" --label o3t-2 --no-focus | jq -r '.result.workspace.workspace_id // empty')
 fm_backend_herdr_cli "$S" workspace close "$ws2" >/dev/null
