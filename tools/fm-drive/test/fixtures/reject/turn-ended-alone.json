@@ -1,0 +1,1 @@
+{"feature": "turn-ended-alone", "project": "greeter", "steps": [{"say": "ahoy! add my project from {{projectOrigin}} as greeter", "until": "projects.registered:greeter", "budgetSec": 60}, {"say": "clean up the greeter worker", "until": "turn.ended", "budgetSec": 60}]}

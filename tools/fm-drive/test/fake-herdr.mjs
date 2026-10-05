@@ -102,6 +102,19 @@ async function applyWrites(home, writes, sayText) {
       writeFileSync(join(repo, w.file), w.content ?? '');
       git(repo, 'add', '-A');
       git(repo, '-c', 'user.email=fake@example.invalid', '-c', 'user.name=fake', 'commit', '-qm', `add ${w.file}`);
+    } else if (w.pushRemote !== undefined) {
+      const work = join(DIR, `push-${Date.now()}`);
+      spawnSync('git', ['clone', '-q', process.env.FM_DRIVE_REMOTE_ORIGIN, work], { stdio: 'ignore' });
+      writeFileSync(join(work, w.pushRemote), w.content ?? '');
+      git(work, 'add', '-A');
+      git(work, '-c', 'user.email=fake@example.invalid', '-c', 'user.name=fake', 'commit', '-qm', `update ${w.pushRemote}`);
+      git(work, 'push', '-q', 'origin', 'HEAD:main');
+      rmSync(work, { recursive: true, force: true });
+    } else if (w.status !== undefined) {
+      const s = load();
+      s.status = w.status;
+      s.statuses = [...(s.statuses ?? []), { status: w.status, t: Date.now() }];
+      save(s);
     } else if (w.killPrimary) {
       const s = load();
       killPrimary(s);
@@ -165,7 +178,7 @@ if (args[0] === '--apply') {
       break;
     }
     case 'pane get':
-      out({ pane: { pane_id: a[2], agent_status: process.env.FAKE_HERDR_STATUS || 'idle' } });
+      out({ pane: { pane_id: a[2], agent_status: s.status ?? (process.env.FAKE_HERDR_STATUS || 'idle') } });
       break;
     case 'pane read':
       if (!primaryAlive(s)) process.stdout.write('\n$ \n');

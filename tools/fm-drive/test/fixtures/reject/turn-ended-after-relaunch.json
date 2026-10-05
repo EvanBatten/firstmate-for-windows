@@ -1,0 +1,1 @@
+{"feature": "turn-ended-after-relaunch", "project": "greeter", "steps": [{"say": "ahoy! add my project from {{projectOrigin}} as greeter and dispatch a worker", "until": "tasks.count>=1", "budgetSec": 60}, {"say": "$relaunch", "until": "turn.ended && tasks.count>=1", "budgetSec": 60}]}

@@ -1,40 +1,58 @@
-// Catalog (arguments after ':'; NAME is [A-Za-z0-9._-]+, N a non-negative integer):
+// Catalog (arguments after ':'; NAME is [A-Za-z0-9._-]+, N an integer of at least 1, since a count
+// of 0 holds before anything happened):
 //   projects.registered:NAME    data/projects.md has a "- NAME " row and projects/NAME/.git exists
 //   tasks.count>=N              at least N state/*.meta task records
 //   backlog.inflight>=N         data/backlog.md lists at least N items under "## In flight"
 //                               (fm-spawn's commit point: a record whose item is not In flight is
 //                               a spawn still in progress, which its abort cleanup may remove)
 //   tasks.kind:scout|ship       some task record carries kind=<value>
-//   status.verb:VERB            some state/*.status line starts with "VERB:"
+//   status.verb:VERB            some state/*.status line starts with VERB, optional " [key=value]" tags, then ":"
 //                               (done, needs-decision, blocked, failed, working, paused, resolved, note)
 //   report.exists               some data/<id>/report.md is non-empty
 //   report.mentions:NEEDLE      some data/<id>/report.md contains NEEDLE (case-insensitive)
 //   inbox.handled               some state/<id>.inbox/handled/ holds an acknowledged steer
 //   lock.held                   state/.lock exists and is non-empty (startup-only; never enough alone)
-//   lock.rotated                state/.lock differs from the identity captured when the last $relaunch began
+//   lock.rotated                state/.lock differs from the identity in the say's baseline
 //   git.ahead:NAME>=N           projects/NAME main is at least N commits ahead of the seeded base
+//                               (refused unless NAME is the project seeded through {{projectOrigin}})
+//   git.unlanded:NAME>=N        local branches of projects/NAME hold at least N commits main lacks
+//   remote.ahead>=N             main of the {{remoteOrigin}} repo is at least N commits past where it
+//                               stood at the say (needs a say that names {{remoteOrigin}})
 //   home.clean                  no state/*.meta task record remains
 //   tabs.clean                  no herdr tab labelled fm-<id> for a task this run ever recorded is open
 //   worker.alive                every recorded task's herdr pane still answers
 //   wake.empty                  state/.wake-queue is missing or has no non-blank line
 //   beacon.fresh                state/.last-watcher-beat was touched within 300 s
 //   file.contains:REL:NEEDLE    <home>/REL exists and contains NEEDLE (REL must stay inside the home)
+//   turn.ended                  the primary started a turn after the say and it came to rest (idle, done
+//                               or blocked); it only times a claim, so pair it with a home record an
+//                               earlier step made true
+//   wake.delivered:REASON>=N    state/.watch-deliveries.log gained at least N lines with that reason
+//                               since the say (signal, stale, heartbeat, check, needs-decision,
+//                               captain-held, paused)
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
+//
+// Since-say atoms (lock.rotated, turn.ended, wake.delivered, remote.ahead) compare against ctx.since,
+// the Baseline the driver captured right before it typed the say a step waits on. They are false at
+// the say by construction.
 
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 export const RESERVED_UNTIL = ['pong', 'bypass permissions on'];
 export const STARTUP_ONLY = ['lock.held'];
+export const TIMING_ONLY = ['turn.ended'];
+export const REST_STATUSES = ['idle', 'done', 'blocked'];
 export const STATUS_VERBS = ['done', 'needs-decision', 'blocked', 'failed', 'working', 'paused', 'resolved', 'note', 'captain-held'];
 export const HERDR_ATOMS = ['tabs.clean', 'worker.alive'];
+export const WAKE_REASONS = ['signal', 'stale', 'heartbeat', 'check', 'needs-decision', 'captain-held', 'paused'];
 const NAME = '[A-Za-z0-9._-]+';
 
 const ATOMS = [
   { name: 'projects.registered', re: new RegExp(`^projects\\.registered:(${NAME})$`), args: ['name'] },
-  { name: 'tasks.count', re: /^tasks\.count>=(\d+)$/, args: ['n'], int: ['n'] },
-  { name: 'backlog.inflight', re: /^backlog\.inflight>=(\d+)$/, args: ['n'], int: ['n'] },
+  { name: 'tasks.count', re: /^tasks\.count>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
+  { name: 'backlog.inflight', re: /^backlog\.inflight>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
   { name: 'tasks.kind', re: /^tasks\.kind:(scout|ship)$/, args: ['kind'] },
   { name: 'status.verb', re: new RegExp(`^status\\.verb:(${STATUS_VERBS.join('|')})$`), args: ['verb'] },
   { name: 'report.exists', re: /^report\.exists$/, args: [] },
@@ -42,13 +60,17 @@ const ATOMS = [
   { name: 'inbox.handled', re: /^inbox\.handled$/, args: [] },
   { name: 'lock.held', re: /^lock\.held$/, args: [] },
   { name: 'lock.rotated', re: /^lock\.rotated$/, args: [] },
-  { name: 'git.ahead', re: new RegExp(`^git\\.ahead:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'] },
+  { name: 'git.ahead', re: new RegExp(`^git\\.ahead:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
+  { name: 'git.unlanded', re: new RegExp(`^git\\.unlanded:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
+  { name: 'remote.ahead', re: /^remote\.ahead>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
   { name: 'home.clean', re: /^home\.clean$/, args: [] },
   { name: 'tabs.clean', re: /^tabs\.clean$/, args: [] },
   { name: 'worker.alive', re: /^worker\.alive$/, args: [] },
   { name: 'wake.empty', re: /^wake\.empty$/, args: [] },
   { name: 'beacon.fresh', re: /^beacon\.fresh$/, args: [] },
   { name: 'file.contains', re: /^file\.contains:([^:]+):(.+)$/, args: ['rel', 'needle'] },
+  { name: 'turn.ended', re: /^turn\.ended$/, args: [] },
+  { name: 'wake.delivered', re: new RegExp(`^wake\\.delivered:(${WAKE_REASONS.join('|')})>=(\\d+)$`), args: ['reason', 'n'], int: ['n'], min: { n: 1 } },
 ];
 
 export const CATALOG = ATOMS.map((a) => a.name);
@@ -62,6 +84,9 @@ export function parseAtom(text) {
     const args = {};
     def.args.forEach((k, i) => { args[k] = m[i + 1]; });
     for (const k of def.int ?? []) args[k] = Number.parseInt(args[k], 10);
+    for (const [k, least] of Object.entries(def.min ?? {})) {
+      if (args[k] < least) throw new Error(`bad arguments for ${def.name}: ${k} must be at least ${least}, or the claim holds before anything happened`);
+    }
     if (def.name === 'file.contains') {
       const rel = args.rel.replace(/\\/g, '/');
       if (rel.startsWith('/') || /^[A-Za-z]:/.test(rel) || rel.split('/').includes('..')) {
@@ -109,6 +134,58 @@ export function readMainSha(gitDir) {
   return null;
 }
 
+/** @param {string} out  stdout of `git ls-remote <url> refs/heads/main` @returns {string|null} */
+export function mainShaFromLsRemote(out) {
+  return /^([0-9a-f]{40,64})\trefs\/heads\/main$/m.exec(out)?.[1] ?? null;
+}
+
+/** Non-blank lines of state/.watch-deliveries.log, one per delivered watcher wake. */
+export function readDeliveries(home) {
+  return (readText(join(home, 'state', '.watch-deliveries.log')) ?? '').split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
+}
+
+/** @param {string[]} lines @returns {Map<string, number>} */
+export function countLines(lines) {
+  const m = new Map();
+  for (const l of lines) m.set(l, (m.get(l) ?? 0) + 1);
+  return m;
+}
+
+// The writer trims the log with tail -n then tail -c, which can tear the first surviving
+// line inside its pid digits; a first line that differs from the baseline's is skipped.
+// A line counts by how much its multiplicity grew, so a duplicate undercounts.
+export function deliveriesSince(now, since, reason) {
+  const lines = since.firstDelivery !== null && now[0] !== since.firstDelivery ? now.slice(1) : now;
+  const re = new RegExp(`^${reason}(?=[:\\s]|$)`);
+  let n = 0;
+  for (const [line, count] of countLines(lines)) {
+    if (re.test(line.split('\t')[2] ?? '')) n += Math.max(0, count - (since.deliveries.get(line) ?? 0));
+  }
+  return n;
+}
+
+// The branch tips of a clone as sorted "refs/heads/x sha" lines, read without spawning git:
+// loose refs (nested names included) win over packed-refs. git.unlanded caches its count on this.
+export function readBranchTips(gitDir) {
+  const tips = new Map();
+  for (const line of (readText(join(gitDir, 'packed-refs')) ?? '').split('\n')) {
+    const m = /^([0-9a-f]{40,64}) (refs\/heads\/\S+)$/.exec(line.trim());
+    if (m) tips.set(m[2], m[1]);
+  }
+  const walk = (rel) => {
+    for (const name of listDir(join(gitDir, rel))) {
+      const child = `${rel}/${name}`;
+      if (isDir(join(gitDir, child))) walk(child);
+      else {
+        const sha = (readText(join(gitDir, child)) ?? '').trim();
+        if (sha) tips.set(child, sha);
+      }
+    }
+  };
+  walk('refs/heads');
+  return [...tips].map(([ref, sha]) => `${ref} ${sha}`).sort().join('\n');
+}
+
 export function parseMeta(text) {
   const out = {};
   for (const line of (text ?? '').split('\n')) {
@@ -151,7 +228,7 @@ export function snapshotHome(home, nowMs = Date.now()) {
   for (const name of listDir(join(home, 'projects'))) {
     const gitDir = join(home, 'projects', name, '.git');
     if (!isDir(gitDir)) continue;
-    projects[name] = { gitDir: true, mainSha: readMainSha(gitDir) };
+    projects[name] = { gitDir: true, mainSha: readMainSha(gitDir), branchTips: readBranchTips(gitDir) };
   }
   const wake = readText(join(state, '.wake-queue'));
   return {
@@ -168,10 +245,17 @@ export function snapshotHome(home, nowMs = Date.now()) {
     reports,
     wakeQueueLines: wake === null ? 0 : wake.split('\n').filter((l) => l.trim() !== '').length,
     beaconMtimeMs: mtimeMs(join(state, '.last-watcher-beat')),
+    deliveries: readDeliveries(home),
     // Filled by the wait loop when an atom needs it: { tabLabels: string[], panes: { [paneId]: boolean } }.
     herdr: null,
     // Filled by the wait loop: { [name]: { sha, count } }.
     gitAhead: {},
+    // Filled by the wait loop: { [name]: { tips, count } }.
+    gitUnlanded: {},
+    // Filled by the wait loop: the primary's turn spans, [{ startedAt, restAt }].
+    turns: [],
+    // Filled by the wait loop: { base, sha, count } for the {{remoteOrigin}} repo's main.
+    remote: null,
   };
 }
 
@@ -191,7 +275,25 @@ export function recordedPaneIds(snap) {
   return Object.values(snap.meta).map((m) => m.herdr_pane_id || (m.window || '').replace(/^[^:]*:/, '')).filter(Boolean);
 }
 
-// ctx: { lockBaseline: string|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
+/**
+ * One primary turn as Herdr showed it. startedAt is the first working observation after a rest
+ * and never moves; restAt is the rest that closed it.
+ * @typedef {{ startedAt: number, restAt: number }} TurnSpan
+ */
+
+/**
+ * What the home looked like the moment before the driver typed a say or began a $relaunch.
+ * A "" step inherits the Baseline of the say it waits on.
+ * @typedef {object} Baseline
+ * @property {number} at             Date.now() when the baseline was taken
+ * @property {string|null} lock      state/.lock identity
+ * @property {Map<string, number>} deliveries  multiset of .watch-deliveries.log lines
+ * @property {string|null} firstDelivery       the log's first line; a different first line later means a trim
+ * @property {string|null} remoteSha           the {{remoteOrigin}} repo's main; null unless a step claims remote.ahead
+ */
+
+// ctx: { since: Baseline|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
+// since is null only where no say exists yet (refuseVacuousOnFreshHome).
 // Returns { ok, reason, needs } where needs names a herdr fact the snapshot
 // lacks ('tabs' | 'panes'); ok is then false until the wait loop supplies it.
 export function evaluateAtom(atom, snap, ctx) {
@@ -213,7 +315,7 @@ export function evaluateAtom(atom, snap, ctx) {
       return { ok: hit.length > 0, reason: hit.length ? `kind=${a.kind}: ${hit.join(' ')}` : `no task record with kind=${a.kind}` };
     }
     case 'status.verb': {
-      const re = new RegExp(`^${a.verb}:`, 'm');
+      const re = new RegExp(`^${a.verb}(?: \\[[^\\]\\n]*\\])*:`, 'm');
       const hit = Object.entries(snap.status).filter(([, t]) => re.test(t)).map(([id]) => id);
       return { ok: hit.length > 0, reason: hit.length ? `${a.verb}: from ${hit.join(' ')}` : `no ${a.verb}: line yet` };
     }
@@ -233,17 +335,33 @@ export function evaluateAtom(atom, snap, ctx) {
     case 'lock.held':
       return { ok: snap.lock !== null, reason: snap.lock ? `lock ${snap.lock}` : 'no lock' };
     case 'lock.rotated': {
-      const ok = snap.lock !== null && ctx.lockBaseline !== undefined && snap.lock !== ctx.lockBaseline;
-      return { ok, reason: `lock ${snap.lock ?? 'absent'} vs baseline ${ctx.lockBaseline ?? 'none'}` };
+      const ok = ctx.since != null && snap.lock !== null && snap.lock !== ctx.since.lock;
+      return { ok, reason: `lock ${snap.lock ?? 'absent'} vs baseline ${ctx.since?.lock ?? 'none'}` };
     }
     case 'git.ahead': {
       const proj = snap.projects[a.name];
       if (!proj?.mainSha) return { ok: false, reason: `projects/${a.name} has no main yet` };
       const seed = ctx.seeds?.[a.name];
-      if (seed && proj.mainSha === seed) return { ok: a.n === 0, reason: 'main still at the seeded base' };
+      if (!seed) return { ok: false, reason: `no seeded base for ${a.name}` };
+      if (proj.mainSha === seed) return { ok: false, reason: 'main still at the seeded base' };
       const cached = snap.gitAhead[a.name];
       if (!cached || cached.sha !== proj.mainSha) return { ok: false, reason: `main moved to ${proj.mainSha.slice(0, 7)}; count pending`, needs: 'git' };
       return { ok: cached.count >= a.n, reason: `${cached.count} commit(s) ahead of the base` };
+    }
+    case 'git.unlanded': {
+      const proj = snap.projects[a.name];
+      if (!proj?.mainSha) return { ok: false, reason: `projects/${a.name} has no main yet` };
+      const cached = snap.gitUnlanded[a.name];
+      if (cached?.tips !== proj.branchTips) return { ok: false, reason: 'branch tips moved; count pending', needs: 'git' };
+      return { ok: cached.count >= a.n, reason: `${cached.count} unlanded commit(s)` };
+    }
+    case 'remote.ahead': {
+      const base = ctx.since?.remoteSha;
+      if (!base) return { ok: false, reason: 'no remote baseline' };
+      const r = snap.remote?.base === base ? snap.remote : null;
+      if (r?.count >= a.n) return { ok: true, reason: `${r.count} commit(s) on remote main since the say` };
+      const reason = r ? (r.count ? `${r.count} commit(s) on remote main since the say` : 'remote main unchanged since the say') : 'remote main not fetched';
+      return { ok: false, reason, needs: 'remote' };
     }
     case 'home.clean':
       return { ok: snap.taskIds.length === 0, reason: snap.taskIds.length ? `task records remain: ${snap.taskIds.join(' ')}` : 'no task record' };
@@ -274,6 +392,15 @@ export function evaluateAtom(atom, snap, ctx) {
       if (text === null) return { ok: false, reason: `${a.rel} missing` };
       return { ok: text.includes(a.needle), reason: text.includes(a.needle) ? `${a.rel} contains it` : `${a.rel} lacks it` };
     }
+    case 'turn.ended': {
+      const span = ctx.since && snap.turns.find((t) => t.startedAt > ctx.since.at);
+      if (!span) return { ok: false, reason: 'no primary turn has ended since the say', needs: 'turn' };
+      return { ok: true, reason: `turn rested ${span.restAt - ctx.since.at} ms after the say` };
+    }
+    case 'wake.delivered': {
+      const n = ctx.since ? deliveriesSince(snap.deliveries, ctx.since, a.reason) : 0;
+      return { ok: n >= a.n, reason: `${n} ${a.reason} deliver${n === 1 ? 'y' : 'ies'} since the say` };
+    }
     default:
       return { ok: false, reason: `unknown atom ${atom.name}` };
   }
@@ -290,3 +417,4 @@ export function evaluateUntil(parsed, snap, ctx) {
 }
 
 export { existsSync };
+

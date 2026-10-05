@@ -3,7 +3,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { loadTrace, interpolate, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
-import { Session, driveRoot } from './lib/session.mjs';
+import { Session, driveRoot, REST_BEFORE_SAY_MS } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
 import { parseUntil } from './lib/predicates.mjs';
 import { HerdrError } from './lib/herdr.mjs';
@@ -121,7 +121,7 @@ async function run(trace, traceName) {
     recheckAtClose = true;
     await session.open();
     result.overhead.setupMs = Date.now() - setupStart;
-    const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home };
+    const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home, remoteOrigin: session.remote?.url ?? '' };
     const steps = interpolate(trace, vars).steps;
 
     const gitAhead = {};
@@ -130,11 +130,22 @@ async function run(trace, traceName) {
       signals: session.signals,
       fetchHerdr: (kind, snap, ids) => session.fetchHerdr(kind, snap, ids),
       gitAhead,
+      gitUnlanded: {},
+      remote: null,
+      remoteAhead: (base) => session.remoteAhead(base),
       seeds: session.seeds,
       counters: session.counters,
     };
     const onSnapshot = (snap) => session.noteTaskIds(snap);
-    const ctxNow = () => ({ lockBaseline: session.lockBaseline, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
+    const wantRemote = steps.some((s) => s.parsed.atoms.some((a) => a.name === 'remote.ahead'));
+    let since = await session.baseline(wantRemote);
+    const ctxNow = () => ({ since, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
+    const timed = (i) => {
+      for (let j = i; j < steps.length && (j === i || steps[j].say === ''); j++) {
+        if (steps[j].parsed.atoms.some((a) => a.name === 'turn.ended')) return true;
+      }
+      return false;
+    };
     const short = (text) => JSON.stringify(text.length > 60 ? `${text.slice(0, 57)}...` : text);
     const emptyHeldBefore = new Map();
     const noteEmptyWaiters = async (from, ctx) => {
@@ -153,7 +164,8 @@ async function run(trace, traceName) {
       const rec = { say: step.say, until: step.until, ms: 0, ok: false, reason: '' };
       result.steps.push(rec);
       const heldBefore = async () => {
-        const ctx = step.say === RELAUNCH ? { ...ctxNow(), lockBaseline: session.lockText() } : ctxNow();
+        since = await session.baseline(wantRemote);
+        const ctx = ctxNow();
         const pre = await holdsNow({ home: session.home, parsed: step.parsed, ctx, deps, onSnapshot });
         if (pre.ok) return `vacuous: ${step.until} already held before its say, so this step proves nothing`;
         await noteEmptyWaiters(i, ctx);
@@ -178,7 +190,12 @@ async function run(trace, traceName) {
           firstSay = false;
           if (!withheld) log(`home operable in ${op.operableMs} ms; said ${short(step.say)}; waiting for ${step.until}`);
         } else {
-          withheld = await heldBefore();
+          if (timed(i)) {
+            const rest = await session.awaitRest(REST_BEFORE_SAY_MS);
+            rec.restMs = rest.waitedMs;
+            if (!rest.ok) withheld = `the primary never came to rest within ${Math.round(REST_BEFORE_SAY_MS / 1000)} s before the say, so turn.ended could not be timed from it`;
+          }
+          withheld ??= await heldBefore();
           if (!withheld) {
             rec.sayMs = await session.say(step.say);
             log(`step ${i + 1}: said ${short(step.say)}; waiting for ${step.until}`);

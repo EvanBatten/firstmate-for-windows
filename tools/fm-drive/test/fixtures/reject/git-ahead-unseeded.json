@@ -1,0 +1,1 @@
+{"feature":"git-ahead-unseeded","project":"notes","steps":[{"say":"ahoy! add my project from https://example.invalid/notes.git as notes, then land one change on main","until":"git.ahead:notes>=1","budgetSec":60}]}

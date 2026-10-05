@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, RESERVED_UNTIL } from './predicates.mjs';
+import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, TIMING_ONLY, RESERVED_UNTIL } from './predicates.mjs';
 
 export class TraceError extends Error {
   constructor(message) {
@@ -11,7 +11,7 @@ export class TraceError extends Error {
 }
 
 export const RELAUNCH = '$relaunch';
-export const INTERPOLATIONS = ['projectOrigin', 'home'];
+export const INTERPOLATIONS = ['projectOrigin', 'home', 'remoteOrigin'];
 
 const fold = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-');
 const holds = (folded, needle) => `-${folded}-`.includes(`-${needle}-`);
@@ -160,8 +160,41 @@ export function validateTrace(raw, { root } = {}) {
   if (steps.some((s) => s.parsed.atoms.some((a) => a.name === 'lock.rotated')) && !steps.some((s) => s.say === RELAUNCH)) {
     throw new TraceError(`lock.rotated needs a ${RELAUNCH} step before it; nothing rotates the lock otherwise`);
   }
+  refuseMisplacedSinceAtoms(steps, { project });
   const proves = validateProves(raw.proves, steps.length);
   return { feature: raw.feature, ...(project ? { project } : {}), steps, ...(proves ? { proves } : {}) };
+}
+
+function refuseMisplacedSinceAtoms(steps, { project }) {
+  const seeded = steps.some((s) => s.say.includes('{{projectOrigin}}')) ? (project || 'greeter') : null;
+  const remote = steps.some((s) => s.say.includes('{{remoteOrigin}}'));
+  const firstTyped = steps.findIndex((s) => s.say !== '' && s.say !== RELAUNCH);
+  let governing = -1;
+  const earlier = new Set();
+  for (const [i, step] of steps.entries()) {
+    if (step.say !== '') governing = i;
+    const names = step.parsed.atoms.map((a) => a.name);
+    if (names.includes('turn.ended')) {
+      const at = `steps[${i}].until`;
+      if (governing === -1 || governing === firstTyped || steps[governing].say === RELAUNCH) {
+        throw new TraceError(`${at}: turn.ended needs a typed captain say before it; the primary's own startup turn would satisfy it`);
+      }
+      if (names.every((n) => TIMING_ONLY.includes(n) || STARTUP_ONLY.includes(n))) {
+        throw new TraceError(`${at}: turn.ended only times a claim; pair it with a home record`);
+      }
+      const fresh = step.parsed.atoms.find((a) => !TIMING_ONLY.includes(a.name) && !earlier.has(a.raw));
+      if (fresh) throw new TraceError(`${at}: ${fresh.raw} must hold in an earlier step, so turn.ended keeps something this run made true`);
+    }
+    for (const a of step.parsed.atoms) earlier.add(a.raw);
+    for (const atom of step.parsed.atoms) {
+      if (atom.name === 'remote.ahead' && !remote) {
+        throw new TraceError(`steps[${i}].until: remote.ahead needs a say that names {{remoteOrigin}}; the driver baselines only the remote it provisioned`);
+      }
+      if (atom.name === 'git.ahead' && atom.args.name !== seeded) {
+        throw new TraceError(`steps[${i}].until: git.ahead:${atom.args.name} needs the project the driver seeds through {{projectOrigin}}; an unseeded clone counts any main as ahead`);
+      }
+    }
+  }
 }
 
 // proves maps each inventory row id the trace proves to its last proving
@@ -183,7 +216,7 @@ function validateProves(raw, stepCount) {
 export function refuseVacuousOnFreshHome(trace, home) {
   const snap = snapshotHome(home);
   snap.herdr = { tabLabels: [], panes: {} };
-  const ctx = { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() };
+  const ctx = { since: null, seeds: {}, seenTaskIds: new Set() };
   if (trace.steps.every((s) => evaluateUntil(s.parsed, snap, ctx).ok)) {
     throw new TraceError(`every until already holds on a fresh clone of the home (${trace.steps.map((s) => s.until).join('; ')}), so the trace would pass with firstmate doing nothing`);
   }

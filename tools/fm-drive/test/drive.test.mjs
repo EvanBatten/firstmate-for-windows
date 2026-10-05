@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
+import { parseUntil, evaluateUntil, snapshotHome, countLines, mainShaFromLsRemote, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
-import { waitUntil } from '../lib/wait.mjs';
+import { waitUntil, holdsNow } from '../lib/wait.mjs';
 import * as sessionLib from '../lib/session.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -198,6 +199,23 @@ describe('trace refusal', () => {
     );
   });
 
+  test('a since-say or seeded atom in the wrong place is refused with its reason', () => {
+    const reasons = {
+      'git-ahead-unseeded.json': 'git.ahead:notes needs the project the driver seeds through {{projectOrigin}}',
+      'turn-ended-alone.json': 'turn.ended only times a claim; pair it with a home record',
+      'turn-ended-after-relaunch.json': 'turn.ended needs a typed captain say before it',
+      'turn-ended-first-say.json': 'turn.ended needs a typed captain say before it',
+      'turn-ended-fresh-fact.json': 'file.contains:AGENTS.md:firstmate must hold in an earlier step',
+      'remote-ahead-without-origin.json': 'remote.ahead needs a say that names {{remoteOrigin}}',
+    };
+    const got = Object.fromEntries(Object.keys(reasons).map((f) => {
+      const { dir, env } = fakeEnv();
+      const r = runDrive(['check', join(FIXTURES, 'reject', f)], env);
+      return [f, { status: r.status, named: (r.json?.rejected ?? '').includes(reasons[f]), herdr: existsSync(join(dir, 'calls.log')) }];
+    }));
+    assert.deepEqual(got, Object.fromEntries(Object.keys(reasons).map((f) => [f, { status: 2, named: true, herdr: false }])));
+  });
+
   test('a missing trace file exits 2', () => {
     const { dir, env } = fakeEnv();
     const r = runDrive(['run', join(FIXTURES, 'reject', 'does-not-exist.json')], env);
@@ -205,15 +223,16 @@ describe('trace refusal', () => {
     assert.ok(!existsSync(join(dir, 'calls.log')));
   });
 
-  test('the shipped traces validate through check', () => {
-    const shipped = readdirSync(join(HERE, '..', 'traces')).sort();
-    assert.deepEqual(shipped, ['register.json', 'restart-primary.json', 'scout-report.json']);
-    const steps = { register: 1, 'restart-primary': 5, 'scout-report': 6 };
-    for (const [name, count] of Object.entries(steps)) {
-      const r = runDrive(['check', join(HERE, '..', 'traces', `${name}.json`)], process.env);
-      assert.equal(r.status, 0, r.stderr);
-      assert.equal(r.json.feature, name);
-      assert.equal(r.json.steps.length, count);
+  test('every shipped trace validates through check', () => {
+    const dir = join(HERE, '..', 'traces');
+    const shipped = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    assert.ok(shipped.includes('restart-primary.json'), shipped.join(' '));
+    for (const file of shipped) {
+      const want = JSON.parse(readFileSync(join(dir, file), 'utf8'));
+      const r = runDrive(['check', join(dir, file)], process.env);
+      assert.equal(r.status, 0, `${file}: ${r.stderr}`);
+      assert.equal(r.json.feature, want.feature, file);
+      assert.equal(r.json.steps.length, want.steps.length, file);
     }
   });
 
@@ -227,14 +246,15 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended', 'remote.ahead>=1'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
 });
 
 describe('predicates over fixture homes', () => {
-  const ctx = (over = {}) => ({ lockBaseline: undefined, seeds: {}, seenTaskIds: new Set(), ...over });
+  const ctx = (over = {}) => ({ since: null, seeds: {}, seenTaskIds: new Set(), ...over });
+  const sinceLock = (lock) => ctx({ since: { at: 0, lock } });
   const check = (home, until, c, snapPatch) => {
     const snap = snapshotHome(home);
     Object.assign(snap, snapPatch ?? {});
@@ -248,7 +268,7 @@ describe('predicates over fixture homes', () => {
     const home = buildHome('empty');
     assert.equal(check(home, 'projects.registered:greeter').ok, false);
     assert.equal(check(home, 'tasks.count>=1').ok, false);
-    assert.equal(check(home, 'tasks.count>=0').ok, true);
+    assert.throws(() => parseUntil('tasks.count>=0'), /bad arguments for tasks.count/);
     assert.equal(check(home, 'home.clean').ok, true);
     assert.equal(check(home, 'wake.empty').ok, true);
     assert.equal(check(home, 'lock.held').ok, false);
@@ -279,10 +299,10 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'home.clean').ok, false);
     assert.equal(check(home, 'wake.empty').ok, true, 'an empty queue file is empty');
     assert.equal(check(home, 'lock.held').ok, true);
-    assert.equal(check(home, 'lock.rotated', ctx({ lockBaseline: '4242' })).ok, false);
-    assert.equal(check(home, 'lock.rotated', ctx({ lockBaseline: '1' })).ok, true);
-    assert.equal(check(home, 'lock.rotated', ctx({ lockBaseline: null })).ok, true, 'a home that had no lock before now has one');
-    assert.equal(check(home, 'lock.rotated', ctx()).ok, false, 'no relaunch happened, so nothing rotated');
+    assert.equal(check(home, 'lock.rotated', sinceLock('4242')).ok, false);
+    assert.equal(check(home, 'lock.rotated', sinceLock('1')).ok, true);
+    assert.equal(check(home, 'lock.rotated', sinceLock(null)).ok, true, 'a home that had no lock before now has one');
+    assert.equal(check(home, 'lock.rotated', ctx()).ok, false, 'no say happened, so nothing rotated');
     assert.equal(check(home, 'report.exists').ok, false, 'a brief is not a report');
     assert.equal(check(home, 'file.contains:data/projects.md:greeter').ok, true);
     assert.equal(check(home, 'file.contains:data/projects.md:pirate').ok, false);
@@ -301,6 +321,50 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'git.ahead:greeter>=2', ctx({ seeds: { greeter: 'a'.repeat(40) } }), { gitAhead: { greeter: { sha, count: 1 } } }).ok, false);
     assert.equal(check(home, 'git.ahead:greeter>=1', ctx({ seeds: { greeter: 'a'.repeat(40) } }), { gitAhead: { greeter: { sha: 'stale', count: 5 } } }).needs, 'git', 'a cached count for another sha is not reused');
     assert.equal(check(home, 'git.ahead:missing>=1').ok, false);
+  });
+
+  test('git.unlanded asks for one git fact, then counts commits main lacks', async () => {
+    const home = buildHome('empty');
+    const repo = join(home, 'projects', 'greeter');
+    mkdirSync(repo, { recursive: true });
+    const g = (...a) => {
+      const out = spawnSync('git', ['-C', repo, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
+      assert.equal(out.status, 0, `git ${a.join(' ')}: ${out.stderr}`);
+    };
+    g('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'README.md'), '# greeter\n');
+    g('add', '-A');
+    g('commit', '-qm', 'root');
+    g('checkout', '-q', '-b', 'fm/greet-sh');
+    writeFileSync(join(repo, 'greet.sh'), 'echo hello\n');
+    g('add', '-A');
+    g('commit', '-qm', 'greet');
+    g('checkout', '-q', 'main');
+    const parsed = parseUntil('git.unlanded:greeter>=1');
+    const deps = { gitAhead: {}, gitUnlanded: {}, seeds: {}, counters: {} };
+    const first = check(home, 'git.unlanded:greeter>=1');
+    assert.equal(first.needs, 'git');
+    const held = await holdsNow({ home, parsed, ctx: ctx(), deps });
+    assert.deepEqual({ ok: held.ok, reason: held.reason }, { ok: true, reason: 'holds' });
+    g('merge', '-q', '--ff-only', 'fm/greet-sh');
+    const landed = await holdsNow({ home, parsed, ctx: ctx(), deps });
+    assert.deepEqual({ ok: landed.ok, reason: landed.reason }, { ok: false, reason: 'git.unlanded:greeter>=1: 0 unlanded commit(s)' });
+  });
+
+  test('a turn span starts on the working edge and never moves', () => {
+    const session = new sessionLib.Session({ trace: { feature: 'turns', steps: [] }, env: { FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') } });
+    for (const [status, at] of [['working', 10], ['working', 18], ['idle', 20], ['idle', 30], ['working', 40], ['working', 50], ['blocked', 55]]) session.noteTurn(status, at);
+    assert.deepEqual(session.signals.turns, [{ startedAt: 10, restAt: 20 }, { startedAt: 40, restAt: 55 }]);
+    const home = buildHome('empty');
+    const at = (t) => ctx({ since: { at: t, lock: null, deliveries: new Map(), firstDelivery: null, remoteSha: null } });
+    assert.equal(check(home, 'turn.ended', at(15), { turns: session.signals.turns }).ok, true);
+    const late = check(home, 'turn.ended', at(45), { turns: session.signals.turns });
+    assert.deepEqual({ ok: late.ok, reason: late.reason, needs: late.needs }, { ok: false, reason: 'turn.ended: no primary turn has ended since the say', needs: 'turn' });
+  });
+
+  test('mainShaFromLsRemote reads main', () => {
+    assert.equal(mainShaFromLsRemote('0123456789abcdef0123456789abcdef01234567\trefs/heads/main\n'), '0123456789abcdef0123456789abcdef01234567');
+    assert.equal(mainShaFromLsRemote(''), null);
   });
 
   test('herdr-backed atoms request their fact and then decide', () => {
@@ -343,6 +407,51 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'report.exists').ok, false, 'an empty report.md is not a report');
     const c = ctx({ seenTaskIds: new Set(['t1']) });
     assert.equal(check(home, 'home.clean && tabs.clean', c, { herdr: { tabLabels: [] } }).ok, true);
+  });
+
+  test('status.verb matches a done line that carries an [at=] tag', () => {
+    const home = buildHome('tagged-done');
+    assert.deepEqual(check(home, 'status.verb:done'), { ok: true, reason: 'holds' });
+    assert.equal(check(home, 'status.verb:failed').ok, false);
+  });
+
+  test("lock.rotated compares against the say's baseline", () => {
+    const home = buildHome('empty');
+    writeFileSync(join(home, 'state', '.lock'), 'b');
+    const since = (lock) => ({ since: { at: 0, lock, deliveries: new Map(), firstDelivery: null, remoteSha: null }, seeds: {}, seenTaskIds: new Set() });
+    assert.equal(evaluateUntil(parseUntil('lock.rotated'), snapshotHome(home), since('a')).ok, true);
+    assert.equal(evaluateUntil(parseUntil('lock.rotated'), snapshotHome(home), since('b')).ok, false);
+  });
+
+  const SIGNAL = '28097\tproc-starttime=1 cmdline-hex=aa\tsignal: /h/state/greet-sh.status /h/state/greet-sh.turn-ended';
+  const STALE = '31170\tproc-starttime=2 cmdline-hex=bb\tstale: s:w2:p2';
+  const HEARTBEAT = '50479\tproc-starttime=3 cmdline-hex=cc\theartbeat';
+  const deliveriesHome = (lines) => {
+    const home = buildHome('empty');
+    writeFileSync(join(home, 'state', '.watch-deliveries.log'), `${lines.join('\n')}\n`);
+    return home;
+  };
+  const sinceLines = (lines) => ctx({ since: { at: 0, lock: null, deliveries: countLines(lines), firstDelivery: lines[0] ?? null, remoteSha: null } });
+
+  test('wake.delivered counts each reason since the say and ignores lines the baseline held', () => {
+    const home = deliveriesHome([SIGNAL, STALE, HEARTBEAT]);
+    assert.equal(check(home, 'wake.delivered:signal>=1 && wake.delivered:stale>=1', sinceLines([])).ok, true);
+    const two = check(home, 'wake.delivered:signal>=2', sinceLines([]));
+    assert.deepEqual({ ok: two.ok, reason: two.reason }, { ok: false, reason: 'wake.delivered:signal>=2: 1 signal delivery since the say' });
+    assert.equal(check(home, 'wake.delivered:signal>=1', sinceLines([SIGNAL])).ok, false);
+  });
+
+  test('a trimmed delivery log never counts a torn or old line', () => {
+    const torn = '7\tproc-starttime=1 cmdline-hex=aa\tsignal: x';
+    const newStale = '31171\tproc-starttime=4 cmdline-hex=dd\tstale: s:w2:p2';
+    const home = deliveriesHome([torn, STALE, newStale]);
+    const since = sinceLines(['28097\tproc-starttime=1 cmdline-hex=aa\tsignal: x', STALE]);
+    assert.equal(check(home, 'wake.delivered:stale>=1', since).ok, true);
+    assert.equal(check(home, 'wake.delivered:signal>=1', since).ok, false);
+  });
+
+  test('wake.delivered:signal>=0 is refused at parse', () => {
+    assert.throws(() => parseUntil('wake.delivered:signal>=0'), /bad arguments for wake\.delivered/);
   });
 
   test('beacon.fresh reads the beacon mtime', () => {
@@ -672,6 +781,155 @@ describe('fake-herdr end to end', () => {
     const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
     const texts = state.sends.filter((s) => s.text !== undefined && !/claude --dangerously|^\/exit$/.test(s.text)).map((s) => s.text);
     assert.deepEqual(texts, ['now dispatch a worker']);
+  });
+
+  test('a stall wake after a done wake counts as a second delivery with no say between them', () => {
+    const log = 'state/.watch-deliveries.log';
+    const signal = '28097\tproc-starttime=1 cmdline-hex=aa\tsignal: x';
+    const stale = '31170\tproc-starttime=2 cmdline-hex=bb\tstale: s:w2:p2';
+    const script = join(tmp('script'), 'script.json');
+    writeFileSync(script, JSON.stringify({
+      'wait for my go': [
+        { path: 'state/t1.meta', content: 'kind=ship\n' },
+        { delayMs: 300 },
+        { path: log, content: `${signal}\n` },
+        { delayMs: 300 },
+        { path: log, content: `${signal}\n${stale}\n` },
+      ],
+    }));
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = {
+      feature: 'e2e-two-wakes',
+      steps: [
+        { say: 'ship it and wait for my go', until: 'tasks.count>=1', budgetSec: 10 },
+        { say: '', until: 'wake.delivered:signal>=1', budgetSec: 10 },
+        { say: '', until: 'wake.delivered:stale>=1', budgetSec: 10 },
+      ],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.deepEqual(r.json.steps.map((s) => s.ok), [true, true, true]);
+  });
+
+  const refusalScript = (cleanup) => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({ 'add my project': base['add my project'], 'dispatch a worker': base['dispatch a worker'], 'clean up the greeter worker': cleanup }));
+    return file;
+  };
+  const refusalTrace = {
+    feature: 'e2e-refusal',
+    steps: [
+      { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+      { say: 'now dispatch a worker', until: 'tasks.count>=1', budgetSec: 10 },
+      { say: 'clean up the greeter worker', until: 'turn.ended && tasks.count>=1', budgetSec: 6 },
+    ],
+  };
+
+  test('a refused cleanup passes only when the primary took a turn and the work survived', () => {
+    const runWith = (cleanup) => {
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: refusalScript(cleanup), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      return runDrive(['run', writeTrace(tmp('trace'), refusalTrace)], env);
+    };
+    const took = runWith([{ status: 'working' }, { delayMs: 2500 }, { status: 'idle' }]);
+    assert.equal(took.status, 0, `stdout: ${took.stdout}\nstderr: ${took.stderr}`);
+    const ignored = runWith([]);
+    assert.equal(ignored.status, 1, ignored.stdout);
+    assert.match(ignored.json.steps.at(-1).reason, /^not within 6 s: turn\.ended: no primary turn has ended since the say/);
+    const discarded = runWith([{ status: 'working' }, { remove: 'state/t1.meta' }, { delayMs: 2500 }, { status: 'idle' }]);
+    assert.equal(discarded.status, 1, discarded.stdout);
+    assert.match(discarded.json.steps.at(-1).reason, /tasks\.count>=1: 0 task record\(s\)/);
+  });
+
+  test('a timed say waits for the primary to rest first', () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const script = join(tmp('script'), 'script.json');
+    writeFileSync(script, JSON.stringify({
+      'add my project': base['add my project'],
+      'dispatch a worker': [{ status: 'working' }, ...base['dispatch a worker'], { delayMs: 3000 }, { status: 'idle' }],
+      'clean up the greeter worker': [{ status: 'working' }, { delayMs: 2500 }, { status: 'idle' }],
+    }));
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), refusalTrace)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const idleAt = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).statuses.find((x) => x.status === 'idle').t;
+    const saidAt = Date.parse(readFileSync(join(env.FM_DRIVE_EVIDENCE, 'captain.log'), 'utf8').split('\n').find((l) => l.endsWith('\tclean up the greeter worker')).split('\t')[0]);
+    assert.ok(saidAt - idleAt >= 2000, `said ${saidAt - idleAt} ms after the primary came to rest`);
+  });
+
+  const remoteWithHistory = () => {
+    const bare = join(tmp('remote'), 'notes.git');
+    const work = tmp('remote-work');
+    const g = (cwd, ...a) => {
+      const out = spawnSync('git', ['-C', cwd, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
+      assert.equal(out.status, 0, `git ${a.join(' ')}: ${out.stderr}`);
+    };
+    g(dirname(bare), 'init', '-q', '--bare', '-b', 'main', bare);
+    g(work, 'init', '-q', '-b', 'main');
+    for (const n of [1, 2, 3]) {
+      writeFileSync(join(work, 'NOTES.md'), `line ${n}\n`);
+      g(work, 'add', '-A');
+      g(work, 'commit', '-qm', `note ${n}`);
+    }
+    g(work, 'push', '-q', bare, 'main');
+    return bare;
+  };
+  const remoteScript = (merge) => {
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({
+      'add my project': [
+        { path: 'data/projects.md', content: '# Projects\n\n- notes [direct-PR] - a throwaway project\n' },
+        { mkdir: 'projects/notes/.git' },
+      ],
+      'merge it': merge,
+    }));
+    return file;
+  };
+  const remoteTrace = {
+    feature: 'e2e-remote',
+    project: 'notes',
+    steps: [
+      { say: 'ahoy! add my project from {{remoteOrigin}} as notes', until: 'projects.registered:notes', budgetSec: 10 },
+      { say: 'merge it; you have my approval', until: 'remote.ahead>=1', budgetSec: 12 },
+    ],
+  };
+  const leaseFile = (url) => join(tmpdir(), `fm-drive-remote-${createHash('sha1').update(url).digest('hex').slice(0, 16)}.lease`);
+
+  test('a remote landing counts only commits pushed after the say, so a remote with history is not vacuous', () => {
+    const bare = remoteWithHistory();
+    const runWith = (merge) => {
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript(merge), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      return runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], env);
+    };
+    const merged = runWith([{ pushRemote: 'NOTES.md', content: 'hello\n' }]);
+    assert.equal(merged.status, 0, `stdout: ${merged.stdout}\nstderr: ${merged.stderr}`);
+    const idle = runWith([]);
+    assert.equal(idle.status, 1, idle.stdout);
+    assert.match(idle.json.steps.at(-1).reason, /remote\.ahead>=1: remote main unchanged since the say/);
+    assert.ok(!existsSync(leaseFile(bare)), 'each run released its lease');
+  });
+
+  test('a second run cannot lease a remote another live run holds', () => {
+    const bare = remoteWithHistory();
+    scratch.push(leaseFile(bare));
+    writeFileSync(leaseFile(bare), `${process.pid}\n`);
+    const held = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([]), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') }).env);
+    assert.equal(held.status, 3, held.stdout);
+    assert.match(held.json.error, /every remote in FM_DRIVE_REMOTE_ORIGIN is leased by another run/);
+    assert.equal(readFileSync(leaseFile(bare), 'utf8'), `${process.pid}\n`, 'the live lease was left alone');
+    const dead = spawnSync(NODE, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout;
+    writeFileSync(leaseFile(bare), `${dead}\n`);
+    const took = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([{ pushRemote: 'NOTES.md', content: 'hello\n' }]), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') }).env);
+    assert.equal(took.status, 0, `stdout: ${took.stdout}\nstderr: ${took.stderr}`);
+    assert.ok(!existsSync(leaseFile(bare)), 'the run that took over the stale lease released it');
+  });
+
+  test('a trace that names {{remoteOrigin}} with FM_DRIVE_REMOTE_ORIGIN unset fails before Herdr starts', () => {
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([]), FM_DRIVE_REMOTE_ORIGIN: '', FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], env);
+    assert.equal(r.status, 3, r.stdout);
+    assert.match(r.json.error, /FM_DRIVE_REMOTE_ORIGIN/);
+    assert.ok(!existsSync(join(dir, 'calls.log')), 'herdr was never called');
   });
 
   test('a dead primary fails its step at once', () => {
@@ -1036,7 +1294,7 @@ describe('grafted onboarding config and shell prompts', () => {
     const r = await waitUntil({
       home,
       parsed: parseUntil('projects.registered:greeter'),
-      ctx: { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() },
+      ctx: { since: null, seeds: {}, seenTaskIds: new Set() },
       budgetMs: 5000,
       deps: {
         liveness: async () => ({ alive: true, reason: 'test' }),
@@ -1154,6 +1412,35 @@ describe('close', () => {
     }
   });
 
+  test('a pool another process holds open does not stop close from archiving', () => {
+    const user = tmp('pool-user');
+    const home = join(tmp('pool-home'), 'firstmate');
+    mkdirSync(join(home, '.git'), { recursive: true });
+    mkdirSync(join(home, 'state'));
+    writeFileSync(join(home, 'state', 't1.status'), 'done: ready\n');
+    const wt = join(user, '.treehouse', 'greeter-1', '1', 'greeter');
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(join(wt, '.git'), `gitdir: ${join(home, '.git', 'worktrees', 'greeter')}\n`);
+    mkdirSync(join(home, '.git', 'worktrees', 'greeter'), { recursive: true });
+    const holder = spawn(NODE, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: wt, stdio: 'ignore' });
+    try {
+      const evidence = join(tmp('pool-evidence'), 'run');
+      const script = join(tmp('pool-script'), 'close.mjs');
+      writeFileSync(script, `
+        import { Session } from ${JSON.stringify(pathToFileURL(join(HERE, '..', 'lib', 'session.mjs')).href)};
+        const s = new Session({ trace: { feature: 'pool', steps: [] }, env: { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME, PATH: '', FM_DRIVE_EVIDENCE: process.argv[3] } });
+        s.home = process.argv[2];
+        await s.destroyPools();
+        s.archive();
+        console.log('archived');
+      `);
+      const r = spawnSync(NODE, [script, home, evidence], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, USERPROFILE: user, HOME: user } });
+      assert.deepEqual({ status: r.status, out: r.stdout.trim(), kept: existsSync(join(evidence, 'home', 'state', 't1.status')) }, { status: 0, out: 'archived', kept: true }, r.stderr);
+    } finally {
+      holder.kill();
+    }
+  });
+
   test('stopWatcher stops the pid the watcher recorded, including an MSYS pid on Windows', async () => {
     const home = tmp('watcher-home');
     const lock = join(home, 'state', '.watch.lock');
@@ -1176,6 +1463,15 @@ describe('close', () => {
       watcher.kill();
     }
   });
+});
+
+test('every knob the session header lists is read by the driver', () => {
+  const lib = join(HERE, '..', 'lib');
+  const header = readFileSync(join(lib, 'session.mjs'), 'utf8').split('\n').filter((l) => l.startsWith('//'));
+  const knobs = header.join('\n').match(/\bFM_DRIVE_[A-Z_]+/g);
+  const code = [join(HERE, '..', 'drive.mjs'), ...readdirSync(lib).map((f) => join(lib, f))]
+    .map((f) => readFileSync(f, 'utf8').split('\n').filter((l) => !l.startsWith('//')).join('\n')).join('\n');
+  assert.deepEqual([...new Set(knobs)].filter((k) => !code.includes(k)), []);
 });
 
 test('no module spawns a shell', () => {

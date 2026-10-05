@@ -1,0 +1,6 @@
+{
+  "files": {
+    "state/t1.meta": "kind=ship\n",
+    "state/t1.status": "working: building\ndone [at=1791168690]: ready in branch fm/greet-sh\n"
+  }
+}

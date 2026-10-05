@@ -2,22 +2,23 @@
 //   FM_DRIVE_MODEL        primary model (default opus)
 //   FM_DRIVE_READY_MS     implicit-ready budget per launch (default 120000)
 //   FM_DRIVE_OPERABLE_MS  wait for lock/digest-complete before the first say (default 240000)
-//   FM_DRIVE_UNTIL_MS     default step budget when a step has no budgetSec (default 180000)
 //   FM_DRIVE_EVIDENCE     evidence directory (default <tmp>/fm-drive-artifacts/<feature>-<utc>)
 //   FM_DRIVE_KEEP         1 keeps the throwaway home and pane after the run
 //   FM_DRIVE_TRUST_MS     bound for a visible folder-trust dialog (default 12000)
 //   FM_DRIVE_ROOT         checkout to clone as the home (default: the repo holding this file)
 //   FM_DRIVE_TOOLS_DIR    tools dir linked into the home as .tools (default: <root>/.tools)
 //   FM_DRIVE_PANE_PATH_EXTRA  extra PATH entries for the pane, before the inherited PATH
+//   FM_DRIVE_REMOTE_ORIGIN    space-separated scratch repo URLs; a trace that names {{remoteOrigin}} leases one per run
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, statSync, copyFileSync, chmodSync, linkSync, readlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, statSync, copyFileSync, chmodSync, linkSync, readlinkSync, openSync, closeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
-import { recordedPaneIds } from './predicates.mjs';
+import { recordedPaneIds, readDeliveries, countLines, mainShaFromLsRemote, REST_STATUSES } from './predicates.mjs';
 
 // Claude Code shows the trust dialog for C:\... but looks the project up as C:/..., so every slash and drive-letter form is written.
 export function trustProjectKeys(home) {
@@ -196,6 +197,9 @@ export function archiveClaudeConfig(src, dest) {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROCESS_POLL_EVERY_N_TICKS = 3;
+// A timed say waits until the primary has rested this long, so the turn turn.ended times is the say's.
+export const REST_SETTLE_MS = 2000;
+export const REST_BEFORE_SAY_MS = 120_000;
 export const DEFAULT_ROOT = resolve(HERE, '..', '..', '..');
 export const driveRoot = (env) => env.FM_DRIVE_ROOT || DEFAULT_ROOT;
 
@@ -227,10 +231,11 @@ export class Session {
     this.lockBaseline = undefined;
     this.seeds = {};
     this.projectOrigin = null;
+    this.remote = null;
     this.seenTaskIds = new Set();
     this.taskTmps = new Set();
     this.baselineWorkspaces = new Set();
-    this.signals = { blocked: null, status: null, shellDead: null };
+    this.signals = { blocked: null, status: null, shellDead: null, turns: [], startedAt: null, restSince: null };
     this.claudeConfigDir = null;
     this.code = null;
     this.statusPoll = null;
@@ -253,6 +258,7 @@ export class Session {
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
+    if (this.trace.steps.some((s) => s.say.includes('{{remoteOrigin}}'))) await this.provisionRemote();
     this.claudeConfigDir = prepareClaudeConfig(join(this.scratch, 'claude-config'), this.home, this.env);
   }
 
@@ -309,8 +315,8 @@ export class Session {
     return parts.filter(Boolean).join(delimiter);
   }
 
-  async git(args, { cwd, quiet = true } = {}) {
-    this.counters.setupSpawns += 1;
+  async git(args, { cwd, quiet = true, counter = 'setupSpawns' } = {}) {
+    this.counters[counter] += 1;
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
       let out = '';
@@ -400,6 +406,58 @@ export class Session {
     this.projectName = name;
   }
 
+  // Leases one standing scratch repo for this run and mirrors it under the scratch dir. The driver
+  // never creates, resets or deletes a repo, and never fetches into the home's own clone.
+  async provisionRemote() {
+    const urls = (this.env.FM_DRIVE_REMOTE_ORIGIN ?? '').split(/\s+/).filter(Boolean);
+    if (urls.length === 0) throw new Error('the trace names {{remoteOrigin}}, so FM_DRIVE_REMOTE_ORIGIN must name at least one scratch repo URL');
+    const url = urls.find((u) => this.leaseRemote(u));
+    if (!url) throw new Error('every remote in FM_DRIVE_REMOTE_ORIGIN is leased by another run');
+    if (!mainShaFromLsRemote(await this.git(['ls-remote', url, 'refs/heads/main']).catch(() => ''))) {
+      this.releaseRemoteLease();
+      throw new Error(`cannot read main of the scratch repo ${url}`);
+    }
+    const mirror = join(this.scratch, 'remote-mirror.git');
+    await this.git(['init', '-q', '--bare', mirror]);
+    this.remote = { ...this.remote, url, mirror };
+  }
+
+  leaseRemote(url) {
+    const lease = join(tmpdir(), `fm-drive-remote-${createHash('sha1').update(url).digest('hex').slice(0, 16)}.lease`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fd = openSync(lease, 'wx');
+        writeFileSync(fd, `${process.pid}\n`);
+        closeSync(fd);
+        this.remote = { lease };
+        return true;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        const pid = Number.parseInt(readFileSync(lease, 'utf8'), 10);
+        try { process.kill(pid, 0); return false; } catch { rmSync(lease, { force: true }); }
+      }
+    }
+    return false;
+  }
+
+  releaseRemoteLease() {
+    if (this.remote?.lease) rmSync(this.remote.lease, { force: true });
+  }
+
+  mirrorGit(args) {
+    return this.git(['-C', this.remote.mirror, ...args], { counter: 'gitSpawns' });
+  }
+
+  async fetchRemoteMain() {
+    await this.mirrorGit(['fetch', '-q', '--no-tags', this.remote.url, '+refs/heads/main:refs/heads/main']);
+    return this.mirrorGit(['rev-parse', 'main']);
+  }
+
+  async remoteAhead(base) {
+    const sha = await this.fetchRemoteMain();
+    return { sha, count: sha === base ? 0 : Number.parseInt(await this.mirrorGit(['rev-list', '--count', `${base}..${sha}`]), 10) };
+  }
+
   launchLine() {
     const flags = `--dangerously-skip-permissions --model ${this.model}`;
     const home = this.home;
@@ -457,6 +515,14 @@ export class Session {
 
   lockText() {
     return readHomeStateFile(this.home, '.lock');
+  }
+
+  /** @returns {Promise<import('./predicates.mjs').Baseline>} */
+  async baseline(wantRemote = false) {
+    const at = Date.now();
+    const lines = readDeliveries(this.home);
+    const remoteSha = wantRemote && this.remote ? await this.fetchRemoteMain() : null;
+    return { at, lock: this.lockText(), deliveries: countLines(lines), firstDelivery: lines[0] ?? null, remoteSha };
   }
 
   sessionStartCompleteText() {
@@ -635,8 +701,35 @@ export class Session {
     return { alive, reason: alive ? 'claude in the foreground' : `foreground is ${fg.map((p) => p.name).join(',') || 'empty'}` };
   }
 
+  // The one writer of turn spans. A span opens on the first working observation after a rest and
+  // closes on the next rest; later working observations never move its start.
+  noteTurn(status, at, source = 'event') {
+    try { appendFileSync(join(this.evidenceDir, 'primary-turns.log'), `${new Date(at).toISOString()}\t${source}\t${status}\n`); } catch {}
+    const s = this.signals;
+    if (status === 'working') {
+      s.startedAt ??= at;
+      s.restSince = null;
+    } else if (REST_STATUSES.includes(status)) {
+      if (s.startedAt !== null) s.turns.push({ startedAt: s.startedAt, restAt: at });
+      s.startedAt = null;
+      s.restSince ??= at;
+    }
+  }
+
+  async awaitRest(budgetMs) {
+    const t0 = Date.now();
+    for (;;) {
+      this.noteTurn(await this.primaryStatus(), Date.now(), 'rest-gate');
+      const rest = this.signals.restSince;
+      if (rest !== null && Date.now() - rest >= REST_SETTLE_MS) return { ok: true, waitedMs: Date.now() - t0 };
+      if (Date.now() - t0 >= budgetMs) return { ok: false, waitedMs: Date.now() - t0 };
+      await sleep(1000);
+    }
+  }
+
   watchPrimaryStatus() {
     const apply = (status) => {
+      this.noteTurn(status, Date.now());
       this.signals.status = status;
       if (status === 'blocked') {
         // A persistent-cd denial of `cd ... && fm-session-start` is not a
@@ -682,6 +775,8 @@ export class Session {
       const r = await this.herdr.call('tab.list');
       snap.herdr.tabLabels = (r.tabs ?? []).map((t) => t.label);
       snap.herdr.tabs = r.tabs ?? [];
+    } else if (kind === 'turn') {
+      this.noteTurn(await this.primaryStatus(), Date.now(), 'fetch');
     } else if (kind === 'panes') {
       snap.herdr.panes = {};
       for (const id of paneIds) {
@@ -793,6 +888,7 @@ export class Session {
   async close({ keepEvidence = true } = {}) {
     if (this.closed) return 0;
     this.closed = true;
+    this.releaseRemoteLease();
     const t0 = Date.now();
     if (this.statusPoll) clearInterval(this.statusPoll);
     if (this.dialogPoll) clearInterval(this.dialogPoll);
@@ -871,8 +967,12 @@ export class Session {
         c.on('error', () => res());
         c.on('close', () => res());
       });
-      rmSync(poolDir, { recursive: true, force: true });
-      this.log(`removed the treehouse pool ${pool} this run created`);
+      try {
+        rmSync(poolDir, { recursive: true, force: true });
+        this.log(`removed the treehouse pool ${pool} this run created`);
+      } catch (err) {
+        this.log(`left the treehouse pool ${pool} this run created, because ${err.code}: a process still holds it open`);
+      }
     }
   }
 
