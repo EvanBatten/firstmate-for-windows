@@ -408,6 +408,22 @@ wait "$provision_two" || fail "reconciled provisioning attempt failed"
   || fail "reconciled provisioning cloned the already-published home"
 pass "overlapping remote home provisioning serializes through publication and rollback"
 
+# The home must come through git's transport, never a file-by-file copy of the
+# code root's live object directory: a detached auto-maintenance repack there
+# deletes loose objects mid-copy (issue #158). An unreachable object is what
+# tells the two apart, since only a direct copy carries it.
+unreachable=$(printf 'unreachable %s\n' "$$" | git -C "$REMOTE_ROOT" hash-object -w --stdin)
+FM_HOME="$TMP_ROOT/transport-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/provision.manifest" \
+  > "$TMP_ROOT/provision-transport.out" 2>&1 \
+  || fail "transport provisioning failed: $(cat "$TMP_ROOT/provision-transport.out")"
+[ "$(git -C "$TMP_ROOT/transport-home" rev-parse HEAD)" = "$(git -C "$REMOTE_ROOT" rev-parse HEAD)" ] \
+  || fail "transport provisioning did not install the code root's HEAD"
+if git -C "$TMP_ROOT/transport-home" cat-file -e "$unreachable" 2>/dev/null; then
+  fail "remote provisioning copied the code root's object files instead of fetching through git"
+fi
+pass "remote provisioning clones the code root through git's transport"
+
 # A competing cleanup aimed at the public home path must never reach a clone
 # that is still being written: the home clone is staged privately and published
 # by rename, so the racing rm -rf finds only an absent path.
