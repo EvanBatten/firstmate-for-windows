@@ -1,0 +1,10 @@
+{
+  "feature": "register",
+  "trace": "register",
+  "proves": { "row-register": 1, "row-dispatch": 2 },
+  "code": { "sha": "{{sha}}", "dirty": false },
+  "pass": false,
+  "steps": [],
+  "error": "herdr: no server answered on the socket",
+  "evidence": "/tmp/fm-drive-artifacts/register-20260929T140000Z"
+}

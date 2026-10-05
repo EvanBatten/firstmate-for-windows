@@ -6,8 +6,11 @@
 # status, ref, evidence. source names where the claim comes from (a README
 # feature bullet, an AGENTS.md lifecycle step, a bin/ entry point coverage.tsv
 # names, or a feature file under features/). status is one of proven,
-# unproven, broken, or blocked-here; ref names the verification script for a
-# proven row or the issue number otherwise.
+# unproven, broken, or blocked-here; ref names the proof of a proven row,
+# either a session script tests/verification/<ref>.verify.sh or a drive trace
+# tools/fm-drive/traces/<ref>.json whose proves lists the row, which
+# `node tools/fm-drive/drive.mjs record` writes from a run; any other row
+# names an issue number.
 #
 # Usage:
 #   inventory.sh check              exit 0 when every source above has a row
@@ -31,6 +34,7 @@ COVERAGE="$ROOT/tests/verification/coverage.tsv"
 FEATURES_DIR="$HERE/features"
 README="$ROOT/README.md"
 SUITE="$ROOT/tests/verification"
+TRACES="$ROOT/tools/fm-drive/traces"
 
 die() { printf 'inventory: %s\n' "$*" >&2; exit 2; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'; }
@@ -42,8 +46,39 @@ BAD=0
 n_ok()  { printf 'ok - %s\n' "$1"; }
 n_bad() { printf 'not ok - %s\n' "$1"; BAD=$((BAD + 1)); }
 
-row_source_exists() {
-  awk -F'\t' -v want="$1" 'NR>1 && $2==want{f=1} END{exit !f}' "$TSV"
+# A JSON string cannot hold an unescaped quote, so the first "proves" key
+# opens the trace's proves object, and its keys are row ids with no braces.
+trace_proves() {
+  case "$1" in '' | *[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -f "$TRACES/$1.json" ] || return 1
+  awk -v want="$2" '
+    { text = text $0 }
+    END {
+      if (!match(text, /"proves"[ \t\r]*:[ \t\r]*\{[^}]*\}/)) exit 1
+      body = substr(text, RSTART, RLENGTH)
+      sub(/^"proves"[ \t\r]*:[ \t\r]*\{/, "", body)
+      n = split(body, pairs, ",")
+      for (i = 1; i <= n; i++) {
+        key = pairs[i]
+        sub(/^[ \t\r]*"/, "", key)
+        sub(/"[ \t\r]*:.*$/, "", key)
+        if (key == want) exit 0
+      }
+      exit 1
+    }' "$TRACES/$1.json"
+}
+
+# record writes "<sha> held through step <n>, ..." as a trace-proven row's
+# evidence, so that row's ref names a trace even when a session script
+# shares the name.
+recorded_by_trace() {
+  [[ $1 =~ ^[0-9a-f]{40}\ held\ through\ step\ [0-9]+, ]]
+}
+
+# Print each name on stdin that has no row whose source is <prefix><name>.
+# One pass for every name, because an awk per name costs seconds under MSYS.
+missing_sources() {
+  awk -F'\t' -v prefix="$1" 'FNR==NR { if (FNR > 1) src[$2] = 1; next } !((prefix $0) in src)' "$TSV" -
 }
 
 cmd_check() {
@@ -52,21 +87,21 @@ cmd_check() {
   [ -d "$FEATURES_DIR" ] || die "no features directory at $FEATURES_DIR"
   [ -f "$README" ] || die "no README.md at $README"
 
-  local script kind
-  while IFS=$'\t' read -r script kind _rest; do
-    [ "$kind" = entry ] || continue
-    row_source_exists "bin:$script" \
-      || n_bad "coverage.tsv names '$script' (kind=entry) with no bin:$script row"
-  done < <(tail -n +2 "$COVERAGE")
+  local script
+  while IFS= read -r script; do
+    n_bad "coverage.tsv names '$script' (kind=entry) with no bin:$script row"
+  done < <(awk -F'\t' 'NR > 1 && $2 == "entry" { print $1 }' "$COVERAGE" | missing_sources bin:)
 
-  local f name
+  local f name names=()
   for f in "$FEATURES_DIR"/*.md; do
     [ -e "$f" ] || continue
-    name=$(basename "$f" .md)
-    [ "$name" = README ] && continue
-    row_source_exists "feature:$name" \
-      || n_bad "features/$name.md has no feature:$name row"
+    name=${f##*/}
+    name=${name%.md}
+    [ "$name" = README ] || names+=("$name")
   done
+  while IFS= read -r name; do
+    n_bad "features/$name.md has no feature:$name row"
+  done < <([ ${#names[@]} -eq 0 ] || printf '%s\n' "${names[@]}" | missing_sources feature:)
 
   local rows rname
   rows=$(awk -F'\t' 'NR>1 && $2 ~ /^feature:/{s=$2; sub(/^feature:/,"",s); print s}' "$TSV")
@@ -92,19 +127,22 @@ cmd_check() {
     n_bad "duplicate id '$id'"
   done
 
-  local status ref
-  while IFS=$'\t' read -r id _source _behavior status ref _evidence; do
+  local status ref evidence
+  while IFS=$'\t' read -r id _source _behavior status ref evidence; do
     case "$status" in
       proven | unproven | broken | blocked-here) ;;
       *) n_bad "row '$id' has an unknown status '$status'" ;;
     esac
     case "$status" in
       proven)
-        [ -f "$SUITE/$ref.verify.sh" ] \
-          || n_bad "row '$id' is proven but ref '$ref' names no tests/verification/$ref.verify.sh"
-        # A drive plays firstmate; only a real session proves a behavior.
-        [ ! -f "$SUITE/$ref.verify.sh" ] || grep -q "session-lib.sh" "$SUITE/$ref.verify.sh" \
-          || n_bad "row '$id' is proven by '$ref', which drives scripts itself instead of running a session; only a session script proves a behavior"
+        if ! recorded_by_trace "$evidence" && [ -f "$SUITE/$ref.verify.sh" ]; then
+          # A drive plays firstmate; only a real session proves a behavior.
+          grep -q "session-lib.sh" "$SUITE/$ref.verify.sh" \
+            || n_bad "row '$id' is proven by '$ref', which drives scripts itself instead of running a session; only a session script proves a behavior"
+        else
+          trace_proves "$ref" "$id" \
+            || n_bad "row '$id' is proven but ref '$ref' names no tests/verification/$ref.verify.sh and no tools/fm-drive/traces/$ref.json that proves it"
+        fi
         ;;
       unproven | broken)
         case "$ref" in
@@ -137,10 +175,15 @@ cmd_verdict() {
   local total proven=0 unproven=0 broken=0 blocked=0
   total=$(tail -n +2 "$TSV" | wc -l | tr -d ' ')
 
-  local id status ref outcome
-  while IFS=$'\t' read -r id _source _behavior status ref _evidence; do
+  local id status ref evidence outcome
+  while IFS=$'\t' read -r id _source _behavior status ref evidence; do
     case "$status" in
       proven)
+        if recorded_by_trace "$evidence" || [ ! -f "$SUITE/$ref.verify.sh" ]; then
+          # A trace-proven row's proof is the run record wrote, not this log.
+          proven=$((proven + 1))
+          continue
+        fi
         outcome=$(awk -v want="$ref" '$1=="result:" && $2==want{o=$3} END{print (o=="" ? "missing" : o)}' "$log")
         case "$outcome" in
           passed) proven=$((proven + 1)) ;;

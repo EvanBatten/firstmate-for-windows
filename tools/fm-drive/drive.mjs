@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { loadTrace, interpolate, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
 import { Session, driveRoot } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
+import { parseUntil } from './lib/predicates.mjs';
 import { HerdrError } from './lib/herdr.mjs';
+import { record } from './lib/ledger.mjs';
 
 const T0 = Date.now();
 const CAPTAIN_PATH = { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched' };
 const CAPTAIN_PATH_AT_CLOSE = { hooks: ['repo'], captainMd: ['untouched', 'written-after-say'] };
+const HEALTH = 'home.clean && tabs.clean && wake.empty';
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {
-  process.stderr.write('usage: node tools/fm-drive/drive.mjs run|check <trace.json>\n');
+  process.stderr.write('usage: node tools/fm-drive/drive.mjs run|check <trace.json>\n       node tools/fm-drive/drive.mjs record <result.json> [--head origin/<branch>]...\n');
   process.exit(code);
 }
 
@@ -28,8 +31,9 @@ function refuse(err) {
 }
 
 async function main(argv) {
-  const [cmd, file] = argv;
-  if (!cmd || !file || !['run', 'check'].includes(cmd)) usage(2);
+  const [cmd, file, ...rest] = argv;
+  if (!cmd || !file || !['run', 'check', 'record'].includes(cmd)) usage(2);
+  if (cmd === 'record') return recordCommand(file, rest);
 
   let trace;
   try {
@@ -38,7 +42,22 @@ async function main(argv) {
     if (err instanceof TraceError) return refuse(err);
     throw err;
   }
-  return cmd === 'check' ? check(trace) : run(trace);
+  return cmd === 'check' ? check(trace) : run(trace, basename(file, '.json'));
+}
+
+function recordCommand(file, rest) {
+  const heads = [];
+  for (let i = 0; i < rest.length; i += 2) {
+    if (rest[i] !== '--head' || !rest[i + 1]) usage(2);
+    heads.push(rest[i + 1]);
+  }
+  const out = record({ resultPath: file, root: driveRoot(process.env), heads });
+  if (out.refused) {
+    process.stderr.write(`fm-drive: record refused: ${out.refused}\n`);
+    return 2;
+  }
+  for (const line of out.lines) process.stdout.write(`${line}\n`);
+  return 0;
 }
 
 async function check(trace) {
@@ -56,12 +75,15 @@ async function check(trace) {
   return 0;
 }
 
-async function run(trace) {
+async function run(trace, traceName) {
   const env = process.env;
   const defaultBudgetMs = Number.parseInt(env.FM_DRIVE_UNTIL_MS || '180000', 10);
   const session = new Session({ trace, env, log });
   const result = {
     feature: trace.feature,
+    trace: traceName,
+    proves: trace.proves ?? {},
+    code: null,
     wallMs: 0,
     pass: false,
     readyMs: null,
@@ -91,6 +113,7 @@ async function run(trace) {
   try {
     const setupStart = Date.now();
     await session.prepare();
+    result.code = session.code;
     refuseVacuousOnFreshHome(trace, session.home);
     result.fidelity = await session.fidelity();
     const broken = Object.entries(CAPTAIN_PATH).filter(([field, want]) => result.fidelity[field] !== want);
@@ -196,6 +219,11 @@ async function run(trace) {
       }
     }
     result.pass = allOk && result.steps.length === steps.length && result.steps.at(-1).ok;
+    if (result.pass) {
+      const h = await holdsNow({ home: session.home, parsed: parseUntil(HEALTH), ctx: ctxNow(), deps, onSnapshot });
+      result.health = { until: HEALTH, ok: h.ok, reason: h.reason };
+      log(`health: ${h.ok ? 'clean' : `MISSED (${h.reason})`}`);
+    }
     exitCode = result.pass ? 0 : 1;
   } catch (err) {
     if (err instanceof TraceError) {

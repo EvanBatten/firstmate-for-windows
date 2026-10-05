@@ -164,7 +164,24 @@ export function validateTrace(raw, { root } = {}) {
   if (steps.some((s) => s.parsed.atoms.some((a) => a.name === 'lock.rotated')) && !steps.some((s) => s.say === RELAUNCH)) {
     throw new TraceError(`lock.rotated needs a ${RELAUNCH} step before it; nothing rotates the lock otherwise`);
   }
-  return { feature: raw.feature, ...(project ? { project } : {}), steps };
+  const proves = validateProves(raw.proves, steps.length);
+  return { feature: raw.feature, ...(project ? { project } : {}), steps, ...(proves ? { proves } : {}) };
+}
+
+// proves maps each inventory row id the trace proves to its last proving
+// step, 1-based: the row is proven when every step through that one held.
+function validateProves(raw, stepCount) {
+  if (raw === undefined) return null;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TraceError('trace.proves must map each inventory row id to its last proving step');
+  }
+  for (const [id, step] of Object.entries(raw)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new TraceError(`trace.proves: ${JSON.stringify(id)} is not an inventory row id`);
+    if (!Number.isInteger(step) || step < 1 || step > stepCount) {
+      throw new TraceError(`trace.proves.${id} must be a step number from 1 to ${stepCount}`);
+    }
+  }
+  return { ...raw };
 }
 
 export function refuseVacuousOnFreshHome(trace, home) {

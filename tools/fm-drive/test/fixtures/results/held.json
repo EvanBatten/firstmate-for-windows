@@ -1,0 +1,13 @@
+{
+  "feature": "register",
+  "trace": "register",
+  "proves": { "row-register": 1, "row-dispatch": 2 },
+  "code": { "sha": "{{sha}}", "dirty": false },
+  "pass": true,
+  "steps": [
+    { "say": "ahoy! add my project from /tmp/greeter.git as greeter", "until": "projects.registered:greeter", "ms": 41000, "ok": true, "reason": "projects.registered:greeter" },
+    { "say": "dispatch a worker", "until": "tasks.count>=1 && backlog.inflight>=1", "ms": 90000, "ok": true, "reason": "tasks.count>=1 && backlog.inflight>=1" }
+  ],
+  "health": { "ok": true, "reason": "home.clean && tabs.clean && wake.empty" },
+  "evidence": "/tmp/fm-drive-artifacts/register-20260929T120000Z"
+}
