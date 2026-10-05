@@ -21,14 +21,14 @@ default_clone() {
   cp -R "$ROOT/platform/windows/." "$1/platform/windows/"
 }
 launch() { (cd "$1" && clean FM_HOME="$1" PATH="${2:-$PATH}" bash -c '. platform/windows/env.sh' 2>&1); }
+mapfile -t LINKS < <(git ls-files -s | awk '$1 == 120000 { print $4 }')
 links() {
   local p out=
-  while IFS= read -r p; do
+  for p in "${LINKS[@]}"; do
     if [ -L "$1/$p" ] && [ -e "$1/$p" ]; then out="$out $p=link"; else out="$out $p=file"; fi
-  done < <(git -C "$1" ls-files -s | awk '$1 == 120000 { print $4 }')
+  done
   echo "${out# }"
 }
-mapfile -t LINKS < <(git ls-files -s | awk '$1 == 120000 { print $4 }')
 all_links=$(for p in "${LINKS[@]}"; do printf '%s=link ' "$p"; done)
 all_links=${all_links% }
 all_files=${all_links//=link/=file}
@@ -75,5 +75,30 @@ case $out in
   *) not_ok "an account that cannot make symlinks is told to turn on Developer Mode (got: $out)" ;;
 esac
 expect "and its checkout is left as it was" "$all_files false" "$(links "$N") $(git -C "$N" config core.symlinks)"
+
+L=$T/locked
+default_clone "$L"
+: > "$L/.git/index.lock"
+launch "$L" >/dev/null
+rm "$L/.git/index.lock"
+expect "a launch that meets an index lock leaves core.symlinks off" "false" "$(git -C "$L" config core.symlinks)"
+expect "so a commit -a after the lock clears records no type change" "" "$(tracked_status "$L")"
+launch "$L" >/dev/null
+expect "and the next launch restores the links" "$all_links" "$(links "$L")"
+
+O=$T/outer
+git init -q "$O"
+outer_symlinks=$(git -C "$O" config --local core.symlinks)
+default_clone "$O/fm"
+rm -rf "$O/fm/.git"
+expect "a copy with no .git inside another repo launches silently" "" "$(launch "$O/fm")"
+expect "and leaves the enclosing repo's config alone" "$outer_symlinks" "$(git -C "$O" config --local core.symlinks)"
+expect "and its own links as they were" "$all_files" "$(links "$O/fm")"
+
+A=$T/archive
+mkdir "$A"
+default_clone "$A/fm"
+rm -rf "$A/fm/.git"
+expect "a copy outside any repo launches silently" "" "$(GIT_CEILING_DIRECTORIES=$A launch "$A/fm")"
 
 [ "$fails" -eq 0 ]
