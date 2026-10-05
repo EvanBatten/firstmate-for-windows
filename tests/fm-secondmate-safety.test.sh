@@ -197,6 +197,36 @@ test_seeded_project_clones_its_origin_through_git() {
   pass "a seeded project clones a plain-path origin through git's transport"
 }
 
+# .claude/skills is a tracked symlink into .agents/skills, and it is how the
+# Claude harness finds every skill AGENTS.md tells a mate to load. Git for
+# Windows defaults core.symlinks to false, which checks that entry out as a
+# text file holding the link target. The fixture pins that default so the case
+# asks about the clone the seed performs, not about the platform running it.
+test_seeded_home_keeps_its_harness_skill_links() {
+  local home mate gitconfig found
+  home="$TMP_ROOT/skill-link-main"
+  mate="$TMP_ROOT/skill-link-mate"
+  gitconfig="$TMP_ROOT/skill-link-gitconfig"
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  printf '[core]\n\tsymlinks = false\n' > "$gitconfig"
+
+  GIT_CONFIG_GLOBAL="$gitconfig" FM_HOME="$home" \
+    FM_SECONDMATE_CHARTER='docs domain' FM_SECONDMATE_SCOPE='docs domain' \
+    "$ROOT/bin/fm-home-seed.sh" skilllinkmate "$mate" --no-projects >/dev/null \
+    || fail "seeding a home with symlinks disabled failed"
+
+  if [ ! -L "$mate/.claude/skills" ]; then
+    if [ -f "$mate/.claude/skills" ]; then
+      found="a plain file holding $(cat "$mate/.claude/skills")"
+    else
+      found="nothing"
+    fi
+    fail "the seeded home's harness skill link is $found, so that mate has no skills"
+  fi
+  [ -d "$mate/.claude/skills" ] || fail "the seeded home's skill link does not resolve to its skills directory"
+  pass "a seeded home keeps the harness skill link that carries its skills"
+}
+
 test_home_seed_validate_rejects_unparseable_registry_entry() {
   local home err
   home="$TMP_ROOT/unparseable-registry-home"
@@ -3081,6 +3111,7 @@ test_lock_status_is_per_home
 test_seed_allows_overlapping_clones_and_drops_owner
 test_seeded_home_clones_the_code_root_through_git
 test_seeded_project_clones_its_origin_through_git
+test_seeded_home_keeps_its_harness_skill_links
 test_home_seed_validate_rejects_unparseable_registry_entry
 test_home_seed_refuses_broken_registry_symlink
 test_home_seed_refuses_unreadable_registry
