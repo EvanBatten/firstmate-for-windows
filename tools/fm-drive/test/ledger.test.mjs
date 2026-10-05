@@ -215,14 +215,37 @@ describe('record', () => {
     assert.equal(r.tsv, BASE);
   });
 
-  test('a step that held on the last look at its deadline is recorded', () => {
+  test('a step that held on the last look up to 2 s past its deadline is recorded, and one a millisecond later is refused', () => {
     const { root, sha } = ledgerRepo(BASE);
-    const r = record(root, resultFile('held', sha, (res) => {
-      res.steps[1] = { ...res.steps[1], ms: 180_040 };
+    const atStep2 = (ms) => resultFile('held', sha, (res) => {
+      res.steps[1] = { ...res.steps[1], ms };
       return res;
-    }));
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.tsv, /^row-dispatch\t[^\t]*\t[^\t]*\tproven\tregister\t/m);
+    });
+    const late = record(root, atStep2(182_001));
+    assert.equal(late.status, 2);
+    assert.equal(late.stderr, 'fm-drive: record refused: step 2 took 182001 ms, over its 180 s budget in trace register\n');
+    assert.equal(late.tsv, BASE);
+
+    const onTime = record(root, atStep2(182_000));
+    assert.equal(onTime.status, 0, onTime.stderr);
+    assert.match(onTime.tsv, /^row-dispatch\t[^\t]*\t[^\t]*\tproven\tregister\t/m);
+  });
+
+  test('a result whose steps all held but which says it did not pass is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('held', sha, (res) => ({ ...res, pass: false })));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: the run did not pass, and a failed run proves nothing\n');
+    assert.equal(r.tsv, BASE);
+  });
+
+  test('a result that proves a row past its last step is refused even when its trace commits that step', () => {
+    const proves = { 'row-register': 1, 'row-dispatch': 3 };
+    const { root, sha } = ledgerRepo(BASE, proves);
+    const r = record(root, resultFile('held', sha, (res) => ({ ...res, proves })));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: the result proves a row at a step the run did not take\n');
+    assert.equal(r.tsv, BASE);
   });
 
   test('a result that claims a row the table does not have is refused', () => {
@@ -248,6 +271,23 @@ describe('record', () => {
     assert.equal(r.status, 2);
     assert.equal(r.stderr, `fm-drive: record refused: the result's proves do not match tools/fm-drive/traces/register.json at ${sha}, so inventory.sh check could not trace its rows\n`);
     assert.equal(r.tsv, BASE);
+  });
+
+  test('a result is compared with the trace at the commit it drove, not the trace at HEAD', () => {
+    const { root, sha } = ledgerRepo(BASE, { 'row-register': 1 });
+    writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify(ledgerTrace(PROVES)));
+    git(root, 'commit', '-qam', 'prove dispatch too');
+    git(root, 'push', '-q', 'origin', 'main');
+    git(root, 'fetch', '-q', 'origin');
+
+    const claimsHead = record(root, resultFile('held', sha));
+    assert.equal(claimsHead.status, 2);
+    assert.equal(claimsHead.stderr, `fm-drive: record refused: the result's proves do not match tools/fm-drive/traces/register.json at ${sha}, so inventory.sh check could not trace its rows\n`);
+    assert.equal(claimsHead.tsv, BASE);
+
+    const claimsOwn = record(root, resultFile('held', sha, (res) => ({ ...res, proves: { 'row-register': 1 } })));
+    assert.equal(claimsOwn.status, 0, claimsOwn.stderr);
+    assert.equal(claimsOwn.stdout, 'row-register: unproven -> proven\nproven 1 of 4 behaviors; 2 unproven; 0 broken; 1 blocked here\n');
   });
 
   test('a result from a trace that proves no row is refused', () => {
