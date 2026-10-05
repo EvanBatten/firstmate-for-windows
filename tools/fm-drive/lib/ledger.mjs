@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 
 const BEHAVIORS = join('.agents', 'skills', 'verify-firstmate', 'behaviors.tsv');
-const TRACES = join('tools', 'fm-drive', 'traces');
+const TRACES = 'tools/fm-drive/traces';
 const TRUNK = 'origin/main';
 const STATUSES = ['proven', 'unproven', 'broken', 'blocked-here'];
 
@@ -46,7 +46,8 @@ function git(root, args) {
   return spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', shell: false, windowsHide: true });
 }
 
-// A result proves something only when a pushed commit reproduces the run.
+// A result proves something only when a pushed commit reproduces the run,
+// so it is checked against the trace as that commit has it.
 function refuseResult(r, root, heads) {
   if (r === null || typeof r !== 'object' || Array.isArray(r)) return 'the result is not a JSON object';
   if (r.rejected) return `the trace was rejected (${r.rejected}), so no run happened`;
@@ -55,11 +56,25 @@ function refuseResult(r, root, heads) {
   if (!r.proves || typeof r.proves !== 'object' || Object.keys(r.proves).length === 0) {
     return `the result names no rows it proves; add proves to trace ${r.trace} and run it again`;
   }
-  const tracePath = join(root, TRACES, `${r.trace}.json`);
+  const sha = r.code?.sha;
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return 'the result names no commit it drove';
+  if (r.code.dirty !== false) return `the run drove ${sha} with uncommitted changes, which no commit can reproduce`;
+  for (const head of heads) {
+    if (git(root, ['rev-parse', '--verify', '--quiet', `refs/remotes/${head}`]).status !== 0) {
+      return `--head ${head} is not a remote-tracking ref such as origin/<branch>`;
+    }
+  }
+  const reachable = [TRUNK, ...heads].some((ref) => git(root, ['merge-base', '--is-ancestor', sha, `refs/remotes/${ref}`]).status === 0);
+  if (!reachable) {
+    const from = [TRUNK, ...heads].join(' or ');
+    return `${sha} is not reachable from ${from}; push it and name its branch with --head origin/<branch>`;
+  }
+  const tracePath = `${TRACES}/${r.trace}.json`;
+  const shown = git(root, ['show', `${sha}:${tracePath}`]);
   let trace;
-  try { trace = JSON.parse(readFileSync(tracePath, 'utf8')); } catch { trace = null; }
+  try { trace = shown.status === 0 ? JSON.parse(shown.stdout) : null; } catch { trace = null; }
   if (!trace?.proves || !isDeepStrictEqual(trace.proves, r.proves)) {
-    return `the result's proves do not match tools/fm-drive/traces/${r.trace}.json, so inventory.sh check could not trace its rows`;
+    return `the result's proves do not match ${tracePath} at ${sha}, so inventory.sh check could not trace its rows`;
   }
   if (!Array.isArray(r.steps)) return 'the result has no steps';
   const miss = r.steps.findIndex((s) => s?.ok !== true);
@@ -74,19 +89,6 @@ function refuseResult(r, root, heads) {
   if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
   if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   if (typeof r.evidence !== 'string' || r.evidence === '') return 'the result names no evidence directory';
-  const sha = r.code?.sha;
-  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return 'the result names no commit it drove';
-  if (r.code.dirty !== false) return `the run drove ${sha} with uncommitted changes, which no commit can reproduce`;
-  for (const head of heads) {
-    if (git(root, ['rev-parse', '--verify', '--quiet', `refs/remotes/${head}`]).status !== 0) {
-      return `--head ${head} is not a remote-tracking ref such as origin/<branch>`;
-    }
-  }
-  const reachable = [TRUNK, ...heads].some((ref) => git(root, ['merge-base', '--is-ancestor', sha, `refs/remotes/${ref}`]).status === 0);
-  if (!reachable) {
-    const from = [TRUNK, ...heads].join(' or ');
-    return `${sha} is not reachable from ${from}; push it and name its branch with --head origin/<branch>`;
-  }
   return null;
 }
 
