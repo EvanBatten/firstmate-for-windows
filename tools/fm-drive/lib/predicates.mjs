@@ -1,4 +1,5 @@
-// Catalog (arguments after ':'; NAME is [A-Za-z0-9._-]+, N a non-negative integer):
+// Catalog (arguments after ':'; NAME is [A-Za-z0-9._-]+, N an integer of at least 1, since a count
+// of 0 holds before anything happened):
 //   projects.registered:NAME    data/projects.md has a "- NAME " row and projects/NAME/.git exists
 //   tasks.count>=N              at least N state/*.meta task records
 //   backlog.inflight>=N         data/backlog.md lists at least N items under "## In flight"
@@ -13,6 +14,8 @@
 //   lock.held                   state/.lock exists and is non-empty (startup-only; never enough alone)
 //   lock.rotated                state/.lock differs from the identity in the say's baseline
 //   git.ahead:NAME>=N           projects/NAME main is at least N commits ahead of the seeded base
+//                               (refused unless NAME is the project seeded through {{projectOrigin}})
+//   git.unlanded:NAME>=N        local branches of projects/NAME hold at least N commits main lacks
 //   home.clean                  no state/*.meta task record remains
 //   tabs.clean                  no herdr tab labelled fm-<id> for a task this run ever recorded is open
 //   worker.alive                every recorded task's herdr pane still answers
@@ -40,8 +43,8 @@ const NAME = '[A-Za-z0-9._-]+';
 
 const ATOMS = [
   { name: 'projects.registered', re: new RegExp(`^projects\\.registered:(${NAME})$`), args: ['name'] },
-  { name: 'tasks.count', re: /^tasks\.count>=(\d+)$/, args: ['n'], int: ['n'] },
-  { name: 'backlog.inflight', re: /^backlog\.inflight>=(\d+)$/, args: ['n'], int: ['n'] },
+  { name: 'tasks.count', re: /^tasks\.count>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
+  { name: 'backlog.inflight', re: /^backlog\.inflight>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
   { name: 'tasks.kind', re: /^tasks\.kind:(scout|ship)$/, args: ['kind'] },
   { name: 'status.verb', re: new RegExp(`^status\\.verb:(${STATUS_VERBS.join('|')})$`), args: ['verb'] },
   { name: 'report.exists', re: /^report\.exists$/, args: [] },
@@ -49,7 +52,8 @@ const ATOMS = [
   { name: 'inbox.handled', re: /^inbox\.handled$/, args: [] },
   { name: 'lock.held', re: /^lock\.held$/, args: [] },
   { name: 'lock.rotated', re: /^lock\.rotated$/, args: [] },
-  { name: 'git.ahead', re: new RegExp(`^git\\.ahead:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'] },
+  { name: 'git.ahead', re: new RegExp(`^git\\.ahead:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
+  { name: 'git.unlanded', re: new RegExp(`^git\\.unlanded:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
   { name: 'home.clean', re: /^home\.clean$/, args: [] },
   { name: 'tabs.clean', re: /^tabs\.clean$/, args: [] },
   { name: 'worker.alive', re: /^worker\.alive$/, args: [] },
@@ -145,6 +149,28 @@ export function deliveriesSince(now, since, reason) {
   return n;
 }
 
+// The branch tips of a clone as sorted "refs/heads/x sha" lines, read without spawning git:
+// loose refs (nested names included) win over packed-refs. git.unlanded caches its count on this.
+export function readBranchTips(gitDir) {
+  const tips = new Map();
+  for (const line of (readText(join(gitDir, 'packed-refs')) ?? '').split('\n')) {
+    const m = /^([0-9a-f]{40,64}) (refs\/heads\/\S+)$/.exec(line.trim());
+    if (m) tips.set(m[2], m[1]);
+  }
+  const walk = (rel) => {
+    for (const name of listDir(join(gitDir, rel))) {
+      const child = `${rel}/${name}`;
+      if (isDir(join(gitDir, child))) walk(child);
+      else {
+        const sha = (readText(join(gitDir, child)) ?? '').trim();
+        if (sha) tips.set(child, sha);
+      }
+    }
+  };
+  walk('refs/heads');
+  return [...tips].map(([ref, sha]) => `${ref} ${sha}`).sort().join('\n');
+}
+
 export function parseMeta(text) {
   const out = {};
   for (const line of (text ?? '').split('\n')) {
@@ -187,7 +213,7 @@ export function snapshotHome(home, nowMs = Date.now()) {
   for (const name of listDir(join(home, 'projects'))) {
     const gitDir = join(home, 'projects', name, '.git');
     if (!isDir(gitDir)) continue;
-    projects[name] = { gitDir: true, mainSha: readMainSha(gitDir) };
+    projects[name] = { gitDir: true, mainSha: readMainSha(gitDir), branchTips: readBranchTips(gitDir) };
   }
   const wake = readText(join(state, '.wake-queue'));
   return {
@@ -209,6 +235,8 @@ export function snapshotHome(home, nowMs = Date.now()) {
     herdr: null,
     // Filled by the wait loop: { [name]: { sha, count } }.
     gitAhead: {},
+    // Filled by the wait loop: { [name]: { tips, count } }.
+    gitUnlanded: {},
   };
 }
 
@@ -288,10 +316,18 @@ export function evaluateAtom(atom, snap, ctx) {
       const proj = snap.projects[a.name];
       if (!proj?.mainSha) return { ok: false, reason: `projects/${a.name} has no main yet` };
       const seed = ctx.seeds?.[a.name];
-      if (seed && proj.mainSha === seed) return { ok: a.n === 0, reason: 'main still at the seeded base' };
+      if (!seed) return { ok: false, reason: `no seeded base for ${a.name}` };
+      if (proj.mainSha === seed) return { ok: false, reason: 'main still at the seeded base' };
       const cached = snap.gitAhead[a.name];
       if (!cached || cached.sha !== proj.mainSha) return { ok: false, reason: `main moved to ${proj.mainSha.slice(0, 7)}; count pending`, needs: 'git' };
       return { ok: cached.count >= a.n, reason: `${cached.count} commit(s) ahead of the base` };
+    }
+    case 'git.unlanded': {
+      const proj = snap.projects[a.name];
+      if (!proj?.mainSha) return { ok: false, reason: `projects/${a.name} has no main yet` };
+      const cached = snap.gitUnlanded[a.name];
+      if (cached?.tips !== proj.branchTips) return { ok: false, reason: 'branch tips moved; count pending', needs: 'git' };
+      return { ok: cached.count >= a.n, reason: `${cached.count} unlanded commit(s)` };
     }
     case 'home.clean':
       return { ok: snap.taskIds.length === 0, reason: snap.taskIds.length ? `task records remain: ${snap.taskIds.join(' ')}` : 'no task record' };

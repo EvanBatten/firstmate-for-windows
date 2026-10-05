@@ -160,8 +160,21 @@ export function validateTrace(raw, { root } = {}) {
   if (steps.some((s) => s.parsed.atoms.some((a) => a.name === 'lock.rotated')) && !steps.some((s) => s.say === RELAUNCH)) {
     throw new TraceError(`lock.rotated needs a ${RELAUNCH} step before it; nothing rotates the lock otherwise`);
   }
+  refuseMisplacedSinceAtoms(steps, { project });
   const proves = validateProves(raw.proves, steps.length);
   return { feature: raw.feature, ...(project ? { project } : {}), steps, ...(proves ? { proves } : {}) };
+}
+
+// Placement rules for atoms whose meaning depends on what the driver set up before a say.
+function refuseMisplacedSinceAtoms(steps, { project }) {
+  const seeded = steps.some((s) => s.say.includes('{{projectOrigin}}')) ? (project || 'greeter') : null;
+  for (const [i, step] of steps.entries()) {
+    for (const atom of step.parsed.atoms) {
+      if (atom.name === 'git.ahead' && atom.args.name !== seeded) {
+        throw new TraceError(`steps[${i}].until: git.ahead:${atom.args.name} needs the project the driver seeds through {{projectOrigin}}; an unseeded clone counts any main as ahead`);
+      }
+    }
+  }
 }
 
 // proves maps each inventory row id the trace proves to its last proving

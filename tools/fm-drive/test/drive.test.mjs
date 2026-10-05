@@ -10,7 +10,7 @@ import { parseUntil, evaluateUntil, snapshotHome, countLines, CATALOG } from '..
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
-import { waitUntil } from '../lib/wait.mjs';
+import { waitUntil, holdsNow } from '../lib/wait.mjs';
 import * as sessionLib from '../lib/session.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -198,6 +198,18 @@ describe('trace refusal', () => {
     );
   });
 
+  test('a since-say or seeded atom in the wrong place is refused with its reason', () => {
+    const reasons = {
+      'git-ahead-unseeded.json': 'git.ahead:notes needs the project the driver seeds through {{projectOrigin}}',
+    };
+    const got = Object.fromEntries(Object.keys(reasons).map((f) => {
+      const { dir, env } = fakeEnv();
+      const r = runDrive(['check', join(FIXTURES, 'reject', f)], env);
+      return [f, { status: r.status, named: (r.json?.rejected ?? '').includes(reasons[f]), herdr: existsSync(join(dir, 'calls.log')) }];
+    }));
+    assert.deepEqual(got, Object.fromEntries(Object.keys(reasons).map((f) => [f, { status: 2, named: true, herdr: false }])));
+  });
+
   test('a missing trace file exits 2', () => {
     const { dir, env } = fakeEnv();
     const r = runDrive(['run', join(FIXTURES, 'reject', 'does-not-exist.json')], env);
@@ -227,7 +239,7 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
@@ -249,7 +261,7 @@ describe('predicates over fixture homes', () => {
     const home = buildHome('empty');
     assert.equal(check(home, 'projects.registered:greeter').ok, false);
     assert.equal(check(home, 'tasks.count>=1').ok, false);
-    assert.equal(check(home, 'tasks.count>=0').ok, true);
+    assert.throws(() => parseUntil('tasks.count>=0'), /bad arguments for tasks.count/);
     assert.equal(check(home, 'home.clean').ok, true);
     assert.equal(check(home, 'wake.empty').ok, true);
     assert.equal(check(home, 'lock.held').ok, false);
@@ -302,6 +314,34 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'git.ahead:greeter>=2', ctx({ seeds: { greeter: 'a'.repeat(40) } }), { gitAhead: { greeter: { sha, count: 1 } } }).ok, false);
     assert.equal(check(home, 'git.ahead:greeter>=1', ctx({ seeds: { greeter: 'a'.repeat(40) } }), { gitAhead: { greeter: { sha: 'stale', count: 5 } } }).needs, 'git', 'a cached count for another sha is not reused');
     assert.equal(check(home, 'git.ahead:missing>=1').ok, false);
+  });
+
+  test('git.unlanded asks for one git fact, then counts commits main lacks', async () => {
+    const home = buildHome('empty');
+    const repo = join(home, 'projects', 'greeter');
+    mkdirSync(repo, { recursive: true });
+    const g = (...a) => {
+      const out = spawnSync('git', ['-C', repo, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
+      assert.equal(out.status, 0, `git ${a.join(' ')}: ${out.stderr}`);
+    };
+    g('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'README.md'), '# greeter\n');
+    g('add', '-A');
+    g('commit', '-qm', 'root');
+    g('checkout', '-q', '-b', 'fm/greet-sh');
+    writeFileSync(join(repo, 'greet.sh'), 'echo hello\n');
+    g('add', '-A');
+    g('commit', '-qm', 'greet');
+    g('checkout', '-q', 'main');
+    const parsed = parseUntil('git.unlanded:greeter>=1');
+    const deps = { gitAhead: {}, gitUnlanded: {}, seeds: {}, counters: {} };
+    const first = check(home, 'git.unlanded:greeter>=1');
+    assert.equal(first.needs, 'git');
+    const held = await holdsNow({ home, parsed, ctx: ctx(), deps });
+    assert.deepEqual({ ok: held.ok, reason: held.reason }, { ok: true, reason: 'holds' });
+    g('merge', '-q', '--ff-only', 'fm/greet-sh');
+    const landed = await holdsNow({ home, parsed, ctx: ctx(), deps });
+    assert.deepEqual({ ok: landed.ok, reason: landed.reason }, { ok: false, reason: 'git.unlanded:greeter>=1: 0 unlanded commit(s)' });
   });
 
   test('herdr-backed atoms request their fact and then decide', () => {

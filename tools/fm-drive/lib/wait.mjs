@@ -13,21 +13,29 @@ export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000 };
 //   signals               -> { blocked: string|null }  set by the session's event stream
 //   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes'
 //   gitAhead              -> shared cache { [name]: { sha, count } } fetchFact fills
+//   gitUnlanded           -> shared cache { [name]: { tips, count } } fetchFact fills
 //   seeds                 -> { [name]: sha }
 //   counters              -> { gitSpawns }
 function observe(home, deps, onSnapshot) {
   const snap = snapshotHome(home);
   snap.gitAhead = deps.gitAhead;
+  snap.gitUnlanded = deps.gitUnlanded;
   onSnapshot?.(snap);
   return snap;
 }
 
 // The one dispatcher for every `needs` value. It fills snap or a deps cache and never decides the claim.
 export async function fetchFact(kind, { snap, atom, deps, home }) {
+  if (kind === 'git' && atom.name === 'git.unlanded') {
+    const name = atom.args.name;
+    const tips = snap.projects[name]?.branchTips;
+    deps.gitUnlanded[name] = { tips, count: await gitUnlandedCount(home, name, deps.counters) };
+    return;
+  }
   if (kind === 'git') {
     const name = atom.args.name;
     const sha = snap.projects[name]?.mainSha;
-    deps.gitAhead[name] = { sha, count: await gitAheadCount(home, name, deps.seeds?.[name], sha, deps.counters) };
+    deps.gitAhead[name] = { sha, count: await gitAheadCount(home, name, deps.seeds[name], sha, deps.counters) };
     return;
   }
   snap.herdr = snap.herdr ?? {};
@@ -126,13 +134,20 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
 }
 
 // `git rev-list --count <seed>..<sha>` in the project clone inside the home;
-// one spawn per observed sha change, never per tick. Without a seed the count
-// is 1 when main moved at all.
+// one spawn per observed sha change, never per tick. validateTrace guarantees the seed.
 export function gitAheadCount(home, name, seed, sha, counters) {
-  if (!seed) return Promise.resolve(sha ? 1 : 0);
+  return revListCount(home, name, [`${seed}..${sha}`], counters);
+}
+
+// Commits on any local branch that main lacks; one spawn per change in the branch tips.
+export function gitUnlandedCount(home, name, counters) {
+  return revListCount(home, name, ['--branches', '--not', 'main'], counters);
+}
+
+function revListCount(home, name, range, counters) {
   return new Promise((resolve) => {
     counters.gitSpawns = (counters.gitSpawns ?? 0) + 1;
-    const child = spawn('git', ['-C', `${home}/projects/${name}`, 'rev-list', '--count', `${seed}..${sha}`], { stdio: ['ignore', 'pipe', 'ignore'], shell: false, windowsHide: true });
+    const child = spawn('git', ['-C', `${home}/projects/${name}`, 'rev-list', '--count', ...range], { stdio: ['ignore', 'pipe', 'ignore'], shell: false, windowsHide: true });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
     child.on('error', () => resolve(0));

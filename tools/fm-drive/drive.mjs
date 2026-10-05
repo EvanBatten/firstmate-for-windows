@@ -130,6 +130,7 @@ async function run(trace, traceName) {
       signals: session.signals,
       fetchHerdr: (kind, snap, ids) => session.fetchHerdr(kind, snap, ids),
       gitAhead,
+      gitUnlanded: {},
       seeds: session.seeds,
       counters: session.counters,
     };
