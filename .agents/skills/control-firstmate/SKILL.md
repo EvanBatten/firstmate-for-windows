@@ -48,8 +48,8 @@ The shipped `register` trace is the smallest real one.
 - Everything else passes on purpose, because a string matcher cannot tell coaching from captain language. That includes bare stems (`fm spawn`, `fm–spawn`, `FMSpawn`), `session start` in any spelling, `state/` paths, `tasks-axi`, a `bin/` path to a file that does not exist (`bin/wake-drain`), bare skill words (`project management`, `stuck crewmate recovery`), and a script name broken up by shell quoting or globbing (`bin/fm-sp"a"wn.sh`, `bin/fm-spaw?.sh`, `bin/fm-sp''awn.sh`), which the matcher does not undo, a skill path to a name the root does not have (`skills/zebra/SKILL.md`), and a skill path with a glob in the name (`.agents/skills/*/SKILL.md`). The review rule below covers all of them. Worker tab names such as `fm-greeter-hello` are what the captain sees, so they pass too. [`test/fixtures/steering.json`](../../../tools/fm-drive/test/fixtures/steering.json) lists the refused and allowed spellings.
 - **Review rule.** Whoever verifies a trace reads every `say` and rejects coaching, meaning any say that tells the primary which internal command, script, file or skill to use. A string matcher cannot decide this, so the reviewer does.
 - Right before each say, `$relaunch` included, the driver evaluates that step's `until`. A claim that already holds fails the step as vacuous, and the say is never typed. At the same moment it evaluates the `until` of every `""` step that waits on that say, and a `""` step whose claim already held then fails as vacuous. A `""` step before any say gets the same check just before Claude launches.
-- `until` is one predicate or a `&&` conjunction from the closed catalog at the top of [`tools/fm-drive/lib/predicates.mjs`](../../../tools/fm-drive/lib/predicates.mjs); that file is the single owner of the catalog.
-- `budgetSec` is the step's deadline; without it `FM_DRIVE_UNTIL_MS` (default 180000, three minutes) applies.
+- `until` is one predicate or a `&&` conjunction from the closed catalog at the top of [`tools/fm-drive/lib/predicates.mjs`](../../../tools/fm-drive/lib/predicates.mjs); that file is the single owner of the catalog. Every count is at least 1, because a count of 0 holds before anything happened.
+- `budgetSec` is the step's deadline in seconds, and every step needs one.
 - `{{projectOrigin}}` is the bare origin of a throwaway project seeded with one commit before launch, named by `project` (default `greeter`); `{{home}}` is the throwaway home's path.
 - The driver refuses `pong`, `bypass permissions on`, and a trace whose only claims are `lock.held` with exit 2 before any Herdr call, because they prove the harness started, not that firstmate did anything.
 - Pane text is never a claim; a captain line that made the primary say the right thing but write nothing fails its step.
@@ -58,6 +58,19 @@ The shipped `register` trace is the smallest real one.
 Check a trace without starting Herdr or Claude with `node tools/fm-drive/drive.mjs check <trace.json>`.
 `check` clones the root and refuses, with exit 2, a trace whose every `until` already holds on that fresh home; `run` does the same before it starts anything.
 The shipped traces are `register`, `restart-primary`, and `scout-report`, under [`tools/fm-drive/traces/`](../../../tools/fm-drive/traces/).
+
+### Claims about what happened after the say
+
+Some atoms count only what happened after the step's say: `turn.ended`, `wake.delivered`, `remote.ahead` and `lock.rotated`.
+The driver records a baseline right before it types each say or `$relaunch`, and a `""` step uses the baseline of the say it waits on.
+These atoms are false at the say by construction, so a step that contains one passes only after something happened.
+
+- `turn.ended` holds once the primary has started a turn after the say and that turn has come to rest (idle, done, or blocked on a question). Before typing a say whose step, or a `""` step waiting on it, uses `turn.ended`, the driver waits for the primary to rest for 2 s, so the turn it times belongs to that say; a primary that never rests within 120 s fails the step. It only times a claim. Pair it with home records that an earlier step already made true. It is refused on a `$relaunch` step and on the first typed say, or any step that waits on them, because session start's own turn would satisfy it.
+- `wake.delivered:REASON>=N` holds once `state/.watch-deliveries.log` has gained N lines with that reason since the say. REASON is one of `signal`, `stale`, `heartbeat`, `check`, `needs-decision`, `captain-held`, or `paused`.
+- `git.unlanded:NAME>=N` holds while the local branches of `projects/NAME` hold at least N commits that main lacks. It is a plain state atom, not a since-say atom.
+- `remote.ahead>=N` holds once main of the `{{remoteOrigin}}` repo is N commits past where it stood at the say. It needs a say that names `{{remoteOrigin}}`.
+- `{{remoteOrigin}}` is one standing scratch repo from `FM_DRIVE_REMOTE_ORIGIN`, a space-separated list of URLs. The driver leases one URL per run with a lease file under the temp directory, mirrors it under the scratch directory, and never creates, resets, or deletes a repo or fetches into the home's own clone. Two runs at once need two URLs; a run that finds every URL leased by a live run exits 3.
+- `git.ahead:NAME` is refused unless NAME is the project the driver seeded through `{{projectOrigin}}`. An unseeded clone would count any main as ahead.
 
 ## Run one
 
@@ -70,6 +83,7 @@ The primary runs the model `FM_DRIVE_MODEL` (default `opus`).
 With no `FM_DRIVE_HERDR_SESSION` and no default Herdr server running, the driver starts a throwaway server under a random `fm-drive-<hex>` session and stops it at the end; with a named session it attaches and starts nothing.
 `FM_DRIVE_TRANSPORT=socket|cli|auto` picks how the driver speaks to Herdr, over the Unix socket where Node can open it and by spawning the `herdr` binary once per call where it cannot (Windows).
 Keep that CLI transport; do not replace it with a socket-only client.
+A trace that names `{{remoteOrigin}}` needs `FM_DRIVE_REMOTE_ORIGIN`, for example `FM_DRIVE_REMOTE_ORIGIN="https://github.com/<owner>/<scratch-repo>"`.
 The header of [`tools/fm-drive/lib/session.mjs`](../../../tools/fm-drive/lib/session.mjs) lists the other knobs.
 
 Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3 the environment failed (Herdr unusable, clone failed, primary never ready) or the launched home was not the captain path.
@@ -97,12 +111,13 @@ There `hooks` must still be `repo`, and `captainMd` may be `untouched` or `writt
 `pass` is true only when the last `until` held.
 `readyMs` is the first launch plus the wait for an operable home (`state/.lock` or `state/.session-start-complete`), and `operableMs` reports that wait alone.
 `predicateMs` is the total time spent waiting for claims, and the rest of `wallMs` is the driver's setup, typing, relaunch, and cleanup, which `overhead` breaks down.
+A step whose say waited for the primary to rest records that wait as `restMs`, outside the step's `ms`.
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
 A dead primary fails its step at once, never at the budget.
 A parked question fails the step only when that step's claim is still false.
 Dead-primary and post-`/exit` detection use last-line shell prompts (`$`, `firstmate $`, `PS C:\path>`, `C:\path>`) plus the pid check; waits use `fs.watch` and do not poll Herdr every second.
 
-The evidence directory keeps `result.json`, `captain.log`, a pane snapshot at every ready, dialog, relaunch and failure, the throwaway server's own log, the Claude config without login material, and `home/state` plus `home/data` as the run left them.
+The evidence directory keeps `result.json`, `captain.log`, `primary-turns.log` (every Herdr status the driver saw for the primary, with its source), a pane snapshot at every ready, dialog, relaunch and failure, the throwaway server's own log, the Claude config without login material, and `home/state` plus `home/data` as the run left them.
 `FM_DRIVE_EVIDENCE` names the directory; `FM_DRIVE_KEEP=1` leaves the home and pane in place for a look.
 
 ## How it plugs into verify-firstmate

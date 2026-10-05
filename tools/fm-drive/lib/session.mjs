@@ -2,7 +2,6 @@
 //   FM_DRIVE_MODEL        primary model (default opus)
 //   FM_DRIVE_READY_MS     implicit-ready budget per launch (default 120000)
 //   FM_DRIVE_OPERABLE_MS  wait for lock/digest-complete before the first say (default 240000)
-//   FM_DRIVE_UNTIL_MS     default step budget when a step has no budgetSec (default 180000)
 //   FM_DRIVE_EVIDENCE     evidence directory (default <tmp>/fm-drive-artifacts/<feature>-<utc>)
 //   FM_DRIVE_KEEP         1 keeps the throwaway home and pane after the run
 //   FM_DRIVE_TRUST_MS     bound for a visible folder-trust dialog (default 12000)
