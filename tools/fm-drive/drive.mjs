@@ -7,12 +7,11 @@ import { Session, driveRoot } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
 import { parseUntil } from './lib/predicates.mjs';
 import { HerdrError } from './lib/herdr.mjs';
-import { record } from './lib/ledger.mjs';
+import { record, HEALTH } from './lib/ledger.mjs';
 
 const T0 = Date.now();
 const CAPTAIN_PATH = { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched' };
 const CAPTAIN_PATH_AT_CLOSE = { hooks: ['repo'], captainMd: ['untouched', 'written-after-say'] };
-const HEALTH = 'home.clean && tabs.clean && wake.empty';
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {

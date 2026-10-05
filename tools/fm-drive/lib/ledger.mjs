@@ -7,6 +7,7 @@ const BEHAVIORS = join('.agents', 'skills', 'verify-firstmate', 'behaviors.tsv')
 const TRACES = 'tools/fm-drive/traces';
 const TRUNK = 'origin/main';
 const STATUSES = ['proven', 'unproven', 'broken', 'blocked-here'];
+export const HEALTH = 'home.clean && tabs.clean && wake.empty';
 
 // waitUntil's last look fires when the deadline timer does, so a step that
 // held on that look reports a little over its budget.
@@ -89,6 +90,7 @@ function refuseResult(r, root, heads) {
   const late = r.steps.findIndex((s, i) => typeof want[i].budgetSec === 'number' && s.ms > want[i].budgetSec * 1000 + LAST_LOOK_GRACE_MS);
   if (late >= 0) return `step ${late + 1} took ${r.steps[late].ms} ms, over its ${want[late].budgetSec} s budget in trace ${r.trace}`;
   if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
+  if (r.health.until !== HEALTH) return `the run's home health check waited on ${r.health.until ?? 'nothing'}, not ${HEALTH}`;
   if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   if (typeof r.evidence !== 'string' || r.evidence === '') return 'the result names no evidence directory';
   return null;
