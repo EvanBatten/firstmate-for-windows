@@ -415,7 +415,10 @@ ensure_home() {
     [ -d "$home" ] || { echo "error: $home exists and is not a directory" >&2; return 1; }
   else
     mkdir -p "$(dirname "$home")"
-    git clone --quiet "$FM_ROOT" "$home"
+    # --no-local fetches through git's transport: a local clone copies the
+    # object files one by one, and a detached auto-maintenance repack in the
+    # source deletes loose objects out from under that copy.
+    git clone --quiet --no-local "$FM_ROOT" "$home"
   fi
   verify_firstmate_home "$home"
 }
@@ -495,7 +498,7 @@ EOF
     return 0
   fi
   url=$(source_origin_url "$project" "$mode" "$src") || return 1
-  git clone --quiet "$url" "$dst"
+  git clone --quiet --no-local "$url" "$dst"
 }
 
 validate_seed_project() {
