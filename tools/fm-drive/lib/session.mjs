@@ -274,38 +274,28 @@ export class Session {
     this.workspaceId = created.workspace?.workspace_id;
     this.paneId = created.root_pane?.pane_id;
     if (!this.workspaceId || !this.paneId) throw new HerdrError('herdr created a workspace but reported no pane for it');
-    this.keep('workspace.json', JSON.stringify({ workspace_id: this.workspaceId, pane_id: this.paneId, session: this.herdr.session, transport: this.herdr.transport }, null, 2));
     const info = await this.herdr.call('pane.process_info', { pane_id: this.paneId });
     const shellName = (info.process_info?.foreground_processes?.[0]?.name || '').toLowerCase();
     if (/pwsh|powershell/.test(shellName)) this.shell = 'pwsh';
     else if (shellName === 'cmd' || shellName === 'cmd.exe') this.shell = 'cmd';
     else this.shell = 'posix';
     const paneRc = join(this.home, 'platform', 'windows', 'pane-rc.sh');
-    if (this.shell === 'pwsh' && existsSync(paneRc)) await this.enterGitBash(paneRc);
+    if (this.shell === 'pwsh' && existsSync(paneRc)) await this.enterGitBash(created.tab?.tab_id, paneRc, paneEnv);
+    this.keep('workspace.json', JSON.stringify({ workspace_id: this.workspaceId, pane_id: this.paneId, session: this.herdr.session, transport: this.herdr.transport }, null, 2));
     this.watchPrimaryStatus();
   }
 
   // The primary runs where the Windows overlay runs every herdr pane: an
-  // interactive Git Bash on pane-rc.sh, which loads env.sh. Text typed before
-  // that bash sets its title loses its head, so the launch waits for it.
-  async enterGitBash(paneRc) {
+  // interactive Git Bash on pane-rc.sh, which loads env.sh. It replaces the
+  // pwsh pane as the tab's program, so nothing is typed into pwsh.
+  async enterGitBash(tabId, paneRc, env) {
     const gitExec = await this.git(['--exec-path']);
     const bash = resolve(gitExec, '..', '..', '..', 'usr', 'bin', 'bash.exe');
     if (!existsSync(bash)) throw new HerdrError(`no Git Bash at ${bash}, derived from git --exec-path ${gitExec}`);
-    const quote = (s) => `'${s.replace(/'/g, "''")}'`;
-    const rc = paneRc.replace(/\\/g, '/');
-    await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: `& ${quote(bash)} --rcfile ${quote(rc)} -i; exit`, keys: ['enter'] });
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      const title = ((await this.herdr.call('pane.get', { pane_id: this.paneId })).pane?.terminal_title ?? '').toLowerCase();
-      if (title && !title.endsWith('.exe')) {
-        this.shell = 'git-bash';
-        return;
-      }
-      await sleep(100);
-    }
-    this.snapshot('git-bash-not-ready', await this.paneText().catch(() => ''));
-    throw new HerdrError('the primary pane did not start Git Bash on pane-rc.sh within 30 s');
+    const r = await this.herdr.call('layout.apply', { tab_id: tabId, focus: false, root: { type: 'pane', cwd: this.home, env, command: [bash, '--rcfile', paneRc, '-i'] } });
+    this.paneId = r.layout?.root?.pane_id;
+    if (!this.paneId) throw new HerdrError('herdr laid out the Git Bash pane but reported no pane for it');
+    this.shell = 'git-bash';
   }
 
   panePath() {

@@ -14,12 +14,13 @@
 # creator such as fm-drive.
 case ${FM_PANE_PATH:-} in
   '') ;;
-  *\;* | [A-Za-z]:*) PATH=$(cygpath -u -p -- "$FM_PANE_PATH") ;;
+  *\;* | [A-Za-z]:*) PATH=$(/usr/bin/cygpath -u -p -- "$FM_PANE_PATH") ;;
   *) PATH=$FM_PANE_PATH ;;
 esac
-# A native creator names this file in drive spelling, which env.sh would take
-# for a relative path.
-_fm_win_env=$(cygpath -u -- "${BASH_SOURCE[0]%/*}")/env.sh
+# A native creator names this file in drive spelling, backslashes and all,
+# which env.sh would take for a relative path.
+_fm_win_env=$(cygpath -u -- "${BASH_SOURCE[0]}")
+_fm_win_env=${_fm_win_env%/*}/env.sh
 # shellcheck source=/dev/null
 [ ! -r ~/.bashrc ] || . ~/.bashrc
 # shellcheck source=platform/windows/env.sh
@@ -37,7 +38,3 @@ printf -v PROMPT_COMMAND '[ -n "${_FM_WIN_PANE_SHELL-}" ] || { _FM_WIN_PANE_SHEL
 # shellcheck disable=SC2090
 export SHELL PROMPT_COMMAND
 unset _fm_win_env
-
-# herdr.sh waits for this title before it lets anything be typed, so it
-# comes last.
-printf '\e]0;Git Bash\a'

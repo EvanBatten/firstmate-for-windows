@@ -8,12 +8,12 @@
 #     program sees it, so a bare `/exit` typed into a pane arrives as
 #     `C:/Program Files/Git/exit`. Every herdr call runs with argument
 #     conversion off, and only a `--cwd` value is converted, explicitly.
-#   - A new pane runs herdr's default shell, pwsh. Each created root pane is
-#     turned into an interactive Git Bash that sources env.sh (pane-rc.sh).
-#     The create returns at once, and the first line sent to that pane waits
-#     until the bash has set its title, because a line typed while bash is
-#     still starting loses its head. A seeded pane that firstmate only closes
-#     never waits for pwsh to start.
+#   - A new pane runs herdr's default shell, pwsh, and a line typed into pwsh
+#     echoes slowly under PSReadLine and lands in the captain's own history.
+#     So no pane is typed into to start Git Bash: a created tab is laid out
+#     with Git Bash on pane-rc.sh as its pane's program, through the
+#     socket's layout.apply, which the CLI does not offer. A created
+#     workspace's seeded pane is replaced the same way.
 #   - Herdr reports its socket as C:\...\herdr.sock, which upstream refuses as
 #     not absolute. It is folded to /c/... first.
 #   - `pane get` never fills foreground_cwd here. The pane's cwd comes from
@@ -57,14 +57,6 @@ herdr() {
     'tab create' | 'workspace create')
       _fm_win_herdr_create "${args[@]}"
       ;;
-    'pane run' | 'pane send-text' | 'pane send-keys')
-      _fm_win_herdr_await "${3-}" "$(_fm_win_herdr_session "$@")"
-      MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "${args[@]}"
-      ;;
-    'pane close')
-      rm -f -- "$(_fm_win_herdr_marker "$(_fm_win_herdr_session "$@")" "${3-}")"
-      MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "${args[@]}"
-      ;;
     'server '*)
       # Every pane inherits the server's environment, and a pane shell needs
       # conversion on for the native programs it starts.
@@ -76,72 +68,60 @@ herdr() {
   esac
 }
 
-# Herdr drops a PATH passed with --env and keeps other names, so pane-rc.sh
-# restores PATH from FM_PANE_PATH. FM_WIN_PRIVATE_ROOTS spares env.sh in the
-# pane its icacls check.
-_fm_win_herdr_create() {  # <create-args...>
-  local out rc=0 re='"root_pane":\{[^}]*"pane_id":"([^"]*)"'
-  set -- "$@" --env "FM_PANE_PATH=$PATH"
-  [ -z "${FM_WIN_PRIVATE_ROOTS:-}" ] || set -- "$@" --env "FM_WIN_PRIVATE_ROOTS=$FM_WIN_PRIVATE_ROOTS"
-  # The trailing dot keeps any trailing newlines of herdr's answer.
-  out=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "$@"; rc=$?; printf .; exit "$rc") || rc=$?
-  printf '%s' "${out%.}"
-  [ "$rc" -eq 0 ] || return "$rc"
-  [[ $out =~ $re ]] || return 0
-  _fm_win_herdr_bootstrap "${BASH_REMATCH[1]}" "$(_fm_win_herdr_session "$@")" ||
-    echo "warning: herdr pane ${BASH_REMATCH[1]} was not asked to start Git Bash" >&2
-  return 0
-}
-
-_fm_win_herdr_session() {  # <herdr-args...>
-  local arg prev="" session=""
-  for arg; do
-    case $prev in --session) session=$arg ;; esac
-    case $arg in --session=*) session=${arg#--session=} ;; esac
+# Answers as the CLI's create would, with a Git Bash pane where the CLI puts
+# pwsh. Herdr drops a PATH passed in a pane's env, so pane-rc.sh restores PATH
+# from FM_PANE_PATH. FM_WIN_PRIVATE_ROOTS spares env.sh in the pane its
+# icacls check.
+_fm_win_herdr_create() {  # <tab|workspace> create <args...>
+  local kind=$1 arg prev='' session='' workspace='' cwd='' label='' focus=false env root out layout
+  local vars=(--arg FM_PANE_PATH "$PATH")
+  [ -z "${FM_WIN_PRIVATE_ROOTS:-}" ] || vars+=(--arg FM_WIN_PRIVATE_ROOTS "$FM_WIN_PRIVATE_ROOTS")
+  for arg in "${@:3}"; do
+    case $prev in
+      --session) session=$arg ;;
+      --workspace) workspace=$arg ;;
+      --cwd) cwd=$arg ;;
+      --label) label=$arg ;;
+      --env) vars+=(--arg "${arg%%=*}" "${arg#*=}") ;;
+    esac
+    [ "$arg" != --focus ] || focus=true
     prev=$arg
   done
-  printf '%s' "${session:-${HERDR_SESSION:-}}"
+  session=${session:-${HERDR_SESSION:-}}
+  env=$(MSYS2_ARG_CONV_EXCL='*' jq -nc "${vars[@]}" '$ARGS.named') || return 1
+  root=$(jq -nc --argjson env "$env" --arg cwd "$cwd" --arg bash "$(cygpath -w -- "$BASH")" \
+    --arg rc "$(cygpath -w -- "${FM_PLATFORM_OVERLAY%/*}/pane-rc.sh")" \
+    '{type: "pane", command: [$bash, "--rcfile", $rc, "-i"], env: $env} + if $cwd == "" then {} else {cwd: $cwd} end') || return 1
+
+  if [ "$kind" = tab ]; then
+    layout=$(_fm_win_herdr_api "$session" layout.apply "$(jq -nc --argjson root "$root" --argjson focus "$focus" \
+      --arg ws "$workspace" --arg label "$label" \
+      '{root: $root, focus: $focus} + (if $ws == "" then {} else {workspace_id: $ws} end)
+        + if $label == "" then {} else {tab_label: $label} end')") || return 1
+    jq -c --arg label "$label" '.result.layout as $l | {id: "cli:tab:create", result: {type: "tab_created",
+      tab: {tab_id: $l.tab_id, workspace_id: $l.workspace_id, label: $label},
+      root_pane: {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}}}' <<< "$layout"
+    return
+  fi
+
+  out=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "$@") || { printf '%s\n' "$out"; return 1; }
+  if ! layout=$(_fm_win_herdr_api "$session" layout.apply "$(jq -c --argjson root "$root" \
+    '{tab_id: .result.tab.tab_id, focus: false, root: $root}' <<< "$out")"); then
+    MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" workspace close "$(jq -r .result.workspace.workspace_id <<< "$out")" \
+      ${session:+--session "$session"} >/dev/null 2>&1
+    return 1
+  fi
+  jq -c --argjson l "$(jq -c .result.layout <<< "$layout")" '.result.tab.tab_id = $l.tab_id
+    | .result.workspace.active_tab_id = $l.tab_id
+    | .result.root_pane = {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}' <<< "$out"
 }
 
-# Marks a pane whose Git Bash may still be starting. A pane id holds a colon,
-# which a Windows file name cannot.
-_fm_win_herdr_marker() {  # <session> <pane>
-  printf '%s/fm-win-herdr-panes/%s/%s' "${TMPDIR:-/tmp}" "${1:-default}" "${2//:/_}"
-}
-
-_fm_win_herdr_bootstrap() {  # <pane> <session>
-  local pane=$1 bash_exe rcfile marker sess=()
-  [ -z "$2" ] || sess=(--session "$2")
-  bash_exe=$(cygpath -w "$BASH")
-  rcfile=${FM_PLATFORM_OVERLAY%/*}/pane-rc.sh
-  marker=$(_fm_win_herdr_marker "$2" "$pane")
-  mkdir -p -- "${marker%/*}" && : > "$marker" || return 1
-  MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" pane run "$pane" \
-    "& '${bash_exe//\'/\'\'}' --rcfile '${rcfile//\'/\'\'}' -i; exit" "${sess[@]}" >/dev/null 2>&1
-}
-
-# Ready means the rcfile has set the title. Before that, pwsh's title is
-# null and then its own .exe path.
-_fm_win_herdr_await() {  # <pane> <session>
-  local pane=$1 marker info title deadline sess=()
-  local re='"terminal_title":"([^"]*)"'
-  marker=$(_fm_win_herdr_marker "$2" "$pane")
-  [ -e "$marker" ] || return 0
-  [ -z "$2" ] || sess=(--session "$2")
-  deadline=$(( ${EPOCHREALTIME/./} + ${FM_WIN_PANE_READY_TIMEOUT:-30} * 1000000 ))
-  while [ "${EPOCHREALTIME/./}" -lt "$deadline" ]; do
-    info=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" pane get "$pane" "${sess[@]}" 2>/dev/null)
-    if [[ $info =~ $re ]]; then
-      title=${BASH_REMATCH[1],,}
-      if [ -n "$title" ] && [[ $title != *.exe ]]; then
-        rm -f -- "$marker"
-        return 0
-      fi
-    fi
-    sleep 0.1
-  done
-  rm -f -- "$marker"
-  echo "warning: herdr pane $pane did not start Git Bash within ${FM_WIN_PANE_READY_TIMEOUT:-30}s" >&2
+# One request on herdr's socket, for a method its CLI does not offer.
+_fm_win_herdr_api() {  # <session> <method> <params-json>
+  local socket
+  socket=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" status --json ${1:+--session "$1"} | jq -r '.server.socket // empty')
+  [ -n "$socket" ] || { echo "error: herdr session ${1:-default} reported no socket" >&2; return 1; }
+  MSYS2_ARG_CONV_EXCL='*' node "$(cygpath -w -- "${FM_PLATFORM_OVERLAY%/*}/herdr-api.mjs")" "$socket" "$2" "$3"
 }
 
 # Keeps upstream's current body under _fm_win_upstream_<name> for the wrapper

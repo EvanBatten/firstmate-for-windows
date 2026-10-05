@@ -1,4 +1,5 @@
-// On Windows, Node's net.connect(path) opens a named pipe and cannot reach herdr's AF_UNIX socket, so auto picks the cli transport there.
+// On Windows herdr's socket is a named pipe of the reported name, and auto picks the cli transport there.
+// layout.apply has no CLI verb, so it always goes over the socket.
 //
 // Environment:
 //   FM_DRIVE_HERDR            herdr binary (default: herdr on PATH)
@@ -129,7 +130,7 @@ export class Herdr {
 
   async call(method, params = {}, { timeoutMs = 30_000 } = {}) {
     this.counters.calls += 1;
-    if (this.transport === 'socket') {
+    if (this.transport === 'socket' || SOCKET_ONLY.has(method)) {
       const msg = await socketRequest(this.socketPath, method, params, timeoutMs);
       if (msg.error) throw new HerdrError(`${method}: ${msg.error.message ?? JSON.stringify(msg.error)}`);
       return msg.result;
@@ -144,7 +145,7 @@ export class Herdr {
     const handle = { closed: false, sock: null, close() { this.closed = true; this.sock?.destroy(); } };
     const open = () => {
       if (handle.closed) return;
-      const sock = net.connect(this.socketPath);
+      const sock = net.connect(pipePath(this.socketPath));
       handle.sock = sock;
       let buf = '';
       sock.on('connect', () => sock.write(JSON.stringify({ id: 'fm-drive-subscribe', method: 'events.subscribe', params: { subscriptions } }) + '\n'));
@@ -187,10 +188,13 @@ export class Herdr {
 }
 
 let seq = 0;
+const SOCKET_ONLY = new Set(['layout.apply']);
+const pipePath = (p) => (process.platform === 'win32' ? `\\\\.\\pipe\\${p}` : p);
+
 export function socketRequest(socketPath, method, params, timeoutMs) {
   return new Promise((resolve, reject) => {
     const id = `fm-drive-${++seq}`;
-    const sock = net.connect(socketPath);
+    const sock = net.connect(pipePath(socketPath));
     let buf = '';
     let done = false;
     const finish = (fn, v) => { if (!done) { done = true; clearTimeout(timer); sock.destroy(); fn(v); } };
