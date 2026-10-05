@@ -182,6 +182,28 @@ describe('record', () => {
     assert.equal(r.tsv, BASE);
   });
 
+  test('a result with a step its trace does not have is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('held', sha, (res) => {
+      res.steps.push({ until: 'x', ms: 1, ok: true, reason: 'holds' });
+      return res;
+    }));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: the result has 3 steps but trace register has 2\n');
+    assert.equal(r.tsv, BASE);
+  });
+
+  test('a result whose step waited on a different claim than its trace is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('held', sha, (res) => {
+      res.steps[1] = { ...res.steps[1], until: 'tasks.count>=1' };
+      return res;
+    }));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: step 2 waited on tasks.count>=1 but trace register waits on tasks.count>=1 && backlog.inflight>=1\n');
+    assert.equal(r.tsv, BASE);
+  });
+
   test('a result that claims a row the table does not have is refused', () => {
     const { root, sha } = ledgerRepo(BASE, { ...PROVES, 'row-typo': 1 });
     const r = record(root, resultFile('held', sha, (res) => ({ ...res, proves: { ...res.proves, 'row-typo': 1 } })));
