@@ -33,4 +33,8 @@ expect "pwd -P names a directory under %TEMP% one way from either spelling" \
   "$T|$T" \
   "$(. platform/windows/env.sh; bash -c 'a=$(cd -P "$1" && pwd -P); b=$(cd -P "$2" && pwd -P); printf "%s|%s" "$a" "$b"' _ "$T" "$DRIVE_T")"
 
+expect "a script reads FM_HOME spelled through the drive as the /tmp spelling a session records" \
+  "[$T/home]" \
+  "$(. platform/windows/env.sh; FM_HOME=$DRIVE_T/home bash -c 'printf "[%s]" "$FM_HOME"')"
+
 [ "$fails" -eq 0 ]
