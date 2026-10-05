@@ -134,7 +134,8 @@ async function run(trace, traceName) {
       counters: session.counters,
     };
     const onSnapshot = (snap) => session.noteTaskIds(snap);
-    const ctxNow = () => ({ lockBaseline: session.lockBaseline, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
+    let since = await session.baseline();
+    const ctxNow = () => ({ since, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
     const short = (text) => JSON.stringify(text.length > 60 ? `${text.slice(0, 57)}...` : text);
     const emptyHeldBefore = new Map();
     const noteEmptyWaiters = async (from, ctx) => {
@@ -153,7 +154,8 @@ async function run(trace, traceName) {
       const rec = { say: step.say, until: step.until, ms: 0, ok: false, reason: '' };
       result.steps.push(rec);
       const heldBefore = async () => {
-        const ctx = step.say === RELAUNCH ? { ...ctxNow(), lockBaseline: session.lockText() } : ctxNow();
+        since = await session.baseline();
+        const ctx = ctxNow();
         const pre = await holdsNow({ home: session.home, parsed: step.parsed, ctx, deps, onSnapshot });
         if (pre.ok) return `vacuous: ${step.until} already held before its say, so this step proves nothing`;
         await noteEmptyWaiters(i, ctx);

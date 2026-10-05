@@ -459,6 +459,11 @@ export class Session {
     return readHomeStateFile(this.home, '.lock');
   }
 
+  /** @returns {Promise<import('./predicates.mjs').Baseline>} */
+  async baseline() {
+    return { at: Date.now(), lock: this.lockText() };
+  }
+
   sessionStartCompleteText() {
     return readHomeStateFile(this.home, '.session-start-complete');
   }

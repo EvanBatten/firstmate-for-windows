@@ -11,7 +11,7 @@
 //   report.mentions:NEEDLE      some data/<id>/report.md contains NEEDLE (case-insensitive)
 //   inbox.handled               some state/<id>.inbox/handled/ holds an acknowledged steer
 //   lock.held                   state/.lock exists and is non-empty (startup-only; never enough alone)
-//   lock.rotated                state/.lock differs from the identity captured when the last $relaunch began
+//   lock.rotated                state/.lock differs from the identity in the say's baseline
 //   git.ahead:NAME>=N           projects/NAME main is at least N commits ahead of the seeded base
 //   home.clean                  no state/*.meta task record remains
 //   tabs.clean                  no herdr tab labelled fm-<id> for a task this run ever recorded is open
@@ -21,6 +21,9 @@
 //   file.contains:REL:NEEDLE    <home>/REL exists and contains NEEDLE (REL must stay inside the home)
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
+//
+// Since-say atoms (lock.rotated) compare against ctx.since, the Baseline the driver captured right
+// before it typed the say a step waits on. They are false at the say by construction.
 
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
@@ -191,7 +194,16 @@ export function recordedPaneIds(snap) {
   return Object.values(snap.meta).map((m) => m.herdr_pane_id || (m.window || '').replace(/^[^:]*:/, '')).filter(Boolean);
 }
 
-// ctx: { lockBaseline: string|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
+/**
+ * What the home looked like the moment before the driver typed a say or began a $relaunch.
+ * A "" step inherits the Baseline of the say it waits on.
+ * @typedef {object} Baseline
+ * @property {number} at             Date.now() when the baseline was taken
+ * @property {string|null} lock      state/.lock identity
+ */
+
+// ctx: { since: Baseline|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
+// since is null only where no say exists yet (refuseVacuousOnFreshHome).
 // Returns { ok, reason, needs } where needs names a herdr fact the snapshot
 // lacks ('tabs' | 'panes'); ok is then false until the wait loop supplies it.
 export function evaluateAtom(atom, snap, ctx) {
@@ -233,8 +245,8 @@ export function evaluateAtom(atom, snap, ctx) {
     case 'lock.held':
       return { ok: snap.lock !== null, reason: snap.lock ? `lock ${snap.lock}` : 'no lock' };
     case 'lock.rotated': {
-      const ok = snap.lock !== null && ctx.lockBaseline !== undefined && snap.lock !== ctx.lockBaseline;
-      return { ok, reason: `lock ${snap.lock ?? 'absent'} vs baseline ${ctx.lockBaseline ?? 'none'}` };
+      const ok = ctx.since != null && snap.lock !== null && snap.lock !== ctx.since.lock;
+      return { ok, reason: `lock ${snap.lock ?? 'absent'} vs baseline ${ctx.since?.lock ?? 'none'}` };
     }
     case 'git.ahead': {
       const proj = snap.projects[a.name];

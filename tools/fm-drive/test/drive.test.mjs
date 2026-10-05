@@ -234,7 +234,8 @@ describe('trace refusal', () => {
 });
 
 describe('predicates over fixture homes', () => {
-  const ctx = (over = {}) => ({ lockBaseline: undefined, seeds: {}, seenTaskIds: new Set(), ...over });
+  const ctx = (over = {}) => ({ since: null, seeds: {}, seenTaskIds: new Set(), ...over });
+  const sinceLock = (lock) => ctx({ since: { at: 0, lock } });
   const check = (home, until, c, snapPatch) => {
     const snap = snapshotHome(home);
     Object.assign(snap, snapPatch ?? {});
@@ -279,10 +280,10 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'home.clean').ok, false);
     assert.equal(check(home, 'wake.empty').ok, true, 'an empty queue file is empty');
     assert.equal(check(home, 'lock.held').ok, true);
-    assert.equal(check(home, 'lock.rotated', ctx({ lockBaseline: '4242' })).ok, false);
-    assert.equal(check(home, 'lock.rotated', ctx({ lockBaseline: '1' })).ok, true);
-    assert.equal(check(home, 'lock.rotated', ctx({ lockBaseline: null })).ok, true, 'a home that had no lock before now has one');
-    assert.equal(check(home, 'lock.rotated', ctx()).ok, false, 'no relaunch happened, so nothing rotated');
+    assert.equal(check(home, 'lock.rotated', sinceLock('4242')).ok, false);
+    assert.equal(check(home, 'lock.rotated', sinceLock('1')).ok, true);
+    assert.equal(check(home, 'lock.rotated', sinceLock(null)).ok, true, 'a home that had no lock before now has one');
+    assert.equal(check(home, 'lock.rotated', ctx()).ok, false, 'no say happened, so nothing rotated');
     assert.equal(check(home, 'report.exists').ok, false, 'a brief is not a report');
     assert.equal(check(home, 'file.contains:data/projects.md:greeter').ok, true);
     assert.equal(check(home, 'file.contains:data/projects.md:pirate').ok, false);
@@ -349,6 +350,14 @@ describe('predicates over fixture homes', () => {
     const home = buildHome('tagged-done');
     assert.deepEqual(check(home, 'status.verb:done'), { ok: true, reason: 'holds' });
     assert.equal(check(home, 'status.verb:failed').ok, false);
+  });
+
+  test("lock.rotated compares against the say's baseline", () => {
+    const home = buildHome('empty');
+    writeFileSync(join(home, 'state', '.lock'), 'b');
+    const since = (lock) => ({ since: { at: 0, lock, deliveries: new Map(), firstDelivery: null, remoteSha: null }, seeds: {}, seenTaskIds: new Set() });
+    assert.equal(evaluateUntil(parseUntil('lock.rotated'), snapshotHome(home), since('a')).ok, true);
+    assert.equal(evaluateUntil(parseUntil('lock.rotated'), snapshotHome(home), since('b')).ok, false);
   });
 
   test('beacon.fresh reads the beacon mtime', () => {
@@ -1042,7 +1051,7 @@ describe('grafted onboarding config and shell prompts', () => {
     const r = await waitUntil({
       home,
       parsed: parseUntil('projects.registered:greeter'),
-      ctx: { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() },
+      ctx: { since: null, seeds: {}, seenTaskIds: new Set() },
       budgetMs: 5000,
       deps: {
         liveness: async () => ({ alive: true, reason: 'test' }),

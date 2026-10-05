@@ -183,7 +183,7 @@ function validateProves(raw, stepCount) {
 export function refuseVacuousOnFreshHome(trace, home) {
   const snap = snapshotHome(home);
   snap.herdr = { tabLabels: [], panes: {} };
-  const ctx = { lockBaseline: undefined, seeds: {}, seenTaskIds: new Set() };
+  const ctx = { since: null, seeds: {}, seenTaskIds: new Set() };
   if (trace.steps.every((s) => evaluateUntil(s.parsed, snap, ctx).ok)) {
     throw new TraceError(`every until already holds on a fresh clone of the home (${trace.steps.map((s) => s.until).join('; ')}), so the trace would pass with firstmate doing nothing`);
   }
