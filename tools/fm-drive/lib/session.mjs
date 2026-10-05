@@ -9,15 +9,17 @@
 //   FM_DRIVE_ROOT         checkout to clone as the home (default: the repo holding this file)
 //   FM_DRIVE_TOOLS_DIR    tools dir linked into the home as .tools (default: <root>/.tools)
 //   FM_DRIVE_PANE_PATH_EXTRA  extra PATH entries for the pane, before the inherited PATH
+//   FM_DRIVE_REMOTE_ORIGIN    space-separated scratch repo URLs; a trace that names {{remoteOrigin}} leases one per run
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, statSync, copyFileSync, chmodSync, linkSync, readlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, statSync, copyFileSync, chmodSync, linkSync, readlinkSync, openSync, closeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
-import { recordedPaneIds, readDeliveries, countLines, REST_STATUSES } from './predicates.mjs';
+import { recordedPaneIds, readDeliveries, countLines, mainShaFromLsRemote, REST_STATUSES } from './predicates.mjs';
 
 // Claude Code shows the trust dialog for C:\... but looks the project up as C:/..., so every slash and drive-letter form is written.
 export function trustProjectKeys(home) {
@@ -230,6 +232,7 @@ export class Session {
     this.lockBaseline = undefined;
     this.seeds = {};
     this.projectOrigin = null;
+    this.remote = null;
     this.seenTaskIds = new Set();
     this.taskTmps = new Set();
     this.baselineWorkspaces = new Set();
@@ -256,6 +259,7 @@ export class Session {
     if (this.trace.steps.some((s) => s.say.includes('{{projectOrigin}}'))) {
       await this.seedProject(this.trace.project || 'greeter');
     }
+    if (this.trace.steps.some((s) => s.say.includes('{{remoteOrigin}}'))) await this.provisionRemote();
     this.claudeConfigDir = prepareClaudeConfig(join(this.scratch, 'claude-config'), this.home, this.env);
   }
 
@@ -312,8 +316,8 @@ export class Session {
     return parts.filter(Boolean).join(delimiter);
   }
 
-  async git(args, { cwd, quiet = true } = {}) {
-    this.counters.setupSpawns += 1;
+  async git(args, { cwd, quiet = true, counter = 'setupSpawns' } = {}) {
+    this.counters[counter] += 1;
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
       let out = '';
@@ -403,6 +407,59 @@ export class Session {
     this.projectName = name;
   }
 
+  // Leases one standing scratch repo for this run and mirrors it under the scratch dir. The driver
+  // never creates, resets or deletes a repo, and never fetches into the home's own clone.
+  async provisionRemote() {
+    const urls = (this.env.FM_DRIVE_REMOTE_ORIGIN ?? '').split(/\s+/).filter(Boolean);
+    if (urls.length === 0) throw new Error('the trace names {{remoteOrigin}}, so FM_DRIVE_REMOTE_ORIGIN must name at least one scratch repo URL');
+    const url = urls.find((u) => this.leaseRemote(u));
+    if (!url) throw new Error('every remote in FM_DRIVE_REMOTE_ORIGIN is leased by another run');
+    if (!mainShaFromLsRemote(await this.git(['ls-remote', url, 'refs/heads/main']).catch(() => ''))) {
+      this.releaseRemoteLease();
+      throw new Error(`cannot read main of the scratch repo ${url}`);
+    }
+    const mirror = join(this.scratch, 'remote-mirror.git');
+    await this.git(['init', '-q', '--bare', mirror]);
+    this.remote = { ...this.remote, url, mirror };
+  }
+
+  leaseRemote(url) {
+    const lease = join(tmpdir(), `fm-drive-remote-${createHash('sha1').update(url).digest('hex').slice(0, 16)}.lease`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fd = openSync(lease, 'wx');
+        writeFileSync(fd, `${process.pid}\n`);
+        closeSync(fd);
+        this.remote = { lease };
+        return true;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        const pid = Number.parseInt(readFileSync(lease, 'utf8'), 10);
+        try { process.kill(pid, 0); return false; } catch { rmSync(lease, { force: true }); }
+      }
+    }
+    return false;
+  }
+
+  releaseRemoteLease() {
+    if (this.remote?.lease) rmSync(this.remote.lease, { force: true });
+  }
+
+  mirrorGit(args) {
+    return this.git(['-C', this.remote.mirror, ...args], { counter: 'gitSpawns' });
+  }
+
+  async fetchRemoteMain() {
+    await this.mirrorGit(['fetch', '-q', '--no-tags', this.remote.url, '+refs/heads/main:refs/heads/main']);
+    return this.mirrorGit(['rev-parse', 'main']);
+  }
+
+  // The remote's main fetched into the mirror, and how many commits it is past base.
+  async remoteAhead(base) {
+    const sha = await this.fetchRemoteMain();
+    return { sha, count: sha === base ? 0 : Number.parseInt(await this.mirrorGit(['rev-list', '--count', `${base}..${sha}`]), 10) };
+  }
+
   launchLine() {
     const flags = `--dangerously-skip-permissions --model ${this.model}`;
     const home = this.home;
@@ -463,10 +520,11 @@ export class Session {
   }
 
   /** @returns {Promise<import('./predicates.mjs').Baseline>} */
-  async baseline() {
+  async baseline(wantRemote = false) {
     const at = Date.now();
     const lines = readDeliveries(this.home);
-    return { at, lock: this.lockText(), deliveries: countLines(lines), firstDelivery: lines[0] ?? null };
+    const remoteSha = wantRemote && this.remote ? await this.fetchRemoteMain() : null;
+    return { at, lock: this.lockText(), deliveries: countLines(lines), firstDelivery: lines[0] ?? null, remoteSha };
   }
 
   sessionStartCompleteText() {
@@ -832,6 +890,7 @@ export class Session {
   async close({ keepEvidence = true } = {}) {
     if (this.closed) return 0;
     this.closed = true;
+    this.releaseRemoteLease();
     const t0 = Date.now();
     if (this.statusPoll) clearInterval(this.statusPoll);
     if (this.dialogPoll) clearInterval(this.dialogPoll);

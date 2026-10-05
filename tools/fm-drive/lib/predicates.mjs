@@ -16,6 +16,8 @@
 //   git.ahead:NAME>=N           projects/NAME main is at least N commits ahead of the seeded base
 //                               (refused unless NAME is the project seeded through {{projectOrigin}})
 //   git.unlanded:NAME>=N        local branches of projects/NAME hold at least N commits main lacks
+//   remote.ahead>=N             main of the {{remoteOrigin}} repo is at least N commits past where it
+//                               stood at the say (needs a say that names {{remoteOrigin}})
 //   home.clean                  no state/*.meta task record remains
 //   tabs.clean                  no herdr tab labelled fm-<id> for a task this run ever recorded is open
 //   worker.alive                every recorded task's herdr pane still answers
@@ -31,7 +33,7 @@
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
 //
-// Since-say atoms (lock.rotated, turn.ended, wake.delivered) compare against ctx.since, the Baseline the driver captured right
+// Since-say atoms (lock.rotated, turn.ended, wake.delivered, remote.ahead) compare against ctx.since, the Baseline the driver captured right
 // before it typed the say a step waits on. They are false at the say by construction.
 
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'node:fs';
@@ -59,6 +61,7 @@ const ATOMS = [
   { name: 'lock.rotated', re: /^lock\.rotated$/, args: [] },
   { name: 'git.ahead', re: new RegExp(`^git\\.ahead:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
   { name: 'git.unlanded', re: new RegExp(`^git\\.unlanded:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
+  { name: 'remote.ahead', re: /^remote\.ahead>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
   { name: 'home.clean', re: /^home\.clean$/, args: [] },
   { name: 'tabs.clean', re: /^tabs\.clean$/, args: [] },
   { name: 'worker.alive', re: /^worker\.alive$/, args: [] },
@@ -128,6 +131,11 @@ export function readMainSha(gitDir) {
     }
   }
   return null;
+}
+
+/** @param {string} out  stdout of `git ls-remote <url> refs/heads/main` @returns {string|null} */
+export function mainShaFromLsRemote(out) {
+  return /^([0-9a-f]{40,64})\trefs\/heads\/main$/m.exec(out)?.[1] ?? null;
 }
 
 /** Non-blank lines of state/.watch-deliveries.log, one per delivered watcher wake. */
@@ -245,6 +253,8 @@ export function snapshotHome(home, nowMs = Date.now()) {
     gitUnlanded: {},
     // Filled by the wait loop: the primary's turn spans, [{ startedAt, restAt }].
     turns: [],
+    // Filled by the wait loop: { base, sha, count } for the {{remoteOrigin}} repo's main.
+    remote: null,
   };
 }
 
@@ -278,6 +288,7 @@ export function recordedPaneIds(snap) {
  * @property {string|null} lock      state/.lock identity
  * @property {Map<string, number>} deliveries  multiset of .watch-deliveries.log lines
  * @property {string|null} firstDelivery       the log's first line; a different first line later means a trim
+ * @property {string|null} remoteSha           the {{remoteOrigin}} repo's main; null unless a step claims remote.ahead
  */
 
 // ctx: { since: Baseline|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
@@ -343,6 +354,14 @@ export function evaluateAtom(atom, snap, ctx) {
       if (cached?.tips !== proj.branchTips) return { ok: false, reason: 'branch tips moved; count pending', needs: 'git' };
       return { ok: cached.count >= a.n, reason: `${cached.count} unlanded commit(s)` };
     }
+    case 'remote.ahead': {
+      const base = ctx.since?.remoteSha;
+      if (!base) return { ok: false, reason: 'no remote baseline' };
+      const r = snap.remote?.base === base ? snap.remote : null;
+      if (r?.count >= a.n) return { ok: true, reason: `${r.count} commit(s) on remote main since the say` };
+      const reason = r ? (r.count ? `${r.count} commit(s) on remote main since the say` : 'remote main unchanged since the say') : 'remote main not fetched';
+      return { ok: false, reason, needs: 'remote' };
+    }
     case 'home.clean':
       return { ok: snap.taskIds.length === 0, reason: snap.taskIds.length ? `task records remain: ${snap.taskIds.join(' ')}` : 'no task record' };
     case 'tabs.clean': {
@@ -397,3 +416,4 @@ export function evaluateUntil(parsed, snap, ctx) {
 }
 
 export { existsSync };
+

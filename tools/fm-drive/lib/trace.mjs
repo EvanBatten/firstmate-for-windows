@@ -11,7 +11,7 @@ export class TraceError extends Error {
 }
 
 export const RELAUNCH = '$relaunch';
-export const INTERPOLATIONS = ['projectOrigin', 'home'];
+export const INTERPOLATIONS = ['projectOrigin', 'home', 'remoteOrigin'];
 
 const fold = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-');
 const holds = (folded, needle) => `-${folded}-`.includes(`-${needle}-`);
@@ -168,6 +168,7 @@ export function validateTrace(raw, { root } = {}) {
 // Placement rules for atoms whose meaning depends on what the driver set up before a say.
 function refuseMisplacedSinceAtoms(steps, { project }) {
   const seeded = steps.some((s) => s.say.includes('{{projectOrigin}}')) ? (project || 'greeter') : null;
+  const remote = steps.some((s) => s.say.includes('{{remoteOrigin}}'));
   const firstTyped = steps.findIndex((s) => s.say !== '' && s.say !== RELAUNCH);
   let governing = -1;
   const earlier = new Set();
@@ -187,6 +188,9 @@ function refuseMisplacedSinceAtoms(steps, { project }) {
     }
     for (const a of step.parsed.atoms) earlier.add(a.raw);
     for (const atom of step.parsed.atoms) {
+      if (atom.name === 'remote.ahead' && !remote) {
+        throw new TraceError(`steps[${i}].until: remote.ahead needs a say that names {{remoteOrigin}}; the driver baselines only the remote it provisioned`);
+      }
       if (atom.name === 'git.ahead' && atom.args.name !== seeded) {
         throw new TraceError(`steps[${i}].until: git.ahead:${atom.args.name} needs the project the driver seeds through {{projectOrigin}}; an unseeded clone counts any main as ahead`);
       }

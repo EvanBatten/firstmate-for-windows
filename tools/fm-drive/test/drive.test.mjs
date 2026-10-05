@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { parseUntil, evaluateUntil, snapshotHome, countLines, CATALOG } from '../lib/predicates.mjs';
+import { parseUntil, evaluateUntil, snapshotHome, countLines, mainShaFromLsRemote, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
@@ -205,6 +206,7 @@ describe('trace refusal', () => {
       'turn-ended-after-relaunch.json': 'turn.ended needs a typed captain say before it',
       'turn-ended-first-say.json': 'turn.ended needs a typed captain say before it',
       'turn-ended-fresh-fact.json': 'file.contains:AGENTS.md:firstmate must hold in an earlier step',
+      'remote-ahead-without-origin.json': 'remote.ahead needs a say that names {{remoteOrigin}}',
     };
     const got = Object.fromEntries(Object.keys(reasons).map((f) => {
       const { dir, env } = fakeEnv();
@@ -243,7 +245,7 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended', 'remote.ahead>=1'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
@@ -357,6 +359,11 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'turn.ended', at(15), { turns: session.signals.turns }).ok, true);
     const late = check(home, 'turn.ended', at(45), { turns: session.signals.turns });
     assert.deepEqual({ ok: late.ok, reason: late.reason, needs: late.needs }, { ok: false, reason: 'turn.ended: no primary turn has ended since the say', needs: 'turn' });
+  });
+
+  test('mainShaFromLsRemote reads main', () => {
+    assert.equal(mainShaFromLsRemote('0123456789abcdef0123456789abcdef01234567\trefs/heads/main\n'), '0123456789abcdef0123456789abcdef01234567');
+    assert.equal(mainShaFromLsRemote(''), null);
   });
 
   test('herdr-backed atoms request their fact and then decide', () => {
@@ -847,6 +854,80 @@ describe('fake-herdr end to end', () => {
     const idleAt = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).statuses.find((x) => x.status === 'idle').t;
     const saidAt = Date.parse(readFileSync(join(env.FM_DRIVE_EVIDENCE, 'captain.log'), 'utf8').split('\n').find((l) => l.endsWith('\tclean up the greeter worker')).split('\t')[0]);
     assert.ok(saidAt - idleAt >= 2000, `said ${saidAt - idleAt} ms after the primary came to rest`);
+  });
+
+  const remoteWithHistory = () => {
+    const bare = join(tmp('remote'), 'notes.git');
+    const work = tmp('remote-work');
+    const g = (cwd, ...a) => {
+      const out = spawnSync('git', ['-C', cwd, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', ...a], { encoding: 'utf8' });
+      assert.equal(out.status, 0, `git ${a.join(' ')}: ${out.stderr}`);
+    };
+    g(dirname(bare), 'init', '-q', '--bare', '-b', 'main', bare);
+    g(work, 'init', '-q', '-b', 'main');
+    for (const n of [1, 2, 3]) {
+      writeFileSync(join(work, 'NOTES.md'), `line ${n}\n`);
+      g(work, 'add', '-A');
+      g(work, 'commit', '-qm', `note ${n}`);
+    }
+    g(work, 'push', '-q', bare, 'main');
+    return bare;
+  };
+  const remoteScript = (merge) => {
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({
+      'add my project': [
+        { path: 'data/projects.md', content: '# Projects\n\n- notes [direct-PR] - a throwaway project\n' },
+        { mkdir: 'projects/notes/.git' },
+      ],
+      'merge it': merge,
+    }));
+    return file;
+  };
+  const remoteTrace = {
+    feature: 'e2e-remote',
+    project: 'notes',
+    steps: [
+      { say: 'ahoy! add my project from {{remoteOrigin}} as notes', until: 'projects.registered:notes', budgetSec: 10 },
+      { say: 'merge it; you have my approval', until: 'remote.ahead>=1', budgetSec: 12 },
+    ],
+  };
+  const leaseFile = (url) => join(tmpdir(), `fm-drive-remote-${createHash('sha1').update(url).digest('hex').slice(0, 16)}.lease`);
+
+  test('a remote landing counts only commits pushed after the say, so a remote with history is not vacuous', () => {
+    const bare = remoteWithHistory();
+    const runWith = (merge) => {
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript(merge), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      return runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], env);
+    };
+    const merged = runWith([{ pushRemote: 'NOTES.md', content: 'hello\n' }]);
+    assert.equal(merged.status, 0, `stdout: ${merged.stdout}\nstderr: ${merged.stderr}`);
+    const idle = runWith([]);
+    assert.equal(idle.status, 1, idle.stdout);
+    assert.match(idle.json.steps.at(-1).reason, /remote\.ahead>=1: remote main unchanged since the say/);
+    assert.ok(!existsSync(leaseFile(bare)), 'each run released its lease');
+  });
+
+  test('a second run cannot lease a remote another live run holds', () => {
+    const bare = remoteWithHistory();
+    writeFileSync(leaseFile(bare), `${process.pid}\n`);
+    const held = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([]), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') }).env);
+    assert.equal(held.status, 3, held.stdout);
+    assert.match(held.json.error, /every remote in FM_DRIVE_REMOTE_ORIGIN is leased by another run/);
+    assert.equal(readFileSync(leaseFile(bare), 'utf8'), `${process.pid}\n`, 'the live lease was left alone');
+    const dead = spawnSync(NODE, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout;
+    writeFileSync(leaseFile(bare), `${dead}\n`);
+    const took = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([{ pushRemote: 'NOTES.md', content: 'hello\n' }]), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') }).env);
+    assert.equal(took.status, 0, `stdout: ${took.stdout}\nstderr: ${took.stderr}`);
+    assert.ok(!existsSync(leaseFile(bare)), 'the run that took over the stale lease released it');
+  });
+
+  test('a trace that names {{remoteOrigin}} with FM_DRIVE_REMOTE_ORIGIN unset fails before Herdr starts', () => {
+    const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([]), FM_DRIVE_REMOTE_ORIGIN: '', FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], env);
+    assert.equal(r.status, 3, r.stdout);
+    assert.match(r.json.error, /FM_DRIVE_REMOTE_ORIGIN/);
+    assert.ok(!existsSync(join(dir, 'calls.log')), 'herdr was never called');
   });
 
   test('a dead primary fails its step at once', () => {

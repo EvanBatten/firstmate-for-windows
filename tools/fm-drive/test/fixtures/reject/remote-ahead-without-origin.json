@@ -1,0 +1,1 @@
+{"feature": "remote-ahead-without-origin", "project": "notes", "steps": [{"say": "ahoy! add my project from https://example.invalid/notes.git as notes, then merge one pull request there", "until": "remote.ahead>=1", "budgetSec": 60}]}

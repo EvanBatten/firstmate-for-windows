@@ -121,7 +121,7 @@ async function run(trace, traceName) {
     recheckAtClose = true;
     await session.open();
     result.overhead.setupMs = Date.now() - setupStart;
-    const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home };
+    const vars = { projectOrigin: session.projectOrigin ?? '', home: session.home, remoteOrigin: session.remote?.url ?? '' };
     const steps = interpolate(trace, vars).steps;
 
     const gitAhead = {};
@@ -131,11 +131,14 @@ async function run(trace, traceName) {
       fetchHerdr: (kind, snap, ids) => session.fetchHerdr(kind, snap, ids),
       gitAhead,
       gitUnlanded: {},
+      remote: null,
+      remoteAhead: (base) => session.remoteAhead(base),
       seeds: session.seeds,
       counters: session.counters,
     };
     const onSnapshot = (snap) => session.noteTaskIds(snap);
-    let since = await session.baseline();
+    const wantRemote = steps.some((s) => s.parsed.atoms.some((a) => a.name === 'remote.ahead'));
+    let since = await session.baseline(wantRemote);
     const ctxNow = () => ({ since, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
     const timed = (i) => {
       for (let j = i; j < steps.length && (j === i || steps[j].say === ''); j++) {
@@ -161,7 +164,7 @@ async function run(trace, traceName) {
       const rec = { say: step.say, until: step.until, ms: 0, ok: false, reason: '' };
       result.steps.push(rec);
       const heldBefore = async () => {
-        since = await session.baseline();
+        since = await session.baseline(wantRemote);
         const ctx = ctxNow();
         const pre = await holdsNow({ home: session.home, parsed: step.parsed, ctx, deps, onSnapshot });
         if (pre.ok) return `vacuous: ${step.until} already held before its say, so this step proves nothing`;

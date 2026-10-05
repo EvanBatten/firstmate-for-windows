@@ -6,7 +6,7 @@ export const DEBOUNCE_MS = 40;
 export const SAFETY_TICK_MS = 1000;
 export const LIVENESS_TICK_MS = 500;
 // Minimum gap between two fetches of one fact kind inside one wait.
-export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000, turn: 1000 };
+export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000, turn: 1000, remote: 5000 };
 
 // deps:
 //   liveness()            -> { alive: boolean, reason: string }   (sync or async)
@@ -14,6 +14,8 @@ export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000, turn: 100
 //   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes', or samples the primary for 'turn'
 //   gitAhead              -> shared cache { [name]: { sha, count } } fetchFact fills
 //   gitUnlanded           -> shared cache { [name]: { tips, count } } fetchFact fills
+//   remote                -> { base, sha, count } of the {{remoteOrigin}} repo's main, which fetchFact fills
+//   remoteAhead(base)     -> { sha, count } of the remote's main past base
 //   seeds                 -> { [name]: sha }
 //   counters              -> { gitSpawns }
 function observe(home, deps, onSnapshot) {
@@ -21,12 +23,19 @@ function observe(home, deps, onSnapshot) {
   snap.gitAhead = deps.gitAhead;
   snap.gitUnlanded = deps.gitUnlanded;
   snap.turns = deps.signals?.turns ?? [];
+  snap.remote = deps.remote ?? null;
   onSnapshot?.(snap);
   return snap;
 }
 
 // The one dispatcher for every `needs` value. It fills snap or a deps cache and never decides the claim.
-export async function fetchFact(kind, { snap, atom, deps, home }) {
+export async function fetchFact(kind, { snap, atom, ctx, deps, home }) {
+  if (kind === 'remote') {
+    const base = ctx.since.remoteSha;
+    const ahead = await deps.remoteAhead(base).catch(() => null); // a failed fetch is retried at the next interval
+    if (ahead) deps.remote = snap.remote = { base, ...ahead };
+    return;
+  }
   if (kind === 'git' && atom.name === 'git.unlanded') {
     const name = atom.args.name;
     const tips = snap.projects[name]?.branchTips;
