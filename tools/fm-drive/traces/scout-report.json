@@ -2,6 +2,7 @@
   "feature": "scout-report",
   "project": "greeter",
   "proves": {
+    "agents-7-scout-report-gate": 4,
     "readme-ship-and-scout": 5
   },
   "steps": [
