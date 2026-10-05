@@ -12,6 +12,7 @@ cd "$ROOT" || exit 1
 . bin/backends/herdr.sh
 
 S=o3t-$(printf '%04x' "$RANDOM")
+S2=$S-other
 T=$(mktemp -d /tmp/fm-win-herdr.XXXXXX)
 fails=0
 ok() { printf 'ok - %s\n' "$1"; }
@@ -21,8 +22,11 @@ expect_eq() {  # <description> <expected> <actual>
 }
 
 cleanup() {
-  herdr server stop --session "$S" >/dev/null 2>&1
-  herdr session delete "$S" >/dev/null 2>&1
+  local s
+  for s in "$S" "$S2"; do
+    herdr server stop --session "$s" >/dev/null 2>&1
+    herdr session delete "$s" >/dev/null 2>&1
+  done
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -103,5 +107,44 @@ ws2=$(fm_backend_herdr_cli "$S" workspace create --cwd "$T" --label o3t-2 --no-f
 fm_backend_herdr_cli "$S" workspace close "$ws2" >/dev/null
 expect_eq "a closed workspace leaves nothing of its panes under TMPDIR" "" \
   "$(find "${TMPDIR:-/tmp}/fm-win-herdr-panes/$S" -type f 2>/dev/null)"
+
+labels() {  # <session> <workspace|tab> <prefix>
+  herdr "$2" list --session "$1" | jq -r --arg p "$3" '[.result[] | arrays | .[].label | select(startswith($p))] | join(" ")'
+}
+snapshot() {  # <session>
+  herdr workspace list --session "$1" | jq -c '[.result.workspaces[] | [.workspace_id, .label, .active_tab_id]]'
+  herdr tab list --session "$1" | jq -c '[.result.tabs[] | [.tab_id, .label, .pane_count]]'
+}
+
+fm_backend_herdr_server_ensure "$S2" || { not_ok "herdr server $S2 starts"; exit 1; }
+for v in 1 2 3 4 5; do herdr workspace create --cwd "$T" --label "victim$v" --no-focus --session "$S2" >/dev/null; done
+before=$(snapshot "$S2")
+wsx=$(fm_backend_herdr_cli "$S" workspace create --cwd "$T" --label xs-home --no-focus | jq -r '.result.workspace.workspace_id // empty')
+{
+  HERDR_SOCKET_PATH=$sock HERDR_SESSION=$S2 herdr tab create --workspace "$wsx" --cwd "$T" --label xs-env --no-focus
+  HERDR_SOCKET_PATH=$sock HERDR_SESSION=$S2 herdr workspace create --cwd "$T" --label xs-env-ws --no-focus
+  HERDR_SESSION=$S2 herdr tab create --session="$S" --workspace "$wsx" --cwd "$T" --label xs-eq --no-focus
+  HERDR_SESSION=$S2 herdr workspace create --session="$S" --cwd "$T" --label xs-eq-ws --no-focus
+  HERDR_SESSION=$S2 BASH=/c/fm-win-no-such-dir/bash.exe herdr workspace create --session="$S" --cwd "$T" --label xs-broken --no-focus
+} >/dev/null 2>&1
+expect_eq "a tab create lays out its tab in the session the CLI picks, from HERDR_SOCKET_PATH or --session=" \
+  "xs-env xs-eq" "$(labels "$S" tab xs-)"
+expect_eq "a workspace create lays out in the CLI's session, and a failed layout closes the workspace there" \
+  "xs-home xs-env-ws xs-eq-ws" "$(labels "$S" workspace xs-)"
+expect_eq "a create aimed at one session leaves another session's workspaces and tabs as they were" \
+  "$before" "$(snapshot "$S2")"
+
+mkdir -p "$T/norc/platform/windows"
+cp platform/windows/herdr-api.mjs "$T/norc/platform/windows/"
+for create in "tab create --workspace $wsx" "workspace create"; do
+  # shellcheck disable=SC2086 # Splits into the create's own words.
+  if out=$(FM_PLATFORM_OVERLAY=$T/norc/platform/windows/overrides.sh \
+    herdr $create --cwd "$T" --label "norc-${create%% *}" --no-focus --session "$S" 2>&1); then
+    not_ok "a ${create%% *} create with no pane-rc.sh to run fails (got: $out)"
+  else
+    ok "a ${create%% *} create with no pane-rc.sh to run fails"
+  fi
+done
+expect_eq "a create with no pane-rc.sh leaves no tab or workspace behind" "|" "$(labels "$S" tab norc)|$(labels "$S" workspace norc)"
 
 [ "$fails" -eq 0 ]

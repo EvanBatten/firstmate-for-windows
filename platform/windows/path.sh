@@ -8,7 +8,7 @@
 # --git-common-dir or the gitdir treehouse writes, comes back through the
 # mount as /tmp/x. Upstream decides "same directory" by comparing the strings
 # `pwd` and `pwd -P` print, so here both answer in the mount's spelling, the
-# one `cygpath -u` gives, without forking it.
+# one `cygpath -u` gives, without forking.
 
 _fm_win_mount_src=()
 _fm_win_mount_dst=()
@@ -40,7 +40,22 @@ pwd() {
   local dir
   case $* in
     '' | -L) dir=$PWD ;;
-    -P) dir=$(builtin pwd -P) || return ;;
+    -P)
+      # `cd -P .` resolves the shell's own record of its directory, as
+      # `builtin pwd -P` does, without the subshell that capturing its output
+      # would fork, and its chdir(".") cannot move the shell. It rewrites PWD,
+      # OLDPWD and that record, so all three go back. In a deleted directory
+      # the chdir fails, and the builtin answers.
+      local record=${DIRSTACK[0]} pwd=${PWD-} had_pwd=${PWD+1} oldpwd=${OLDPWD-} had_oldpwd=${OLDPWD+1}
+      if builtin cd -P . 2>/dev/null; then
+        dir=$PWD
+        if [ "$dir" != "$record" ] && [ "$record" -ef . ]; then builtin cd -- "$record" || :; fi
+        if [ -n "$had_pwd" ]; then PWD=$pwd; else unset PWD; fi
+        if [ -n "$had_oldpwd" ]; then OLDPWD=$oldpwd; else unset OLDPWD; fi
+      else
+        dir=$(builtin pwd -P) || return
+      fi
+      ;;
     *) builtin pwd "$@"; return ;;
   esac
   _fm_win_mount_spelling dir "$dir"
