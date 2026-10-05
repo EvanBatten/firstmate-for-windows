@@ -1,1 +1,1 @@
-{"feature":"bypass-only","steps":[{"say":"","until":"bypass permissions on"}]}
+{"feature":"bypass-only","steps":[{"say":"","until":"bypass permissions on","budgetSec":60}]}

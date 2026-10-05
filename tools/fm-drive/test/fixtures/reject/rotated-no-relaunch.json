@@ -1,1 +1,1 @@
-{"feature":"rotated-without-relaunch","steps":[{"say":"ahoy","until":"lock.rotated"}]}
+{"feature":"rotated-without-relaunch","steps":[{"say":"ahoy","until":"lock.rotated","budgetSec":60}]}

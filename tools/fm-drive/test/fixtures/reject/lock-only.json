@@ -1,1 +1,1 @@
-{"feature":"lock-only","steps":[{"say":"ahoy","until":"lock.held"}]}
+{"feature":"lock-only","steps":[{"say":"ahoy","until":"lock.held","budgetSec":60}]}

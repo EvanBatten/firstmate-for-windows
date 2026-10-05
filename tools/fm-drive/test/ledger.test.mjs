@@ -52,7 +52,7 @@ const ledgerTrace = (proves) => ({
 
 // A checkout whose main is pushed to a bare origin, so record can ask
 // whether a result's commit is reachable from origin/main.
-function ledgerRepo(behaviors, proves = PROVES) {
+function ledgerRepo(behaviors, proves = PROVES, trace = ledgerTrace(proves)) {
   const root = tmp('root');
   const origin = tmp('origin');
   git(origin, 'init', '-q', '--bare', '-b', 'main');
@@ -61,7 +61,7 @@ function ledgerRepo(behaviors, proves = PROVES) {
   mkdirSync(dirname(join(root, TSV_REL)), { recursive: true });
   writeFileSync(join(root, TSV_REL), behaviors);
   mkdirSync(join(root, 'tools', 'fm-drive', 'traces'), { recursive: true });
-  writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify(ledgerTrace(proves)));
+  writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify(trace));
   git(root, 'add', '-A');
   git(root, 'commit', '-qm', 'inventory');
   git(root, 'remote', 'add', 'origin', origin);
@@ -222,6 +222,16 @@ describe('record', () => {
     }));
     assert.equal(r.status, 2);
     assert.equal(r.stderr, 'fm-drive: record refused: step 2 took 999999 ms, over its 180 s budget in trace register\n');
+    assert.equal(r.tsv, BASE);
+  });
+
+  test('a result whose trace at its commit has a step with no budget is refused', () => {
+    const unbudgeted = ledgerTrace(PROVES);
+    delete unbudgeted.steps[1].budgetSec;
+    const { root, sha } = ledgerRepo(BASE, PROVES, unbudgeted);
+    const r = record(root, resultFile('held', sha));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, `fm-drive: record refused: step 2 of tools/fm-drive/traces/register.json at ${sha} has no budgetSec, so its time cannot be checked\n`);
     assert.equal(r.tsv, BASE);
   });
 
