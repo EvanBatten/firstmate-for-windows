@@ -237,7 +237,16 @@ describe('record', () => {
     const { root, sha } = ledgerRepo(BASE, { 'row-register': 1 });
     const r = record(root, resultFile('held', sha));
     assert.equal(r.status, 2);
-    assert.equal(r.stderr, "fm-drive: record refused: the result's proves do not match tools/fm-drive/traces/register.json, so inventory.sh check could not trace its rows\n");
+    assert.equal(r.stderr, `fm-drive: record refused: the result's proves do not match tools/fm-drive/traces/register.json at ${sha}, so inventory.sh check could not trace its rows\n`);
+    assert.equal(r.tsv, BASE);
+  });
+
+  test('a result is compared with the trace at its commit, not an uncommitted edit of it', () => {
+    const { root, sha } = ledgerRepo(BASE, { 'row-register': 1 });
+    writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify(ledgerTrace(PROVES)));
+    const r = record(root, resultFile('held', sha));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, `fm-drive: record refused: the result's proves do not match tools/fm-drive/traces/register.json at ${sha}, so inventory.sh check could not trace its rows\n`);
     assert.equal(r.tsv, BASE);
   });
 
