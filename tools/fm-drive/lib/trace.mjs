@@ -148,14 +148,10 @@ export function validateTrace(raw, { root } = {}) {
     } catch (err) {
       throw new TraceError(`${at}.until: ${err.message}`);
     }
-    let budgetSec;
-    if (step.budgetSec !== undefined) {
-      if (typeof step.budgetSec !== 'number' || !Number.isFinite(step.budgetSec) || step.budgetSec <= 0) {
-        throw new TraceError(`${at}.budgetSec must be a positive number of seconds`);
-      }
-      budgetSec = step.budgetSec;
+    if (!(Number.isFinite(step.budgetSec) && step.budgetSec > 0)) {
+      throw new TraceError(`${at}.budgetSec must be a positive number of seconds`);
     }
-    return { say: step.say, until, parsed, budgetSec };
+    return { say: step.say, until, parsed, budgetSec: step.budgetSec };
   });
   const featureAtoms = steps.flatMap((s) => s.parsed.atoms).filter((a) => !STARTUP_ONLY.includes(a.name));
   if (featureAtoms.length === 0) {

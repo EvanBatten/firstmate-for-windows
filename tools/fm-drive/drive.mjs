@@ -70,13 +70,12 @@ async function check(trace) {
   } finally {
     session.removeScratch();
   }
-  emit({ feature: trace.feature, ok: true, steps: trace.steps.map((s) => ({ say: s.say, until: s.until, budgetSec: s.budgetSec ?? null })) });
+  emit({ feature: trace.feature, ok: true, steps: trace.steps.map((s) => ({ say: s.say, until: s.until, budgetSec: s.budgetSec })) });
   return 0;
 }
 
 async function run(trace, traceName) {
   const env = process.env;
-  const defaultBudgetMs = Number.parseInt(env.FM_DRIVE_UNTIL_MS || '180000', 10);
   const session = new Session({ trace, env, log });
   const result = {
     feature: trace.feature,
@@ -202,7 +201,7 @@ async function run(trace, traceName) {
         await session.snapshotAll(`step${i + 1}-vacuous`);
         break;
       }
-      const budgetMs = step.budgetSec ? Math.round(step.budgetSec * 1000) : defaultBudgetMs;
+      const budgetMs = Math.round(step.budgetSec * 1000);
       const r = await waitUntil({ home: session.home, parsed: step.parsed, ctx: ctxNow(), budgetMs, deps, onSnapshot });
       rec.ms = r.ms;
       rec.ok = r.ok;
