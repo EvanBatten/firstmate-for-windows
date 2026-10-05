@@ -33,6 +33,24 @@ expect "pwd -P names a directory under %TEMP% one way from either spelling" \
   "$T|$T" \
   "$(. platform/windows/env.sh; bash -c 'a=$(cd -P "$1" && pwd -P); b=$(cd -P "$2" && pwd -P); printf "%s|%s" "$a" "$b"' _ "$T" "$DRIVE_T")"
 
+# shellcheck disable=SC2016 # Expanded by the inner bash.
+expect "pwd -P answers without a subshell, at a fraction of the cost of one fork per call" \
+  "no fork" \
+  "$(. platform/windows/env.sh; cd "$T" && bash -c '
+    s=$EPOCHREALTIME; for ((i = 0; i < 40; i++)); do x=$(builtin pwd -P); done; forked=$((${EPOCHREALTIME/./} - ${s/./}))
+    s=$EPOCHREALTIME; for ((i = 0; i < 40; i++)); do pwd -P >/dev/null; done; overlay=$((${EPOCHREALTIME/./} - ${s/./}))
+    if [ $((overlay * 4)) -lt "$forked" ]; then echo "no fork"; else echo "overlay ${overlay}us for 40 calls, forked ${forked}us"; fi')"
+
+mkdir -p "$T/real/sub"
+if ln -s "$T/real" "$T/link" && [ -L "$T/link" ]; then
+  # shellcheck disable=SC2016 # Expanded by the inner bash.
+  expect "pwd -P resolves a symlinked cwd and leaves the shell in its logical spelling" \
+    "[$T/real/sub|$T/link/sub|$T/link]" \
+    "[$(. platform/windows/env.sh; bash -c 'cd "$1/link/sub" && pwd -P && pwd && cd .. && echo "$PWD"' _ "$T" | paste -sd '|')]"
+else
+  ok "pwd -P resolves a symlinked cwd # skip: this Git Bash makes no symlinks"
+fi
+
 expect "a script run through the drive spelling finds its root as upstream does, in the /tmp spelling" \
   "[$T]" \
   "$(. platform/windows/env.sh; bash -c 'printf "[%s]" "$(cd "$1/project/.." && pwd)"' _ "$DRIVE_T")"
