@@ -994,6 +994,42 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.equal(s.signals.shellDead, null);
   });
 
+  test('a relaunch is not read as exited from the previous launch line still on screen', async () => {
+    const before = [
+      "$ export CLAUDE_CONFIG_DIR='C:\\x\\claude-config'; cd \"$(cygpath -u 'C:\\x\\firstmate')\" && claude --dangerously-skip-permissions --model opus",
+      'Resume this session with:',
+      'claude --resume 95c1f663-0cc5-473c-bfcf-8434826424ee',
+      'user@host MINGW64 /tmp/x/firstmate',
+      '$ ',
+    ].join('\n');
+    let reads = 0;
+    let typed = '';
+    const s = new sessionLib.Session({ trace: { feature: 'relaunch', steps: [] }, env: process.env });
+    s.paneId = 'p1';
+    s.shell = 'git-bash';
+    s.home = tmp('relaunch-home');
+    s.claudeConfigDir = 'C:\\x\\claude-config';
+    s.readyMs = 20_000;
+    s.herdr = {
+      call: async (method, params) => {
+        if (method === 'pane.send_input') typed = params.text;
+        if (method === 'pane.read') {
+          reads += 1;
+          if (reads < 3) return { read: { text: before } };
+          if (reads < 5) return { read: { text: `${before}${typed}\n` } };
+          return { read: { text: 'Claude Code\n⏵⏵ bypass permissions on (shift+tab to cycle)' } };
+        }
+        if (method === 'pane.process_info') {
+          return { process_info: { foreground_processes: [{ name: reads < 5 ? 'bash.exe' : 'claude.exe', pid: 4242 }] } };
+        }
+        return {};
+      },
+    };
+    s.watchDialogs = () => {};
+    await s.launch();
+    assert.equal(s.primaryPid, 4242);
+  });
+
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
     const home = buildHome('ship-in-flight');
     const started = Date.now();
