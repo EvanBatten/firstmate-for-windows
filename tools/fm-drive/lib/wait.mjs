@@ -149,7 +149,6 @@ export function gitAheadCount(home, name, seed, sha, counters) {
   return revListCount(home, name, [`${seed}..${sha}`], counters);
 }
 
-// Commits on any local branch that main lacks; one spawn per change in the branch tips.
 export function gitUnlandedCount(home, name, counters) {
   return revListCount(home, name, ['--branches', '--not', 'main'], counters);
 }

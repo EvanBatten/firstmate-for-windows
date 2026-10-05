@@ -165,7 +165,6 @@ export function validateTrace(raw, { root } = {}) {
   return { feature: raw.feature, ...(project ? { project } : {}), steps, ...(proves ? { proves } : {}) };
 }
 
-// Placement rules for atoms whose meaning depends on what the driver set up before a say.
 function refuseMisplacedSinceAtoms(steps, { project }) {
   const seeded = steps.some((s) => s.say.includes('{{projectOrigin}}')) ? (project || 'greeter') : null;
   const remote = steps.some((s) => s.say.includes('{{remoteOrigin}}'));

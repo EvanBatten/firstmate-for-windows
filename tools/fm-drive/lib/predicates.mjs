@@ -27,14 +27,15 @@
 //   turn.ended                  the primary started a turn after the say and it came to rest (idle, done
 //                               or blocked); it only times a claim, so pair it with a home record an
 //                               earlier step made true
-//   wake.delivered:REASON>=N    state/.watch-deliveries.log gained at least N (>=1) lines with that reason
+//   wake.delivered:REASON>=N    state/.watch-deliveries.log gained at least N lines with that reason
 //                               since the say (signal, stale, heartbeat, check, needs-decision,
 //                               captain-held, paused)
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
 //
-// Since-say atoms (lock.rotated, turn.ended, wake.delivered, remote.ahead) compare against ctx.since, the Baseline the driver captured right
-// before it typed the say a step waits on. They are false at the say by construction.
+// Since-say atoms (lock.rotated, turn.ended, wake.delivered, remote.ahead) compare against ctx.since,
+// the Baseline the driver captured right before it typed the say a step waits on. They are false at
+// the say by construction.
 
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';

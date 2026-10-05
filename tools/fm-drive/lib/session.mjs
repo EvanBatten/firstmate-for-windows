@@ -453,7 +453,6 @@ export class Session {
     return this.mirrorGit(['rev-parse', 'main']);
   }
 
-  // The remote's main fetched into the mirror, and how many commits it is past base.
   async remoteAhead(base) {
     const sha = await this.fetchRemoteMain();
     return { sha, count: sha === base ? 0 : Number.parseInt(await this.mirrorGit(['rev-list', '--count', `${base}..${sha}`]), 10) };
