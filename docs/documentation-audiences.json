@@ -260,6 +260,7 @@
       "path": ".agents/skills/updatefirstmate/SKILL.md",
       "audience": "agent-runtime"
     },
+    { "path": "platform/windows/INSTALL.md", "audience": "operator-current" },
     {
       "path": ".agents/skills/control-firstmate/SKILL.md",
       "audience": "agent-runtime"
