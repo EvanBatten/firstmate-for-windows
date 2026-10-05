@@ -1,0 +1,28 @@
+{
+  "feature": "pr-land",
+  "proves": {
+    "fm-pr-merge": 4
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from https://github.com/EvanBatten/fm-k1-scratch-20261004 as a direct-PR project called notes. you may push branches and open pull requests there.",
+      "until": "projects.registered:notes",
+      "budgetSec": 150
+    },
+    {
+      "say": "ship one change to notes: append a new line to NOTES.md, creating it if it is missing, that says hello from the crew and gives today's date. one commit, opened as a pull request. use the opus model for the worker. tell me when the pull request is up, and don't merge it until I say so.",
+      "until": "tasks.count>=1 && backlog.inflight>=1",
+      "budgetSec": 180
+    },
+    {
+      "say": "",
+      "until": "status.verb:done",
+      "budgetSec": 300
+    },
+    {
+      "say": "the pull request looks good. merge it, you have my approval, then clean up and tell me.",
+      "until": "home.clean && tabs.clean",
+      "budgetSec": 400
+    }
+  ]
+}
