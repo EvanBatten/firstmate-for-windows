@@ -84,7 +84,9 @@ function refuseResult(r, root, heads) {
   if (r.steps.length !== want.length) return `the result has ${r.steps.length} steps but trace ${r.trace} has ${want.length}`;
   const differs = r.steps.findIndex((s, i) => s.until !== String(want[i]?.until).trim());
   if (differs >= 0) return `step ${differs + 1} waited on ${r.steps[differs].until} but trace ${r.trace} waits on ${String(want[differs]?.until).trim()}`;
-  const late = r.steps.findIndex((s, i) => typeof want[i].budgetSec === 'number' && !(s.ms >= 0 && s.ms <= want[i].budgetSec * 1000 + LAST_LOOK_GRACE_MS));
+  const untimed = r.steps.findIndex((s) => !(Number.isFinite(s.ms) && s.ms >= 0));
+  if (untimed >= 0) return `step ${untimed + 1} has no elapsed time (ms is ${'ms' in r.steps[untimed] ? JSON.stringify(r.steps[untimed].ms) : 'missing'})`;
+  const late = r.steps.findIndex((s, i) => typeof want[i].budgetSec === 'number' && s.ms > want[i].budgetSec * 1000 + LAST_LOOK_GRACE_MS);
   if (late >= 0) return `step ${late + 1} took ${r.steps[late].ms} ms, over its ${want[late].budgetSec} s budget in trace ${r.trace}`;
   if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
   if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
