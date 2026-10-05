@@ -1033,6 +1033,9 @@ cmd_start() {
       die "extension registration owner is unreadable: $id"
       ;;
   esac
+  # Descriptor 7 stays open on the registration this claim names until the
+  # claim moves on, so no later registration can reuse its inode and pass as
+  # the claimed generation in a dev:inode comparison. Source commands close it.
   exec 7<"$(source_file "$id")" || {
     fm_procevent_source_lock_release "$id"
     die "cannot retain registration identity: $id"
@@ -1122,8 +1125,8 @@ cmd_start() {
       fi
       CLAIM_REG_IDENTITY=$current
     fi
+    exec 7<"$registration" || { fm_procevent_source_lock_release "$id"; return 1; }
     fm_procevent_source_lock_release "$id" || return 1
-    exec 7<"$registration" || return 1
     return 0
   }
   # The inherited marker keeps the runner and its ordinary children from
@@ -1200,7 +1203,6 @@ cmd_start() {
       ;;
     *) die "cannot enforce the source launch floor: $id" ;;
   esac
-  exec 7<&-
   if [ "$extension_owner" -eq 1 ]; then
     launch_ready=".$id.$CLAIM_TOKEN.launch-ready"
     launch_reply="$REG/.$id.$CLAIM_TOKEN.launch-reply"
@@ -1214,7 +1216,7 @@ cmd_start() {
       "$FM_PROCEVENT_EXTENSION_VERSION" "$FM_PROCEVENT_EXTENSION_CAPABILITY_VERSION" \
       "$FM_PROCEVENT_EXTENSION_PACKAGE_DIGEST" "$FM_PROCEVENT_EXTENSION_BINDING_DIGEST" \
       "$CLAIM_TOKEN" "$runner" "$out" "$$" "$(fm_pid_identity "$$")" "$MAX_OUTPUT_BYTES" \
-      "$launch_ready" -- "${ARGV[@]}" > "$launch_reply" &
+      "$launch_ready" -- "${ARGV[@]}" > "$launch_reply" 7<&- &
     launch_pid=$!
     while [ ! -s "$REG/$launch_ready" ] && kill -0 "$launch_pid" 2>/dev/null; do sleep 0.01; done
     fm_procevent_source_lock_release "$id" \
@@ -1268,7 +1270,7 @@ EOF
       fm_procevent_source_lock_release "$id"
       die "cannot retain the source output boundary: $id"
     }
-    "${ARGV[@]}" >&5 5>&- 4<&- 2>/dev/null &
+    "${ARGV[@]}" >&5 5>&- 4<&- 7<&- 2>/dev/null &
     launch_pid=$!
     exec 5>&-
     rm -f -- "$launch_ready"
