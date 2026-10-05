@@ -33,6 +33,8 @@ _fm_win_path=":$PATH:"
 _fm_win_path=${_fm_win_path//":$_fm_win_dir/bin:"/:}
 _fm_win_path=${_fm_win_path#:}
 PATH=$_fm_win_dir/bin:${_fm_win_path%:}
+# shellcheck source=platform/windows/jq.sh
+. "$_fm_win_dir/jq.sh" "$_fm_win_dir/bin"
 
 _fm_win_msys=
 for _fm_win_word in ${MSYS:-}; do
