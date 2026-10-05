@@ -5,7 +5,7 @@
 //                               (fm-spawn's commit point: a record whose item is not In flight is
 //                               a spawn still in progress, which its abort cleanup may remove)
 //   tasks.kind:scout|ship       some task record carries kind=<value>
-//   status.verb:VERB            some state/*.status line starts with "VERB:"
+//   status.verb:VERB            some state/*.status line starts with VERB, optional " [key=value]" tags, then ":"
 //                               (done, needs-decision, blocked, failed, working, paused, resolved, note)
 //   report.exists               some data/<id>/report.md is non-empty
 //   report.mentions:NEEDLE      some data/<id>/report.md contains NEEDLE (case-insensitive)
@@ -213,7 +213,7 @@ export function evaluateAtom(atom, snap, ctx) {
       return { ok: hit.length > 0, reason: hit.length ? `kind=${a.kind}: ${hit.join(' ')}` : `no task record with kind=${a.kind}` };
     }
     case 'status.verb': {
-      const re = new RegExp(`^${a.verb}:`, 'm');
+      const re = new RegExp(`^${a.verb}(?: \\[[^\\]\\n]*\\])*:`, 'm');
       const hit = Object.entries(snap.status).filter(([, t]) => re.test(t)).map(([id]) => id);
       return { ok: hit.length > 0, reason: hit.length ? `${a.verb}: from ${hit.join(' ')}` : `no ${a.verb}: line yet` };
     }
