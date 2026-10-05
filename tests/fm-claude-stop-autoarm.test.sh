@@ -190,6 +190,40 @@ printf 'signal: task.status done: fixture\n'
 exit 0
 SH
       ;;
+    parks-until-released)
+      cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+trap ': > "$FM_HOME/state/arm-termed"; exit 143' TERM
+: > "$FM_HOME/state/arm-waiting"
+i=0
+while [ ! -e "$FM_HOME/state/arm-release" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+printf 'watcher: FAILED - cycle ended without an actionable reason\n'
+exit 1
+SH
+      ;;
+    ends-session-then-fails|ends-session-then-wakes)
+      cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+if [ ! -e "$FM_HOME/state/session-ended" ]; then
+  : > "$FM_HOME/state/session-ended"
+  session=$(cat "$FM_HOME/state/.lock")
+  kill -KILL "$session"
+  while kill -0 "$session" 2>/dev/null; do sleep 0.05; done
+fi
+SH
+      if [ "$kind" = ends-session-then-wakes ]; then
+        cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+touch "$FM_HOME/state/.last-watcher-beat"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'stale: fixture-win actionable\n'
+exit 0
+SH
+      else
+        cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+printf 'watcher: FAILED - cycle ended without an actionable reason\n'
+exit 1
+SH
+      fi
+      ;;
     afk-appears)
       cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
 : > "$FM_HOME/state/.afk"
@@ -1358,6 +1392,75 @@ test_afk_mid_cycle_suppresses_rewake() {
   pass "auto-arm: mid-cycle AFK hands triage to the daemon with no rewake"
 }
 
+# A Claude session that ends is gone for good, so its Stop hook has nobody left
+# to wake. Claude ends a hook with its session where it can signal the hook's
+# process group; a Windows primary is a native program and leaves the hook
+# running, which re-armed a closed home's watcher and let it restart the herdr
+# server the close had stopped. These cases end the fake session the way a
+# native exit does: the hook is left running with no signal.
+
+# Wait until the hook named by the ledger has exited: <dir> <polls of 0.1s>.
+wait_for_hook_exit() {
+  local dir=$1 limit=$2 hook i=0
+  hook=$(epoch_field "$dir" owner_pid)
+  [ -n "$hook" ] || return 1
+  while kill -0 "$hook" 2>/dev/null; do
+    [ "$i" -lt "$limit" ] || return 1
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+test_session_end_mid_park_stops_the_arm() {
+  local dir out i
+  dir=$(make_primary_dir "$TMP_ROOT/session-end-mid-park")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" parks-until-released
+  out="$dir/state/autoarm.out"
+  run_autoarm_bg "$dir" "$out"
+  i=0
+  while [ ! -e "$dir/state/arm-waiting" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+  assert_present "$dir/state/arm-waiting" "the hook did not reach its parked arm"
+
+  kill -KILL "$RUN_AUTOARM_BG_PID"
+  wait "$RUN_AUTOARM_BG_PID" 2>/dev/null
+  if ! wait_for_hook_exit "$dir" 150; then
+    : > "$dir/state/arm-release"
+    wait_for_hook_exit "$dir" 600
+    fail "the hook and its parked arm outlived their ended session by 15 s"
+  fi
+  assert_present "$dir/state/arm-termed" "the hook exited without stopping its parked arm"
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 1 ] || fail "the hook armed again after its session ended"
+  assert_absent "$dir/state/successor-ran" "the hook started a handling successor for an ended session"
+  [ "$(epoch_outcome "$dir")" = session-ended ] || fail "epoch must record outcome=session-ended, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: a session that ends mid-park stops the hook and its arm"
+}
+
+test_session_end_before_retry_never_rearms() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/session-end-retry")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" ends-session-then-fails
+  run_autoarm "$dir" >/dev/null 2>&1
+  wait_for_hook_exit "$dir" 600 || fail "the hook outlived its ended session by 60 s"
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 1 ] \
+    || fail "the hook re-armed $(($(wc -l < "$dir/state/arm-ran") - 1)) more time(s) after its session ended"
+  [ "$(epoch_outcome "$dir")" = session-ended ] || fail "epoch must record outcome=session-ended, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: a failed close after the session ended is not retried"
+}
+
+test_session_end_before_wake_starts_no_successor() {
+  local dir
+  dir=$(make_primary_dir "$TMP_ROOT/session-end-wake")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" ends-session-then-wakes
+  run_autoarm "$dir" >/dev/null 2>&1
+  wait_for_hook_exit "$dir" 600 || fail "the hook outlived its ended session by 60 s"
+  assert_absent "$dir/state/successor-ran" "the hook started a handling successor after its session ended"
+  [ "$(epoch_outcome "$dir")" = session-ended ] || fail "epoch must record outcome=session-ended, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: a wake after the session ended starts no handling successor"
+}
+
 test_active_in_marked_secondmate_home() {
   local dir out status
   dir=$(make_secondmate_dir "$TMP_ROOT/secondmate")
@@ -1658,6 +1761,9 @@ test_superseded_owner_never_reinvokes_the_arm
 test_superseded_owner_goes_silent_and_never_double_translates
 test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake
+test_session_end_mid_park_stops_the_arm
+test_session_end_before_retry_never_rearms
+test_session_end_before_wake_starts_no_successor
 test_active_in_marked_secondmate_home
 test_long_poll_grace_reaches_arm_wrapper
 test_host_absent_flag_keeps_the_arm
