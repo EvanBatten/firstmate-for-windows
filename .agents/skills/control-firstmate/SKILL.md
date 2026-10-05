@@ -57,7 +57,7 @@ The shipped `register` trace is the smallest real one.
 
 Check a trace without starting Herdr or Claude with `node tools/fm-drive/drive.mjs check <trace.json>`.
 `check` clones the root and refuses, with exit 2, a trace whose every `until` already holds on that fresh home; `run` does the same before it starts anything.
-The shipped traces are `register`, `restart-primary`, and `scout-report`, under [`tools/fm-drive/traces/`](../../../tools/fm-drive/traces/).
+The shipped traces are `register`, `ship-local`, `steer`, `watcher-wake`, `pr-land`, `cleanup-refusal`, `restart-primary`, and `scout-report`, under [`tools/fm-drive/traces/`](../../../tools/fm-drive/traces/).
 
 ### Claims about what happened after the say
 
