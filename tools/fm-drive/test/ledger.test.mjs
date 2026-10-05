@@ -204,6 +204,27 @@ describe('record', () => {
     assert.equal(r.tsv, BASE);
   });
 
+  test('a result with a step over its trace budget is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('held', sha, (res) => {
+      res.steps[1] = { ...res.steps[1], ms: 999_999 };
+      return res;
+    }));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: step 2 took 999999 ms, over its 180 s budget in trace register\n');
+    assert.equal(r.tsv, BASE);
+  });
+
+  test('a step that held on the last look at its deadline is recorded', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('held', sha, (res) => {
+      res.steps[1] = { ...res.steps[1], ms: 180_040 };
+      return res;
+    }));
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.tsv, /^row-dispatch\t[^\t]*\t[^\t]*\tproven\tregister\t/m);
+  });
+
   test('a result that claims a row the table does not have is refused', () => {
     const { root, sha } = ledgerRepo(BASE, { ...PROVES, 'row-typo': 1 });
     const r = record(root, resultFile('held', sha, (res) => ({ ...res, proves: { ...res.proves, 'row-typo': 1 } })));
