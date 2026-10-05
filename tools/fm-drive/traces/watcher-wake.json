@@ -2,13 +2,15 @@
   "feature": "watcher-wake",
   "project": "greeter",
   "proves": {
+    "fm-claude-stop-autoarm": 3,
+    "fm-watch-arm": 3,
     "readme-low-token-supervision": 4,
-    "fm-watch": 3,
-    "feature-supervision-wakes": 5
+    "fm-watch": 4,
+    "feature-supervision-wakes": 6
   },
   "steps": [
     {
-      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. when it is done, verify it by running it and land it on main; you have my approval, and clean up after.",
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. before committing, soak-test it: run hello and bye once every two seconds for four full minutes and check every run printed the same line. one commit on its own branch. use the opus model for the worker. tell me when it is done, and wait for my go before landing it.",
       "until": "projects.registered:greeter",
       "budgetSec": 150
     },
@@ -19,11 +21,16 @@
     },
     {
       "say": "",
-      "until": "file.contains:state/.watch-deliveries.log:.status && beacon.fresh",
-      "budgetSec": 300
+      "until": "status.verb:done && wake.delivered:signal>=1 && beacon.fresh",
+      "budgetSec": 480
     },
     {
       "say": "",
+      "until": "wake.delivered:stale>=1",
+      "budgetSec": 300
+    },
+    {
+      "say": "go ahead: verify greet.sh by running it, then land it on main; you have my approval. clean up after.",
       "until": "git.ahead:greeter>=1",
       "budgetSec": 400
     },
