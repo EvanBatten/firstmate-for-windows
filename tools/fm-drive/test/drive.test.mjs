@@ -345,6 +345,12 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'home.clean && tabs.clean', c, { herdr: { tabLabels: [] } }).ok, true);
   });
 
+  test('status.verb matches a done line that carries an [at=] tag', () => {
+    const home = buildHome('tagged-done');
+    assert.deepEqual(check(home, 'status.verb:done'), { ok: true, reason: 'holds' });
+    assert.equal(check(home, 'status.verb:failed').ok, false);
+  });
+
   test('beacon.fresh reads the beacon mtime', () => {
     const home = buildHome('empty');
     const beacon = join(home, 'state', '.last-watcher-beat');
