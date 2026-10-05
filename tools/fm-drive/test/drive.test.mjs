@@ -76,6 +76,7 @@ describe('trace refusal', () => {
       assert.equal(r.status, 2, `stderr: ${r.stderr}`);
       assert.equal(r.json?.pass, false);
       assert.equal(typeof r.json?.rejected, 'string');
+      if (!f.includes('budget')) assert.doesNotMatch(r.json.rejected, /budgetSec/, 'the fixture is refused for its own reason, not a missing budget');
       assert.ok(!existsSync(join(dir, 'calls.log')), 'the fake herdr was never invoked');
       assert.ok(!existsSync(join(dir, 'state.json')), 'no herdr state was created');
     });
@@ -107,6 +108,12 @@ describe('trace refusal', () => {
     }
   });
 
+  test('check refuses a trace with a step that has no budget', () => {
+    const r = runDrive(['check', join(FIXTURES, 'reject', 'no-budget.json')], fakeEnv().env);
+    assert.equal(r.status, 2, r.stdout);
+    assert.equal(r.stderr, 'fm-drive: trace rejected: steps[1].budgetSec must be a positive number of seconds\n');
+  });
+
   test('an ordinary captain request passes check', () => {
     const r = runDrive(['check', join(FIXTURES, 'allow', 'ordinary-captain.json')], fakeEnv().env);
     assert.equal(r.status, 0, r.stdout);
@@ -116,7 +123,7 @@ describe('trace refusal', () => {
   const STEERING = JSON.parse(readFileSync(join(FIXTURES, 'steering.json'), 'utf8'));
   const refusal = (say) => {
     try {
-      validateTrace({ feature: 'x', steps: [{ say, until: 'projects.registered:greeter' }] }, { root: REPO });
+      validateTrace({ feature: 'x', steps: [{ say, until: 'projects.registered:greeter', budgetSec: 60 }] }, { root: REPO });
       return null;
     } catch (err) {
       if (!(err instanceof TraceError)) throw err;
@@ -211,10 +218,10 @@ describe('trace refusal', () => {
   });
 
   test('validateTrace refuses the startup-only shapes in process', () => {
-    assert.throws(() => validateTrace({ feature: 'x', steps: [{ say: '', until: 'pong' }] }), TraceError);
-    assert.throws(() => validateTrace({ feature: 'x', steps: [{ say: '', until: 'bypass permissions on' }] }), TraceError);
-    assert.throws(() => validateTrace({ feature: 'x', steps: [{ say: '', until: 'lock.held' }, { say: '', until: 'lock.held' }] }), TraceError);
-    const ok = validateTrace({ feature: 'x', steps: [{ say: '', until: 'lock.held' }, { say: 'go', until: 'tasks.count>=1' }] });
+    assert.throws(() => validateTrace({ feature: 'x', steps: [{ say: '', until: 'pong', budgetSec: 60 }] }), TraceError);
+    assert.throws(() => validateTrace({ feature: 'x', steps: [{ say: '', until: 'bypass permissions on', budgetSec: 60 }] }), TraceError);
+    assert.throws(() => validateTrace({ feature: 'x', steps: [{ say: '', until: 'lock.held', budgetSec: 60 }, { say: '', until: 'lock.held', budgetSec: 60 }] }), TraceError);
+    const ok = validateTrace({ feature: 'x', steps: [{ say: '', until: 'lock.held', budgetSec: 60 }, { say: 'go', until: 'tasks.count>=1', budgetSec: 60 }] });
     assert.equal(ok.steps.length, 2);
     assert.equal(ok.steps[1].parsed.atoms[0].name, 'tasks.count');
   });

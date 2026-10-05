@@ -1,1 +1,1 @@
-{"feature":"unknown","steps":[{"say":"ahoy","until":"tasks.kind:pirate"}]}
+{"feature":"unknown","steps":[{"say":"ahoy","until":"tasks.kind:pirate","budgetSec":60}]}

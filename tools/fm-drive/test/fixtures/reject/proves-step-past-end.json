@@ -1,1 +1,1 @@
-{"feature":"proves-past-end","steps":[{"say":"ahoy","until":"tasks.count>=1"}],"proves":{"fm-spawn":2}}
+{"feature":"proves-past-end","steps":[{"say":"ahoy","until":"tasks.count>=1","budgetSec":60}],"proves":{"fm-spawn":2}}

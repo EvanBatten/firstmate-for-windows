@@ -7,12 +7,11 @@ import { Session, driveRoot } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
 import { parseUntil } from './lib/predicates.mjs';
 import { HerdrError } from './lib/herdr.mjs';
-import { record } from './lib/ledger.mjs';
+import { record, HEALTH } from './lib/ledger.mjs';
 
 const T0 = Date.now();
 const CAPTAIN_PATH = { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched' };
 const CAPTAIN_PATH_AT_CLOSE = { hooks: ['repo'], captainMd: ['untouched', 'written-after-say'] };
-const HEALTH = 'home.clean && tabs.clean && wake.empty';
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {
@@ -71,13 +70,12 @@ async function check(trace) {
   } finally {
     session.removeScratch();
   }
-  emit({ feature: trace.feature, ok: true, steps: trace.steps.map((s) => ({ say: s.say, until: s.until, budgetSec: s.budgetSec ?? null })) });
+  emit({ feature: trace.feature, ok: true, steps: trace.steps.map((s) => ({ say: s.say, until: s.until, budgetSec: s.budgetSec })) });
   return 0;
 }
 
 async function run(trace, traceName) {
   const env = process.env;
-  const defaultBudgetMs = Number.parseInt(env.FM_DRIVE_UNTIL_MS || '180000', 10);
   const session = new Session({ trace, env, log });
   const result = {
     feature: trace.feature,
@@ -203,7 +201,7 @@ async function run(trace, traceName) {
         await session.snapshotAll(`step${i + 1}-vacuous`);
         break;
       }
-      const budgetMs = step.budgetSec ? Math.round(step.budgetSec * 1000) : defaultBudgetMs;
+      const budgetMs = Math.round(step.budgetSec * 1000);
       const r = await waitUntil({ home: session.home, parsed: step.parsed, ctx: ctxNow(), budgetMs, deps, onSnapshot });
       rec.ms = r.ms;
       rec.ok = r.ok;
