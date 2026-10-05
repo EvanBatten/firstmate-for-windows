@@ -414,16 +414,17 @@ export class Session {
     const flags = `--dangerously-skip-permissions --model ${this.model}`;
     const home = this.home;
     const cfg = this.claudeConfigDir;
+    const mark = `${this.shell === 'cmd' ? ' & rem' : ' #'} ${launchMark(this.launches)}`;
     if (this.shell === 'pwsh') {
-      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}`;
+      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}${mark}`;
     }
     if (this.shell === 'cmd') {
-      return `set "PATH=%FM_PANE_PATH%" && set "CLAUDE_CONFIG_DIR=${cfg}" && cd /d "${home}" && claude ${flags}`;
+      return `set "PATH=%FM_PANE_PATH%" && set "CLAUDE_CONFIG_DIR=${cfg}" && cd /d "${home}" && claude ${flags}${mark}`;
     }
     if (this.shell === 'git-bash') {
-      return `export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd "$(cygpath -u '${home.replace(/'/g, "'\\''")}')" && claude ${flags}`;
+      return `export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd "$(cygpath -u '${home.replace(/'/g, "'\\''")}')" && claude ${flags}${mark}`;
     }
-    return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
+    return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}${mark}`;
   }
 
   async fidelity() {
@@ -555,7 +556,7 @@ export class Session {
       const text = await this.paneText();
       if (await this.answerDialog(text)) { await sleep(400); continue; }
       const prompted = /bypass permissions on/.test(text);
-      if (atShellPrompt(text) && (sawClaude || /claude --dangerously/.test(text))) {
+      if (atShellPrompt(text) && (sawClaude || atShellPrompt(afterLaunch(text, this.launches)))) {
         this.snapshot('exited-before-ready', text);
         throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
       }
@@ -612,7 +613,7 @@ export class Session {
         if (!said) await send();
         return done();
       }
-      if (atShellPrompt(pane) && (this.primaryPid || /claude --dangerously/.test(pane))) {
+      if (atShellPrompt(pane) && (this.primaryPid || atShellPrompt(afterLaunch(pane, this.launches)))) {
         this.snapshot('exited-before-operable', pane);
         throw new HerdrError(`the primary exited before the home was operable. Its pane shows: ${lastLines(pane)}`);
       }
@@ -971,6 +972,16 @@ export function homeIsOperable(home) {
 // `cd ... && fm-session-start`. Not a parked captain question.
 export function isSessionStartBusy(text) {
   return /fm-session-start/.test(String(text || ''));
+}
+
+const launchMark = (n) => `fm-drive launch ${n}`;
+
+// The pane text after launch n's echoed line, or '' until it is echoed. A
+// relaunch types into a pane that still shows the last launch and the prompt
+// it returned to. The pane wraps long lines, so the mark may span a newline.
+export function afterLaunch(text, n) {
+  const m = new RegExp(`${launchMark(n).split('').join('\\n?')}(?!\\n?\\d)`).exec(text);
+  return m ? text.slice(m.index + m[0].length) : '';
 }
 
 export function lastLines(text, n = 6) {
