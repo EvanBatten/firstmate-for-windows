@@ -980,7 +980,7 @@ const launchMark = (n) => `fm-drive launch ${n}`;
 // relaunch types into a pane that still shows the last launch and the prompt
 // it returned to. The pane wraps long lines, so the mark may span a newline.
 export function afterLaunch(text, n) {
-  const m = new RegExp(`${launchMark(n).split('').join('\\n?')}(?!\\n?\\d)`).exec(text);
+  const m = text.match(new RegExp(`${launchMark(n).split('').join('\\n?')}(?!\\n?\\d)`));
   return m ? text.slice(m.index + m[0].length) : '';
 }
 
