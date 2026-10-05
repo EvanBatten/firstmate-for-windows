@@ -911,6 +911,7 @@ describe('fake-herdr end to end', () => {
 
   test('a second run cannot lease a remote another live run holds', () => {
     const bare = remoteWithHistory();
+    scratch.push(leaseFile(bare));
     writeFileSync(leaseFile(bare), `${process.pid}\n`);
     const held = runDrive(['run', writeTrace(tmp('trace'), remoteTrace)], fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([]), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') }).env);
     assert.equal(held.status, 3, held.stdout);
