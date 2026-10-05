@@ -43,6 +43,15 @@ const BASE = tsv(
 // whether a result's commit is reachable from origin/main.
 const PROVES = { 'row-register': 1, 'row-dispatch': 2 };
 
+const ledgerTrace = (proves) => ({
+  feature: 'register',
+  steps: [
+    { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 300 },
+    { say: 'dispatch a worker', until: 'tasks.count>=1 && backlog.inflight>=1', budgetSec: 180 },
+  ],
+  proves,
+});
+
 function ledgerRepo(behaviors, proves = PROVES) {
   const root = tmp('root');
   const origin = tmp('origin');
@@ -52,7 +61,7 @@ function ledgerRepo(behaviors, proves = PROVES) {
   mkdirSync(dirname(join(root, TSV_REL)), { recursive: true });
   writeFileSync(join(root, TSV_REL), behaviors);
   mkdirSync(join(root, 'tools', 'fm-drive', 'traces'), { recursive: true });
-  writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify({ feature: 'register', steps: [], proves }));
+  writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify(ledgerTrace(proves)));
   git(root, 'add', '-A');
   git(root, 'commit', '-qm', 'inventory');
   git(root, 'remote', 'add', 'origin', origin);
@@ -160,6 +169,17 @@ describe('record', () => {
     const pushed = record(root, result, '--head', 'origin/direct/x');
     assert.equal(pushed.status, 0, pushed.stderr);
     assert.match(pushed.tsv, new RegExp(`^row-register\\t[^\\t]*\\t[^\\t]*\\tproven\\tregister\\t${sha} held through step 1`, 'm'));
+  });
+
+  test('a result that says it passed while a step missed is refused', () => {
+    const { root, sha } = ledgerRepo(BASE);
+    const r = record(root, resultFile('held', sha, (res) => {
+      res.steps[1] = { ...res.steps[1], ok: false, reason: 'not within 180 s: tasks.count>=1: 0 task records' };
+      return res;
+    }));
+    assert.equal(r.status, 2);
+    assert.equal(r.stderr, 'fm-drive: record refused: the run missed step 2 (not within 180 s: tasks.count>=1: 0 task records), and a failed run proves nothing\n');
+    assert.equal(r.tsv, BASE);
   });
 
   test('a result that claims a row the table does not have is refused', () => {
