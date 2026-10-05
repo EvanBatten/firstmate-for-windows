@@ -1435,6 +1435,15 @@ describe('close', () => {
   });
 });
 
+test('every knob the session header lists is read by the driver', () => {
+  const lib = join(HERE, '..', 'lib');
+  const header = readFileSync(join(lib, 'session.mjs'), 'utf8').split('\n').filter((l) => l.startsWith('//'));
+  const knobs = header.join('\n').match(/\bFM_DRIVE_[A-Z_]+/g);
+  const code = [join(HERE, '..', 'drive.mjs'), ...readdirSync(lib).map((f) => join(lib, f))]
+    .map((f) => readFileSync(f, 'utf8').split('\n').filter((l) => !l.startsWith('//')).join('\n')).join('\n');
+  assert.deepEqual([...new Set(knobs)].filter((k) => !code.includes(k)), []);
+});
+
 test('no module spawns a shell', () => {
   for (const f of ['drive.mjs', 'lib/herdr.mjs', 'lib/session.mjs', 'lib/wait.mjs']) {
     const src = readFileSync(join(HERE, '..', f), 'utf8');
