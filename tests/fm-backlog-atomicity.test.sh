@@ -1213,6 +1213,23 @@ test_automatic_backend_refuses_incompatible_tasks_axi_before_mutation() {
   pass "automatic homes refuse lifecycle mutation without compatible tasks-axi"
 }
 
+test_data_directory_with_a_control_byte_is_refused() {
+  local dir out rc byte bad
+  dir="$TMP_ROOT/data-café"
+  mkdir -p "$dir"
+  out=$(. "$ROOT/bin/fm-backlog-transition-lib.sh" && fm_backlog_data_absolute "$dir" 2>&1) \
+    || fail "a data directory named with UTF-8 did not resolve: $out"
+  [ "$out" = "$(cd "$dir" && pwd -P)" ] || fail "a UTF-8 data directory resolved to '$out'"
+  for byte in 01 09 0a 1f 7f; do
+    rc=0
+    printf -v bad "%s\\x${byte}x" "$dir"
+    out=$(. "$ROOT/bin/fm-backlog-transition-lib.sh" && fm_backlog_data_absolute "$bad" 2>&1) || rc=$?
+    [ "$rc" -eq 2 ] || fail "a data directory holding byte 0x$byte was not refused (rc=$rc)"
+    assert_contains "$out" "invalid control byte" "byte 0x$byte was refused without naming the reason"
+  done
+  pass "a data directory holding a control byte is refused and a UTF-8 one resolves"
+}
+
 test_dispatch_refuses_an_unresolvable_data_directory() {
   local case_dir id saved out rc=0
   id=atomic-dispatch-missing-data-b2
@@ -3015,6 +3032,7 @@ test_immediate_child_absolute_data_dispatches_and_completes
 test_bare_relative_data_dispatches_and_completes
 test_dispatch_refuses_a_symlinked_backlog_without_crossing_homes
 test_automatic_backend_refuses_incompatible_tasks_axi_before_mutation
+test_data_directory_with_a_control_byte_is_refused
 test_dispatch_refuses_an_unresolvable_data_directory
 test_completion_refuses_an_unresolvable_data_directory
 test_dispatch_refuses_an_id_this_home_has_no_item_for
