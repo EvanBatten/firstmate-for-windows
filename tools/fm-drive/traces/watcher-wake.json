@@ -8,7 +8,7 @@
   },
   "steps": [
     {
-      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. when it is done, verify it by running it and land it on main; you have my approval, and clean up after. I'm stepping away now, so carry on without me.",
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. when it is done, verify it by running it and land it on main; you have my approval, and clean up after.",
       "until": "projects.registered:greeter",
       "budgetSec": 150
     },
