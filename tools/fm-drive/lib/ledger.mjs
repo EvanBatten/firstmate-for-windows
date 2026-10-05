@@ -52,15 +52,19 @@ function refuseResult(r, root, heads) {
     return `the result names no rows it proves; add proves to trace ${r.trace} and run it again`;
   }
   const tracePath = join(root, TRACES, `${r.trace}.json`);
-  let shipped;
-  try { shipped = JSON.parse(readFileSync(tracePath, 'utf8')).proves; } catch { shipped = undefined; }
-  if (!shipped || !isDeepStrictEqual(shipped, r.proves)) {
+  let trace;
+  try { trace = JSON.parse(readFileSync(tracePath, 'utf8')); } catch { trace = null; }
+  if (!trace?.proves || !isDeepStrictEqual(trace.proves, r.proves)) {
     return `the result's proves do not match tools/fm-drive/traces/${r.trace}.json, so inventory.sh check could not trace its rows`;
   }
   if (!Array.isArray(r.steps)) return 'the result has no steps';
   const miss = r.steps.findIndex((s) => s?.ok !== true);
   if (miss >= 0) return `the run missed step ${miss + 1} (${r.steps[miss]?.reason}), and a failed run proves nothing`;
   if (r.pass !== true) return 'the run did not pass, and a failed run proves nothing';
+  const want = Array.isArray(trace.steps) ? trace.steps : [];
+  if (r.steps.length !== want.length) return `the result has ${r.steps.length} steps but trace ${r.trace} has ${want.length}`;
+  const differs = r.steps.findIndex((s, i) => s.until !== String(want[i]?.until).trim());
+  if (differs >= 0) return `step ${differs + 1} waited on ${r.steps[differs].until} but trace ${r.trace} waits on ${String(want[differs]?.until).trim()}`;
   if (r.health?.ok !== true) return `the run's home health check ${r.health ? `missed (${r.health.reason})` : 'never ran'}, so it proves nothing`;
   if (Object.values(r.proves).some((k) => !Number.isInteger(k) || k < 1 || k > r.steps.length)) return 'the result proves a row at a step the run did not take';
   if (typeof r.evidence !== 'string' || r.evidence === '') return 'the result names no evidence directory';
