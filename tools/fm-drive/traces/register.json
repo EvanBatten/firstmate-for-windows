@@ -1,6 +1,10 @@
 {
   "feature": "register",
   "project": "greeter",
+  "proves": {
+    "agents-3-session-start": 1,
+    "fm-session-start": 1
+  },
   "steps": [
     {
       "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",
