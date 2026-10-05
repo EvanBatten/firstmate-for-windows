@@ -84,16 +84,12 @@ FM_BACKLOG_CLOSE_REPLAY_RESULT=
 # the callers that capture its status own the write.
 FM_BACKLOG_ROW_SHOW_WEDGED=0
 
-# Emit each byte of a value as a decimal number, locale-independently.
+# Emit each byte of a file as a decimal number, locale-independently.
 # Deliberately perl rather than od: the spawn and teardown lifecycle runs under a
 # curated PATH (tests/fm-teardown.test.sh make_path_without_lsof pins that set)
 # that excludes od, and a validator that cannot run must never wedge dispatch or
 # cleanup. perl is already in that curated set and is already used elsewhere in
 # this repo for the same portability reason.
-fm_backlog_bytes_of_string() {  # <string>
-  perl -e 'print join(" ", unpack("C*", $ARGV[0])), "\n"' -- "$1"
-}
-
 fm_backlog_bytes_of_file() {  # <path>
   perl -e 'open(my $f, "<", $ARGV[0]) or exit 1; binmode $f; local $/; my $c = <$f>; $c = "" unless defined $c; print join(" ", unpack("C*", $c)), "\n"' -- "$1"
 }
@@ -115,10 +111,17 @@ fm_backlog_directory_present() {
   fi
 }
 
+# True when the string holds a byte below 32 or 127, which is [[:cntrl:]] in the
+# C locale. Every lifecycle path resolves the data directory several times, and
+# a perl and awk pair per resolution cost seconds per spawn on Windows.
+fm_backlog_string_has_control_byte() {  # <string>
+  local LC_ALL=C
+  [[ $1 == *[[:cntrl:]]* ]]
+}
+
 fm_backlog_data_absolute() {
-  local data=$1 raw_bytes check
-  raw_bytes=$(fm_backlog_bytes_of_string "$data") || return 1
-  if ! fm_backlog_control_bytes_valid 0 "$raw_bytes"; then
+  local data=$1 check
+  if fm_backlog_string_has_control_byte "$data"; then
     printf 'error: data directory contains an invalid control byte\n' >&2
     return 2
   fi

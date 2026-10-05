@@ -1,6 +1,8 @@
 # shellcheck shell=bash
 # shellcheck source=/dev/null # Its pwd() would read as every caller's own function.
 . "${BASH_SOURCE[0]%/*}/path.sh"
+# shellcheck source=platform/windows/jq.sh
+. "${BASH_SOURCE[0]%/*}/jq.sh" "${BASH_SOURCE[0]%/*}/bin"
 # A native program such as claude.exe does not pass the MSYS umask on to the
 # bash it starts.
 _fm_win_umask=022

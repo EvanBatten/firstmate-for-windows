@@ -2092,6 +2092,24 @@ test_actionable_signal_survives_a_later_routine_append() {
   pass "a captain event hidden behind a later routine append is still surfaced (queue + exit)"
 }
 
+# The grace exists to fold a status write and the same turn's turn-end into one
+# wake, so it ends once that turn-end lands rather than running its full length.
+test_turn_end_closes_the_signal_grace_early() {
+  local dir state fakebin out pid i=0
+  dir=$(make_case grace-turn-end); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  printf 'done: shipped the fix\n' > "$state/task.status"
+  watch_bg "$state" "$fakebin" "$out" env FM_SIGNAL_GRACE=600
+  pid=$!
+  while [ ! -e "$state/.last-watcher-beat" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+  sleep 3
+  printf 'ended\n' > "$state/task.turn-ended"
+  wait_for_exit "$pid" 600 \
+    || { reap "$pid"; fail "watcher kept lingering in its signal grace after the status write's turn ended"; }
+  grep -F "signal: $state/task.status" "$out" >/dev/null || fail "watcher did not report the status signal"
+  pass "a turn-end ends the signal grace instead of the full grace running out"
+}
+
 # A status log only grows: a remote second mate's mirrored parent channel passes a
 # megabyte and thousands of keyed decisions. Deciding whether a newly appended
 # keyed decision is still open must cost the new span, not the log's lifetime.
@@ -6668,6 +6686,7 @@ test_pending_reply_escalation_signal_payload_marked_for_branch_exclusion
 test_ordinary_blocked_signal_payload_remains_branch_eligible
 test_routine_signal_payload_not_marked_needs_decision
 test_actionable_signal_survives_a_later_routine_append
+test_turn_end_closes_the_signal_grace_early
 test_keyed_decision_signal_reads_only_the_new_span
 test_release_completion_survives_a_later_routine_append
 test_routine_appends_after_a_classified_event_stay_absorbed

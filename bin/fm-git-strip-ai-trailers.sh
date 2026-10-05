@@ -135,9 +135,8 @@ strip_msgfile() {
 }
 
 quote_for_hook() {
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-  printf "'"
+  local sq="'" esc="'\\''"
+  printf "'%s'" "${1//"$sq"/"$esc"}"
 }
 
 write_executable() {
@@ -202,7 +201,7 @@ pre-merge-commit prepare-commit-msg post-commit pre-rebase post-checkout
 post-merge pre-push post-rewrite pre-auto-gc sendemail-validate'
 
 install_hooks() {
-  local hooks_dir=$1 wt=$2 name
+  local hooks_dir=$1 wt=$2 name body
   [ -n "$hooks_dir" ] && [ -n "$wt" ] || usage
   [ -d "$wt" ] || {
     echo "error: worktree is not a directory: $wt" >&2
@@ -225,13 +224,12 @@ $(quote_for_hook "$SELF") "\$1" || exit \$?
 $(runtime_chain_body "$hooks_dir")
 EOF
 
+  body=$(runtime_chain_body "$hooks_dir")
   for name in $FM_GIT_CLIENT_HOOKS; do
-    write_executable "$hooks_dir/$name" <<EOF
-#!/usr/bin/env bash
-set -u
-$(runtime_chain_body "$hooks_dir")
-EOF
+    printf '#!/usr/bin/env bash\nset -u\n%s\n' "$body" >"$hooks_dir/$name" || return 1
   done
+  # shellcheck disable=SC2086 # Each name is one word.
+  (cd -- "$hooks_dir" && chmod 500 $FM_GIT_CLIENT_HOOKS) || return 1
   chmod 500 "$hooks_dir"
 }
 

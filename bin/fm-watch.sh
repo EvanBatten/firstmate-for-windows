@@ -1985,6 +1985,36 @@ scan_signals() {
   return 0
 }
 
+# signal_grace_wait <since> <pending>: linger up to SIGNAL_GRACE so a status
+# write and the same turn's turn-end coalesce into one wake. A turn-end lands
+# after that turn's last status write, so the wait ends as soon as every task
+# with a pending status signal also has a turn-end that is pending or newer than
+# <since>, a file touched before the scan that produced <pending>. A task whose
+# turn has not ended keeps the whole grace.
+signal_grace_wait() {
+  local since=$1 pending=$2 file task waited=0 ended
+  local -a open=()
+  case $SIGNAL_GRACE in '' | *[!0-9]*) sleep "$SIGNAL_GRACE"; return ;; esac
+  while IFS=$'\t' read -r _ _ file; do
+    case $file in
+      *.status)
+        task=${file##*/}
+        task=${task%.status}
+        case $pending in *"$STATE/$task.turn-ended"*) ;; *) open+=("$task") ;; esac
+        ;;
+    esac
+  done <<< "$pending"
+  while [ "${#open[@]}" -gt 0 ] && [ "$waited" -lt "$SIGNAL_GRACE" ]; do
+    sleep 1
+    waited=$((waited + 1))
+    ended=1
+    for task in "${open[@]}"; do
+      [ "$STATE/$task.turn-ended" -nt "$since" ] || { ended=0; break; }
+    done
+    [ "$ended" = 0 ] || return 0
+  done
+}
+
 # Deliver a durably queued process-event result to firstmate. Publication is
 # owned by bin/fm-procevent.sh - by the runner at capture time and by reconcile's
 # re-announcement - so this decides only whether a queued check record has been
@@ -2841,9 +2871,10 @@ EOF
   # hook land seconds apart, and reporting them as separate actionable wakes
   # costs a full firstmate turn each. The re-scan also picks up a newer
   # signature for an already-pending file (last write wins below).
+  : > "$STATE/.signal-grace-since"
   pending=$(scan_signals)
   if [ -n "$pending" ]; then
-    sleep "$SIGNAL_GRACE"
+    signal_grace_wait "$STATE/.signal-grace-since" "$pending"
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
