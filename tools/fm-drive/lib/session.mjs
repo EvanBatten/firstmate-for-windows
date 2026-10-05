@@ -222,6 +222,8 @@ export class Session {
     this.paneId = null;
     this.shell = 'bash';
     this.primaryPid = null;
+    this.launches = 0;
+    this.readyLaunch = null;
     this.lockBaseline = undefined;
     this.seeds = {};
     this.projectOrigin = null;
@@ -264,7 +266,7 @@ export class Session {
     }
     // TMUX is blanked so a herdr server that happens to run under tmux still
     // yields a pane where firstmate auto-detects herdr, not tmux.
-    // herdr drops PATH from pane env (bin/backends/herdr.sh), so it rides in as FM_PANE_PATH.
+    // herdr drops PATH from pane env, so it rides in as FM_PANE_PATH (platform/windows/pane-rc.sh).
     const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '', CLAUDE_CONFIG_DIR: this.claudeConfigDir };
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
@@ -272,13 +274,28 @@ export class Session {
     this.workspaceId = created.workspace?.workspace_id;
     this.paneId = created.root_pane?.pane_id;
     if (!this.workspaceId || !this.paneId) throw new HerdrError('herdr created a workspace but reported no pane for it');
-    this.keep('workspace.json', JSON.stringify({ workspace_id: this.workspaceId, pane_id: this.paneId, session: this.herdr.session, transport: this.herdr.transport }, null, 2));
     const info = await this.herdr.call('pane.process_info', { pane_id: this.paneId });
     const shellName = (info.process_info?.foreground_processes?.[0]?.name || '').toLowerCase();
     if (/pwsh|powershell/.test(shellName)) this.shell = 'pwsh';
     else if (shellName === 'cmd' || shellName === 'cmd.exe') this.shell = 'cmd';
     else this.shell = 'posix';
+    const paneRc = join(this.home, 'platform', 'windows', 'pane-rc.sh');
+    if (this.shell === 'pwsh' && existsSync(paneRc)) await this.enterGitBash(created.tab?.tab_id, paneRc, paneEnv);
+    this.keep('workspace.json', JSON.stringify({ workspace_id: this.workspaceId, pane_id: this.paneId, session: this.herdr.session, transport: this.herdr.transport }, null, 2));
     this.watchPrimaryStatus();
+  }
+
+  // The primary runs where the Windows overlay runs every herdr pane: an
+  // interactive Git Bash on pane-rc.sh, which loads env.sh. It replaces the
+  // pwsh pane as the tab's program, so nothing is typed into pwsh.
+  async enterGitBash(tabId, paneRc, env) {
+    const gitExec = await this.git(['--exec-path']);
+    const bash = resolve(gitExec, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+    if (!existsSync(bash)) throw new HerdrError(`no Git Bash at ${bash}, derived from git --exec-path ${gitExec}`);
+    const r = await this.herdr.call('layout.apply', { tab_id: tabId, focus: false, root: { type: 'pane', cwd: this.home, env, command: [bash, '--rcfile', paneRc, '-i'] } });
+    this.paneId = r.layout?.root?.pane_id;
+    if (!this.paneId) throw new HerdrError('herdr laid out the Git Bash pane but reported no pane for it');
+    this.shell = 'git-bash';
   }
 
   panePath() {
@@ -387,13 +404,17 @@ export class Session {
     const flags = `--dangerously-skip-permissions --model ${this.model}`;
     const home = this.home;
     const cfg = this.claudeConfigDir;
+    const mark = `${this.shell === 'cmd' ? ' & rem' : ' #'} ${launchMark(this.launches)}`;
     if (this.shell === 'pwsh') {
-      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}`;
+      return `if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; $env:CLAUDE_CONFIG_DIR = '${cfg.replace(/'/g, "''")}'; Set-Location '${home.replace(/'/g, "''")}'; claude ${flags}${mark}`;
     }
     if (this.shell === 'cmd') {
-      return `set "PATH=%FM_PANE_PATH%" && set "CLAUDE_CONFIG_DIR=${cfg}" && cd /d "${home}" && claude ${flags}`;
+      return `set "PATH=%FM_PANE_PATH%" && set "CLAUDE_CONFIG_DIR=${cfg}" && cd /d "${home}" && claude ${flags}${mark}`;
     }
-    return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}`;
+    if (this.shell === 'git-bash') {
+      return `export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd "$(cygpath -u '${home.replace(/'/g, "'\\''")}')" && claude ${flags}${mark}`;
+    }
+    return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}${mark}`;
   }
 
   async fidelity() {
@@ -419,9 +440,12 @@ export class Session {
   async launch() {
     const t0 = Date.now();
     this.primaryPid = null;
+    this.launches += 1;
+    this.readyLaunch = null;
     this.signals.shellDead = null;
     await this.herdr.call('pane.send_input', { pane_id: this.paneId, text: this.launchLine(), keys: ['enter'] });
     await this.awaitReady();
+    this.readyLaunch = this.launches;
     this.watchDialogs();
     return Date.now() - t0;
   }
@@ -522,7 +546,7 @@ export class Session {
       const text = await this.paneText();
       if (await this.answerDialog(text)) { await sleep(400); continue; }
       const prompted = /bypass permissions on/.test(text);
-      if (atShellPrompt(text) && (sawClaude || /claude --dangerously/.test(text))) {
+      if (atShellPrompt(text) && (sawClaude || atShellPrompt(afterLaunch(text, this.launches)))) {
         this.snapshot('exited-before-ready', text);
         throw new HerdrError(`the primary exited before it was ready. Its pane shows: ${lastLines(text)}`);
       }
@@ -579,7 +603,7 @@ export class Session {
         if (!said) await send();
         return done();
       }
-      if (atShellPrompt(pane) && (this.primaryPid || /claude --dangerously/.test(pane))) {
+      if (atShellPrompt(pane) && (this.primaryPid || atShellPrompt(afterLaunch(pane, this.launches)))) {
         this.snapshot('exited-before-operable', pane);
         throw new HerdrError(`the primary exited before the home was operable. Its pane shows: ${lastLines(pane)}`);
       }
@@ -628,10 +652,13 @@ export class Session {
         this.signals.blocked = null;
       }
       // Rare, event-driven dead-primary check: unknown status plus a shell
-      // prompt. Not a 1 s pane-read loop.
+      // prompt. Not a 1 s pane-read loop. Until the latest launch is ready the
+      // pane still shows the shell that launches claude, so a read taken
+      // then proves nothing.
       if (status === 'unknown' && this.paneId) {
+        const launch = this.readyLaunch;
         this.paneText().then((text) => {
-          if (atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
+          if (launch !== null && launch === this.readyLaunch && atShellPrompt(text)) this.signals.shellDead = 'the pane returned to a shell prompt';
         }).catch(() => {});
       }
     };
@@ -935,6 +962,16 @@ export function homeIsOperable(home) {
 // `cd ... && fm-session-start`. Not a parked captain question.
 export function isSessionStartBusy(text) {
   return /fm-session-start/.test(String(text || ''));
+}
+
+const launchMark = (n) => `fm-drive launch ${n}`;
+
+// The pane text after launch n's echoed line, or '' until it is echoed. A
+// relaunch types into a pane that still shows the last launch and the prompt
+// it returned to. The pane wraps long lines, so the mark may span a newline.
+export function afterLaunch(text, n) {
+  const m = text.match(new RegExp(`${launchMark(n).split('').join('\\n?')}(?!\\n?\\d)`));
+  return m ? text.slice(m.index + m[0].length) : '';
 }
 
 export function lastLines(text, n = 6) {

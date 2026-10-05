@@ -935,6 +935,101 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.deepEqual({ clean, leaked }, { clean: 'clean', leaked: 'carries CLAUDE.md, settings.json:hooks' });
   });
 
+  test('a shell prompt read before a launch does not mark the launched primary dead', async () => {
+    let release;
+    const heldRead = new Promise((r) => { release = r; });
+    const s = new sessionLib.Session({ trace: { feature: 'race', steps: [] }, env: process.env });
+    s.paneId = 'p1';
+    s.home = '/home/captain/firstmate';
+    s.claudeConfigDir = '/home/captain/claude-config';
+    s.herdr = {
+      subscribe: () => null,
+      call: async (method) => {
+        if (method === 'pane.get') return { pane: { agent_status: 'unknown' } };
+        if (method === 'pane.read') { await heldRead; return { read: { text: 'user@host MINGW64 ~\n$ ' } }; }
+        return {};
+      },
+    };
+    s.awaitReady = async () => {};
+    s.watchDialogs = () => {};
+    s.watchPrimaryStatus();
+    try {
+      await new Promise((r) => setImmediate(r));
+      await s.launch();
+      release();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      clearInterval(s.statusPoll);
+    }
+    assert.equal(s.signals.shellDead, null);
+  });
+
+  test('a shell prompt read while claude is still starting does not mark the primary dead', async () => {
+    let release;
+    const heldRead = new Promise((r) => { release = r; });
+    const s = new sessionLib.Session({ trace: { feature: 'race', steps: [] }, env: process.env });
+    s.paneId = 'p1';
+    s.home = '/home/captain/firstmate';
+    s.claudeConfigDir = '/home/captain/claude-config';
+    s.herdr = {
+      subscribe: () => null,
+      call: async (method) => {
+        if (method === 'pane.get') return { pane: { agent_status: 'unknown' } };
+        if (method === 'pane.read') { await heldRead; return { read: { text: 'user@host MINGW64 ~\n$ ' } }; }
+        return {};
+      },
+    };
+    s.awaitReady = async () => {
+      s.watchPrimaryStatus();
+      await new Promise((r) => setImmediate(r));
+    };
+    s.watchDialogs = () => {};
+    try {
+      await s.launch();
+      release();
+      await new Promise((r) => setImmediate(r));
+    } finally {
+      clearInterval(s.statusPoll);
+    }
+    assert.equal(s.signals.shellDead, null);
+  });
+
+  test('a relaunch is not read as exited from the previous launch line still on screen', async () => {
+    const before = [
+      "$ export CLAUDE_CONFIG_DIR='C:\\x\\claude-config'; cd \"$(cygpath -u 'C:\\x\\firstmate')\" && claude --dangerously-skip-permissions --model opus",
+      'Resume this session with:',
+      'claude --resume 95c1f663-0cc5-473c-bfcf-8434826424ee',
+      'user@host MINGW64 /tmp/x/firstmate',
+      '$ ',
+    ].join('\n');
+    let reads = 0;
+    let typed = '';
+    const s = new sessionLib.Session({ trace: { feature: 'relaunch', steps: [] }, env: process.env });
+    s.paneId = 'p1';
+    s.shell = 'git-bash';
+    s.home = tmp('relaunch-home');
+    s.claudeConfigDir = 'C:\\x\\claude-config';
+    s.readyMs = 20_000;
+    s.herdr = {
+      call: async (method, params) => {
+        if (method === 'pane.send_input') typed = params.text;
+        if (method === 'pane.read') {
+          reads += 1;
+          if (reads < 3) return { read: { text: before } };
+          if (reads < 5) return { read: { text: `${before}${typed}\n` } };
+          return { read: { text: 'Claude Code\n⏵⏵ bypass permissions on (shift+tab to cycle)' } };
+        }
+        if (method === 'pane.process_info') {
+          return { process_info: { foreground_processes: [{ name: reads < 5 ? 'bash.exe' : 'claude.exe', pid: 4242 }] } };
+        }
+        return {};
+      },
+    };
+    s.watchDialogs = () => {};
+    await s.launch();
+    assert.equal(s.primaryPid, 4242);
+  });
+
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
     const home = buildHome('ship-in-flight');
     const started = Date.now();
@@ -1089,4 +1184,15 @@ test('no module spawns a shell', () => {
     assert.ok(!/shell:\s*true/.test(src), `${f} never spawns through a shell`);
     assert.ok(!/execSync|exec\(/.test(src), `${f} never uses exec`);
   }
+});
+
+describe('repo checkout', () => {
+  test('a clone made with core.autocrlf=true, the Git for Windows default, checks every file out with LF', () => {
+    const dest = join(tmp('autocrlf'), 'home');
+    const clone = spawnSync('git', ['clone', '-q', '-c', 'core.autocrlf=true', REPO, dest], { encoding: 'utf8' });
+    assert.equal(clone.status, 0, clone.stderr);
+    const eol = spawnSync('git', ['-C', dest, 'ls-files', '--eol'], { encoding: 'utf8' }).stdout;
+    const crlf = eol.split('\n').filter((line) => /\bw\/crlf\b/.test(line)).map((line) => line.split('\t').pop());
+    assert.deepEqual(crlf, []);
+  });
 });
