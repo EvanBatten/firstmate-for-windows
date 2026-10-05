@@ -332,6 +332,21 @@ describe('inventory.sh with trace refs', () => {
     assert.equal(r.stdout, 'proven 1 of 1 behaviors; 0 unproven; 0 broken; 0 blocked here\n');
   });
 
+  test('check names each bin entry and feature file with no row', () => {
+    const script = inventoryTree(tsv(`bin-a\tbin:fm-a.sh\ta\tunproven\t#1\t`, `kept\tfeature:kept\tk\tunproven\t#1\t`, `one\treadme:features\to\tunproven\t#1\t`), registerTrace({}));
+    const skill = dirname(script);
+    writeFileSync(join(skill, '..', '..', '..', 'tests', 'verification', 'coverage.tsv'), 'script\tkind\nfm-a.sh\tentry\nfm-b.sh\tlib\nfm-c.sh\tentry\n');
+    for (const name of ['kept', 'lost', 'README']) writeFileSync(join(skill, 'features', `${name}.md`), '# f\n');
+    const r = inventory(script, 'check');
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, [
+      "not ok - coverage.tsv names 'fm-c.sh' (kind=entry) with no bin:fm-c.sh row",
+      'not ok - features/lost.md has no feature:lost row',
+      'ok - inventory: 3 behaviors, 0 proven, 3 unproven, 0 broken, 0 blocked here',
+      '',
+    ].join('\n'));
+  });
+
   test('the shipped inventory passes check', () => {
     const r = inventory(INVENTORY, 'check');
     assert.equal(r.status, 0, r.stdout.split('\n').filter((l) => l.startsWith('not ok')).join('\n'));
