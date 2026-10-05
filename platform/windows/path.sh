@@ -37,18 +37,24 @@ _fm_win_mount_spelling() {  # <var> <path>
 }
 
 pwd() {
-  local dir logical=$PWD oldpwd=${OLDPWD-} had_oldpwd=${OLDPWD+1}
+  local dir
   case $* in
     '' | -L) dir=$PWD ;;
     -P)
-      # cd -P resolves symlinks as `builtin pwd -P` does, without the subshell
-      # that capturing its output would fork. If the logical spelling no
-      # longer resolves, the shell stays in the same directory spelled
-      # physically.
-      builtin cd -P . || return
-      dir=$PWD
-      [ "$dir" = "$logical" ] || builtin cd -- "$logical" 2>/dev/null || :
-      if [ -n "$had_oldpwd" ]; then OLDPWD=$oldpwd; else unset OLDPWD; fi
+      # `cd -P .` resolves the shell's own record of its directory, as
+      # `builtin pwd -P` does, without the subshell that capturing its output
+      # would fork, and its chdir(".") cannot move the shell. It rewrites PWD,
+      # OLDPWD and that record, so all three go back. In a deleted directory
+      # the chdir fails, and the builtin answers.
+      local record=${DIRSTACK[0]} pwd=${PWD-} had_pwd=${PWD+1} oldpwd=${OLDPWD-} had_oldpwd=${OLDPWD+1}
+      if builtin cd -P . 2>/dev/null; then
+        dir=$PWD
+        if [ "$dir" != "$record" ] && [ "$record" -ef . ]; then builtin cd -- "$record" || :; fi
+        if [ -n "$had_pwd" ]; then PWD=$pwd; else unset PWD; fi
+        if [ -n "$had_oldpwd" ]; then OLDPWD=$oldpwd; else unset OLDPWD; fi
+      else
+        dir=$(builtin pwd -P) || return
+      fi
       ;;
     *) builtin pwd "$@"; return ;;
   esac
