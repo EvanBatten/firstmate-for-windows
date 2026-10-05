@@ -4,9 +4,9 @@
   "proves": {
     "fm-spawn": 2,
     "readme-visible-crew": 2,
-    "fm-merge-local": 4,
-    "fm-teardown": 5,
-    "feature-real-session": 5
+    "fm-merge-local": 3,
+    "fm-teardown": 4,
+    "feature-real-session": 4
   },
   "steps": [
     {
@@ -20,12 +20,7 @@
       "budgetSec": 180
     },
     {
-      "say": "",
-      "until": "status.verb:done",
-      "budgetSec": 300
-    },
-    {
-      "say": "looks good. land it on main, you have my approval, then clean up and tell me.",
+      "say": "when the worker is done and its result checks out, land it on main; you have my approval. then clean up and tell me.",
       "until": "git.ahead:greeter>=1",
       "budgetSec": 400
     },

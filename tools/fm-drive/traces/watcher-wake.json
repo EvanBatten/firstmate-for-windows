@@ -19,7 +19,7 @@
     },
     {
       "say": "",
-      "until": "status.verb:done && beacon.fresh && file.contains:state/.watch-deliveries.log:signal:",
+      "until": "file.contains:state/.watch-deliveries.log:.status && beacon.fresh",
       "budgetSec": 300
     },
     {
