@@ -39,8 +39,6 @@ const BASE = tsv(
   row('row-blocked', 'blocked-here', '#97', 'machine: no tmux here'),
 );
 
-// A checkout whose main is pushed to a bare origin, so record can ask
-// whether a result's commit is reachable from origin/main.
 const PROVES = { 'row-register': 1, 'row-dispatch': 2 };
 
 const ledgerTrace = (proves) => ({
@@ -52,6 +50,8 @@ const ledgerTrace = (proves) => ({
   proves,
 });
 
+// A checkout whose main is pushed to a bare origin, so record can ask
+// whether a result's commit is reachable from origin/main.
 function ledgerRepo(behaviors, proves = PROVES) {
   const root = tmp('root');
   const origin = tmp('origin');
