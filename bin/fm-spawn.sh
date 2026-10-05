@@ -1206,6 +1206,7 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
+SPAWN_HOME_SUMMARY_PID=
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1236,6 +1237,7 @@ parse_orca_worktree_result() {
 
 spawn_abort_cleanup() {
   local status=$?
+  [ -z "$SPAWN_HOME_SUMMARY_PID" ] || wait "$SPAWN_HOME_SUMMARY_PID" || true
   if [ "$RELAUNCH_REPLACEMENT_PENDING" = 1 ] &&
     [ "$SPAWN_META_PUBLISH_STARTED" = 1 ] &&
     [ -n "$SPAWN_META_TMP" ] &&
@@ -5019,7 +5021,11 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   SPAWN_TASK_SET_LOCK_HELD=0
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
-"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+# The summary must name this task before the spawn returns, but nothing below
+# reads it, so it is computed alongside launch delivery and the backlog commit,
+# and spawn_abort_cleanup waits for it on every exit.
+"$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort </dev/null &
+SPAWN_HOME_SUMMARY_PID=$!
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
