@@ -1,0 +1,36 @@
+{
+  "feature": "watcher-wake",
+  "project": "greeter",
+  "proves": {
+    "readme-low-token-supervision": 4,
+    "fm-watch": 3,
+    "feature-supervision-wakes": 5
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 150
+    },
+    {
+      "say": "ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. when it is done, verify it by running it and land it on main; you have my approval, and clean up after. I'm stepping away now, so carry on without me.",
+      "until": "tasks.count>=1 && backlog.inflight>=1",
+      "budgetSec": 180
+    },
+    {
+      "say": "",
+      "until": "status.verb:done && beacon.fresh && file.contains:state/.watch-deliveries.log:signal:",
+      "budgetSec": 300
+    },
+    {
+      "say": "",
+      "until": "git.ahead:greeter>=1",
+      "budgetSec": 400
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean && wake.empty",
+      "budgetSec": 120
+    }
+  ]
+}
