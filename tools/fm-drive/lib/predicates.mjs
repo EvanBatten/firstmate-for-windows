@@ -19,10 +19,13 @@
 //   wake.empty                  state/.wake-queue is missing or has no non-blank line
 //   beacon.fresh                state/.last-watcher-beat was touched within 300 s
 //   file.contains:REL:NEEDLE    <home>/REL exists and contains NEEDLE (REL must stay inside the home)
+//   wake.delivered:REASON>=N    state/.watch-deliveries.log gained at least N (>=1) lines with that reason
+//                               since the say (signal, stale, heartbeat, check, needs-decision,
+//                               captain-held, paused)
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
 //
-// Since-say atoms (lock.rotated) compare against ctx.since, the Baseline the driver captured right
+// Since-say atoms (lock.rotated, wake.delivered) compare against ctx.since, the Baseline the driver captured right
 // before it typed the say a step waits on. They are false at the say by construction.
 
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync } from 'node:fs';
@@ -32,6 +35,7 @@ export const RESERVED_UNTIL = ['pong', 'bypass permissions on'];
 export const STARTUP_ONLY = ['lock.held'];
 export const STATUS_VERBS = ['done', 'needs-decision', 'blocked', 'failed', 'working', 'paused', 'resolved', 'note', 'captain-held'];
 export const HERDR_ATOMS = ['tabs.clean', 'worker.alive'];
+export const WAKE_REASONS = ['signal', 'stale', 'heartbeat', 'check', 'needs-decision', 'captain-held', 'paused'];
 const NAME = '[A-Za-z0-9._-]+';
 
 const ATOMS = [
@@ -52,6 +56,7 @@ const ATOMS = [
   { name: 'wake.empty', re: /^wake\.empty$/, args: [] },
   { name: 'beacon.fresh', re: /^beacon\.fresh$/, args: [] },
   { name: 'file.contains', re: /^file\.contains:([^:]+):(.+)$/, args: ['rel', 'needle'] },
+  { name: 'wake.delivered', re: new RegExp(`^wake\\.delivered:(${WAKE_REASONS.join('|')})>=(\\d+)$`), args: ['reason', 'n'], int: ['n'], min: { n: 1 } },
 ];
 
 export const CATALOG = ATOMS.map((a) => a.name);
@@ -65,6 +70,9 @@ export function parseAtom(text) {
     const args = {};
     def.args.forEach((k, i) => { args[k] = m[i + 1]; });
     for (const k of def.int ?? []) args[k] = Number.parseInt(args[k], 10);
+    for (const [k, least] of Object.entries(def.min ?? {})) {
+      if (args[k] < least) throw new Error(`bad arguments for ${def.name}: ${k} must be at least ${least}, or the claim holds before anything happened`);
+    }
     if (def.name === 'file.contains') {
       const rel = args.rel.replace(/\\/g, '/');
       if (rel.startsWith('/') || /^[A-Za-z]:/.test(rel) || rel.split('/').includes('..')) {
@@ -110,6 +118,31 @@ export function readMainSha(gitDir) {
     }
   }
   return null;
+}
+
+/** Non-blank lines of state/.watch-deliveries.log, one per delivered watcher wake. */
+export function readDeliveries(home) {
+  return (readText(join(home, 'state', '.watch-deliveries.log')) ?? '').split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
+}
+
+/** @param {string[]} lines @returns {Map<string, number>} */
+export function countLines(lines) {
+  const m = new Map();
+  for (const l of lines) m.set(l, (m.get(l) ?? 0) + 1);
+  return m;
+}
+
+// The writer trims the log with tail -n then tail -c, which can tear the first surviving
+// line inside its pid digits; a first line that differs from the baseline's is skipped.
+// A line counts by how much its multiplicity grew, so a duplicate undercounts.
+export function deliveriesSince(now, since, reason) {
+  const lines = since.firstDelivery !== null && now[0] !== since.firstDelivery ? now.slice(1) : now;
+  const re = new RegExp(`^${reason}(?=[:\\s]|$)`);
+  let n = 0;
+  for (const [line, count] of countLines(lines)) {
+    if (re.test(line.split('\t')[2] ?? '')) n += Math.max(0, count - (since.deliveries.get(line) ?? 0));
+  }
+  return n;
 }
 
 export function parseMeta(text) {
@@ -171,6 +204,7 @@ export function snapshotHome(home, nowMs = Date.now()) {
     reports,
     wakeQueueLines: wake === null ? 0 : wake.split('\n').filter((l) => l.trim() !== '').length,
     beaconMtimeMs: mtimeMs(join(state, '.last-watcher-beat')),
+    deliveries: readDeliveries(home),
     // Filled by the wait loop when an atom needs it: { tabLabels: string[], panes: { [paneId]: boolean } }.
     herdr: null,
     // Filled by the wait loop: { [name]: { sha, count } }.
@@ -200,6 +234,8 @@ export function recordedPaneIds(snap) {
  * @typedef {object} Baseline
  * @property {number} at             Date.now() when the baseline was taken
  * @property {string|null} lock      state/.lock identity
+ * @property {Map<string, number>} deliveries  multiset of .watch-deliveries.log lines
+ * @property {string|null} firstDelivery       the log's first line; a different first line later means a trim
  */
 
 // ctx: { since: Baseline|null, seeds: { [name]: sha }, seenTaskIds: Set<string> }
@@ -285,6 +321,10 @@ export function evaluateAtom(atom, snap, ctx) {
       const text = readText(p);
       if (text === null) return { ok: false, reason: `${a.rel} missing` };
       return { ok: text.includes(a.needle), reason: text.includes(a.needle) ? `${a.rel} contains it` : `${a.rel} lacks it` };
+    }
+    case 'wake.delivered': {
+      const n = ctx.since ? deliveriesSince(snap.deliveries, ctx.since, a.reason) : 0;
+      return { ok: n >= a.n, reason: `${n} ${a.reason} deliver${n === 1 ? 'y' : 'ies'} since the say` };
     }
     default:
       return { ok: false, reason: `unknown atom ${atom.name}` };

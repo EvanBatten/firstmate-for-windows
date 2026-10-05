@@ -17,7 +17,7 @@ import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
-import { recordedPaneIds } from './predicates.mjs';
+import { recordedPaneIds, readDeliveries, countLines } from './predicates.mjs';
 
 // Claude Code shows the trust dialog for C:\... but looks the project up as C:/..., so every slash and drive-letter form is written.
 export function trustProjectKeys(home) {
@@ -461,7 +461,9 @@ export class Session {
 
   /** @returns {Promise<import('./predicates.mjs').Baseline>} */
   async baseline() {
-    return { at: Date.now(), lock: this.lockText() };
+    const at = Date.now();
+    const lines = readDeliveries(this.home);
+    return { at, lock: this.lockText(), deliveries: countLines(lines), firstDelivery: lines[0] ?? null };
   }
 
   sessionStartCompleteText() {

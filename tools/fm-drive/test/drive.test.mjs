@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { parseUntil, evaluateUntil, snapshotHome, CATALOG } from '../lib/predicates.mjs';
+import { parseUntil, evaluateUntil, snapshotHome, countLines, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
 import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
@@ -227,7 +227,7 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
@@ -358,6 +358,37 @@ describe('predicates over fixture homes', () => {
     const since = (lock) => ({ since: { at: 0, lock, deliveries: new Map(), firstDelivery: null, remoteSha: null }, seeds: {}, seenTaskIds: new Set() });
     assert.equal(evaluateUntil(parseUntil('lock.rotated'), snapshotHome(home), since('a')).ok, true);
     assert.equal(evaluateUntil(parseUntil('lock.rotated'), snapshotHome(home), since('b')).ok, false);
+  });
+
+  const SIGNAL = '28097\tproc-starttime=1 cmdline-hex=aa\tsignal: /h/state/greet-sh.status /h/state/greet-sh.turn-ended';
+  const STALE = '31170\tproc-starttime=2 cmdline-hex=bb\tstale: s:w2:p2';
+  const HEARTBEAT = '50479\tproc-starttime=3 cmdline-hex=cc\theartbeat';
+  const deliveriesHome = (lines) => {
+    const home = buildHome('empty');
+    writeFileSync(join(home, 'state', '.watch-deliveries.log'), `${lines.join('\n')}\n`);
+    return home;
+  };
+  const sinceLines = (lines) => ctx({ since: { at: 0, lock: null, deliveries: countLines(lines), firstDelivery: lines[0] ?? null, remoteSha: null } });
+
+  test('wake.delivered counts each reason since the say and ignores lines the baseline held', () => {
+    const home = deliveriesHome([SIGNAL, STALE, HEARTBEAT]);
+    assert.equal(check(home, 'wake.delivered:signal>=1 && wake.delivered:stale>=1', sinceLines([])).ok, true);
+    const two = check(home, 'wake.delivered:signal>=2', sinceLines([]));
+    assert.deepEqual({ ok: two.ok, reason: two.reason }, { ok: false, reason: 'wake.delivered:signal>=2: 1 signal delivery since the say' });
+    assert.equal(check(home, 'wake.delivered:signal>=1', sinceLines([SIGNAL])).ok, false);
+  });
+
+  test('a trimmed delivery log never counts a torn or old line', () => {
+    const torn = '7\tproc-starttime=1 cmdline-hex=aa\tsignal: x';
+    const newStale = '31171\tproc-starttime=4 cmdline-hex=dd\tstale: s:w2:p2';
+    const home = deliveriesHome([torn, STALE, newStale]);
+    const since = sinceLines(['28097\tproc-starttime=1 cmdline-hex=aa\tsignal: x', STALE]);
+    assert.equal(check(home, 'wake.delivered:stale>=1', since).ok, true);
+    assert.equal(check(home, 'wake.delivered:signal>=1', since).ok, false);
+  });
+
+  test('wake.delivered:signal>=0 is refused at parse', () => {
+    assert.throws(() => parseUntil('wake.delivered:signal>=0'), /bad arguments for wake\.delivered/);
   });
 
   test('beacon.fresh reads the beacon mtime', () => {
@@ -687,6 +718,34 @@ describe('fake-herdr end to end', () => {
     const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
     const texts = state.sends.filter((s) => s.text !== undefined && !/claude --dangerously|^\/exit$/.test(s.text)).map((s) => s.text);
     assert.deepEqual(texts, ['now dispatch a worker']);
+  });
+
+  test('a stall wake after a done wake counts as a second delivery with no say between them', () => {
+    const log = 'state/.watch-deliveries.log';
+    const signal = '28097\tproc-starttime=1 cmdline-hex=aa\tsignal: x';
+    const stale = '31170\tproc-starttime=2 cmdline-hex=bb\tstale: s:w2:p2';
+    const script = join(tmp('script'), 'script.json');
+    writeFileSync(script, JSON.stringify({
+      'wait for my go': [
+        { path: 'state/t1.meta', content: 'kind=ship\n' },
+        { delayMs: 300 },
+        { path: log, content: `${signal}\n` },
+        { delayMs: 300 },
+        { path: log, content: `${signal}\n${stale}\n` },
+      ],
+    }));
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = {
+      feature: 'e2e-two-wakes',
+      steps: [
+        { say: 'ship it and wait for my go', until: 'tasks.count>=1', budgetSec: 10 },
+        { say: '', until: 'wake.delivered:signal>=1', budgetSec: 10 },
+        { say: '', until: 'wake.delivered:stale>=1', budgetSec: 10 },
+      ],
+    };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.deepEqual(r.json.steps.map((s) => s.ok), [true, true, true]);
   });
 
   test('a dead primary fails its step at once', () => {
