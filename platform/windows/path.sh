@@ -8,7 +8,7 @@
 # --git-common-dir or the gitdir treehouse writes, comes back through the
 # mount as /tmp/x. Upstream decides "same directory" by comparing the strings
 # `pwd` and `pwd -P` print, so here both answer in the mount's spelling, the
-# one `cygpath -u` gives, without forking it.
+# one `cygpath -u` gives, without forking.
 
 _fm_win_mount_src=()
 _fm_win_mount_dst=()
@@ -37,10 +37,19 @@ _fm_win_mount_spelling() {  # <var> <path>
 }
 
 pwd() {
-  local dir
+  local dir logical=$PWD oldpwd=${OLDPWD-} had_oldpwd=${OLDPWD+1}
   case $* in
     '' | -L) dir=$PWD ;;
-    -P) dir=$(builtin pwd -P) || return ;;
+    -P)
+      # cd -P resolves symlinks as `builtin pwd -P` does, without the subshell
+      # that capturing its output would fork. If the logical spelling no
+      # longer resolves, the shell stays in the same directory spelled
+      # physically.
+      builtin cd -P . || return
+      dir=$PWD
+      [ "$dir" = "$logical" ] || builtin cd -- "$logical" 2>/dev/null || :
+      if [ -n "$had_oldpwd" ]; then OLDPWD=$oldpwd; else unset OLDPWD; fi
+      ;;
     *) builtin pwd "$@"; return ;;
   esac
   _fm_win_mount_spelling dir "$dir"
