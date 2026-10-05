@@ -75,8 +75,10 @@ recorded_by_trace() {
   [[ $1 =~ ^[0-9a-f]{40}\ held\ through\ step\ [0-9]+, ]]
 }
 
-row_source_exists() {
-  awk -F'\t' -v want="$1" 'NR>1 && $2==want{f=1} END{exit !f}' "$TSV"
+# Print each name on stdin that has no row whose source is <prefix><name>.
+# One pass for every name, because an awk per name costs seconds under MSYS.
+missing_sources() {
+  awk -F'\t' -v prefix="$1" 'FNR==NR { if (FNR > 1) src[$2] = 1; next } !((prefix $0) in src)' "$TSV" -
 }
 
 cmd_check() {
@@ -85,21 +87,21 @@ cmd_check() {
   [ -d "$FEATURES_DIR" ] || die "no features directory at $FEATURES_DIR"
   [ -f "$README" ] || die "no README.md at $README"
 
-  local script kind
-  while IFS=$'\t' read -r script kind _rest; do
-    [ "$kind" = entry ] || continue
-    row_source_exists "bin:$script" \
-      || n_bad "coverage.tsv names '$script' (kind=entry) with no bin:$script row"
-  done < <(tail -n +2 "$COVERAGE")
+  local script
+  while IFS= read -r script; do
+    n_bad "coverage.tsv names '$script' (kind=entry) with no bin:$script row"
+  done < <(awk -F'\t' 'NR > 1 && $2 == "entry" { print $1 }' "$COVERAGE" | missing_sources bin:)
 
-  local f name
+  local f name names=()
   for f in "$FEATURES_DIR"/*.md; do
     [ -e "$f" ] || continue
-    name=$(basename "$f" .md)
-    [ "$name" = README ] && continue
-    row_source_exists "feature:$name" \
-      || n_bad "features/$name.md has no feature:$name row"
+    name=${f##*/}
+    name=${name%.md}
+    [ "$name" = README ] || names+=("$name")
   done
+  while IFS= read -r name; do
+    n_bad "features/$name.md has no feature:$name row"
+  done < <([ ${#names[@]} -eq 0 ] || printf '%s\n' "${names[@]}" | missing_sources feature:)
 
   local rows rname
   rows=$(awk -F'\t' 'NR>1 && $2 ~ /^feature:/{s=$2; sub(/^feature:/,"",s); print s}' "$TSV")
