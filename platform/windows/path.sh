@@ -6,9 +6,9 @@
 # /c/Users/<user>/AppData/Local/Temp/x. `pwd -P` keeps whichever one the shell
 # entered by, while a path a native program prints, such as git.exe's
 # --git-common-dir or the gitdir treehouse writes, comes back through the
-# mount as /tmp/x. Upstream decides "same directory" by comparing `pwd -P`
-# strings, so here `pwd -P` answers in the mount's spelling, the one
-# `cygpath -u` gives, without forking it.
+# mount as /tmp/x. Upstream decides "same directory" by comparing the strings
+# `pwd` and `pwd -P` print, so here both answer in the mount's spelling, the
+# one `cygpath -u` gives, without forking it.
 
 _fm_win_mount_src=()
 _fm_win_mount_dst=()
@@ -38,11 +38,11 @@ _fm_win_mount_spelling() {  # <var> <path>
 
 pwd() {
   local dir
-  if [ "$*" != -P ]; then
-    builtin pwd "$@"
-    return
-  fi
-  dir=$(builtin pwd -P) || return
+  case $* in
+    '' | -L) dir=$PWD ;;
+    -P) dir=$(builtin pwd -P) || return ;;
+    *) builtin pwd "$@"; return ;;
+  esac
   _fm_win_mount_spelling dir "$dir"
   printf '%s\n' "$dir"
 }
