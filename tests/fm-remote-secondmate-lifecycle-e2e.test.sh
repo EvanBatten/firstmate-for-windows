@@ -697,6 +697,30 @@ assert_grep 'not an accepted clone URL' "$TMP_ROOT/unsafe-origin.out" \
 assert_absent "$TMP_ROOT/unsafe-origin-home" "the rejected manifest left a remote home behind"
 pass "remote provisioning re-validates a supplied origin at the receiving host"
 
+# A plain-path project origin must also come through git's transport: only a
+# file copy of its object directory carries an unreachable object.
+PLAIN_ORIGIN="$TMP_ROOT/beta-plain.git"
+git clone --quiet --bare "$TMP_ROOT/beta.git" "$PLAIN_ORIGIN"
+plain_unreachable=$(printf 'unreachable %s\n' "$$" | git -C "$PLAIN_ORIGIN" hash-object -w --stdin)
+printf 'schema=fm-remote-home-provision.v1\nid_b64=%s\ncharter_b64=%s\nproject_count=1\nproject=%s|%s|%s|%s\n' \
+  "$(printf plain-origin | base64 | tr -d '\n')" \
+  "$(printf 'Plain origin manifest charter.\n' | base64 | tr -d '\n')" \
+  "$(printf beta | base64 | tr -d '\n')" \
+  "$(printf '%s' "$PLAIN_ORIGIN" | base64 | tr -d '\n')" \
+  "$(printf -- '- beta [direct-PR] - beta project (added 2026-08-06)' | base64 | tr -d '\n')" \
+  "$(printf direct-PR | base64 | tr -d '\n')" \
+  > "$TMP_ROOT/plain-origin.manifest"
+FM_HOME="$TMP_ROOT/plain-origin-home" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  "$REMOTE_ROOT/bin/fm-remote-home-provision.sh" < "$TMP_ROOT/plain-origin.manifest" \
+  > "$TMP_ROOT/plain-origin.out" 2>&1 \
+  || fail "provisioning a plain-path project origin failed: $(cat "$TMP_ROOT/plain-origin.out")"
+[ "$(git -C "$TMP_ROOT/plain-origin-home/projects/beta" rev-parse HEAD)" = "$(git -C "$PLAIN_ORIGIN" rev-parse HEAD)" ] \
+  || fail "remote provisioning did not install the plain-path origin's HEAD"
+if git -C "$TMP_ROOT/plain-origin-home/projects/beta" cat-file -e "$plain_unreachable" 2>/dev/null; then
+  fail "remote provisioning copied project beta's origin object files instead of fetching through git"
+fi
+pass "remote provisioning clones a plain-path project origin through git's transport"
+
 # Firstmate is a shared template, so seeding must carry a project origin from any
 # forge or host, not a privileged one. These four URL shapes have to survive the
 # parent's validation, the manifest, the transport, and the receiving host's own

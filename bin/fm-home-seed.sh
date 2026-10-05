@@ -415,7 +415,13 @@ ensure_home() {
     [ -d "$home" ] || { echo "error: $home exists and is not a directory" >&2; return 1; }
   else
     mkdir -p "$(dirname "$home")"
-    git clone --quiet "$FM_ROOT" "$home"
+    # --no-local fetches through git's transport: a local clone copies the
+    # object files one by one, and a detached auto-maintenance repack in the
+    # source deletes loose objects out from under that copy.
+    # -c core.symlinks=true: .claude/skills is a tracked symlink, and Git for
+    # Windows defaults core.symlinks to false, which checks it out as a text
+    # file and leaves the home's harness without skills.
+    git clone --quiet --no-local -c core.symlinks=true "$FM_ROOT" "$home"
   fi
   verify_firstmate_home "$home"
 }
@@ -495,7 +501,7 @@ EOF
     return 0
   fi
   url=$(source_origin_url "$project" "$mode" "$src") || return 1
-  git clone --quiet "$url" "$dst"
+  git clone --quiet --no-local "$url" "$dst"
 }
 
 validate_seed_project() {
