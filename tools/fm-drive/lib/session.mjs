@@ -967,8 +967,12 @@ export class Session {
         c.on('error', () => res());
         c.on('close', () => res());
       });
-      rmSync(poolDir, { recursive: true, force: true });
-      this.log(`removed the treehouse pool ${pool} this run created`);
+      try {
+        rmSync(poolDir, { recursive: true, force: true });
+        this.log(`removed the treehouse pool ${pool} this run created`);
+      } catch (err) {
+        this.log(`left the treehouse pool ${pool} this run created, because ${err.code}: a process still holds it open`);
+      }
     }
   }
 
