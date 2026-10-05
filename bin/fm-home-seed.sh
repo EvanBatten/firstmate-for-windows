@@ -418,7 +418,10 @@ ensure_home() {
     # --no-local fetches through git's transport: a local clone copies the
     # object files one by one, and a detached auto-maintenance repack in the
     # source deletes loose objects out from under that copy.
-    git clone --quiet --no-local "$FM_ROOT" "$home"
+    # -c core.symlinks=true: .claude/skills is a tracked symlink, and Git for
+    # Windows defaults core.symlinks to false, which checks it out as a text
+    # file and leaves the home's harness without skills.
+    git clone --quiet --no-local -c core.symlinks=true "$FM_ROOT" "$home"
   fi
   verify_firstmate_home "$home"
 }
