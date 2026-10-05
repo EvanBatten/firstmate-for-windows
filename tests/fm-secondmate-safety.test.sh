@@ -143,6 +143,60 @@ EOF
   pass "seed allows overlapping project clone lists and drops the owns/owner routing"
 }
 
+# A local clone copies the source's object files one by one, and a detached
+# auto-maintenance repack there deletes loose objects mid-copy (issue #158).
+# Only such a copy carries an unreachable object, so its absence in the clone
+# proves the seed fetched through git's transport.
+test_seeded_home_clones_the_code_root_through_git() {
+  local home root mate unreachable
+  home="$TMP_ROOT/transport-main"
+  root="$TMP_ROOT/transport-root"
+  mate="$TMP_ROOT/transport-mate"
+  mkdir -p "$home/projects" "$home/data" "$home/state" "$root/bin"
+  printf '# fixture code root\n' > "$root/AGENTS.md"
+  printf '#!/usr/bin/env bash\n' > "$root/bin/fm-fixture.sh"
+  git -C "$root" init -q -b main
+  git -C "$root" add .
+  git -C "$root" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm root
+  unreachable=$(printf 'unreachable %s\n' "$$" | git -C "$root" hash-object -w --stdin)
+  FM_SECONDMATE_SCOPE='docs domain' scaffold_secondmate_charter "$home" transportmate 'docs domain' --no-projects \
+    || fail "transport seed charter scaffold failed"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    "$ROOT/bin/fm-home-seed.sh" transportmate "$mate" --no-projects >/dev/null \
+    || fail "seeding a home from the fixture code root failed"
+  [ "$(git -C "$mate" rev-parse HEAD)" = "$(git -C "$root" rev-parse HEAD)" ] \
+    || fail "the seeded home is not at the code root's HEAD"
+  if git -C "$mate" cat-file -e "$unreachable" 2>/dev/null; then
+    fail "the seed copied the code root's object files instead of fetching through git"
+  fi
+  pass "a seeded home clones the code root through git's transport"
+}
+
+test_seeded_project_clones_its_origin_through_git() {
+  local home mate src origin unreachable
+  home="$TMP_ROOT/transport-project-main"
+  mate="$TMP_ROOT/transport-project-mate"
+  src="$home/projects/alpha"
+  origin="$TMP_ROOT/remotes/transport-alpha.git"
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  fm_git_init_commit "$src"
+  git clone --quiet --bare "$src" "$origin"
+  git -C "$src" remote add origin "$(cd "$origin" && pwd)"
+  unreachable=$(printf 'unreachable %s\n' "$$" | git -C "$origin" hash-object -w --stdin)
+  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-10-05)' > "$home/data/projects.md"
+
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='docs for alpha' FM_SECONDMATE_SCOPE='docs for alpha' \
+    "$ROOT/bin/fm-home-seed.sh" transportproject "$mate" alpha >/dev/null \
+    || fail "seeding a project whose origin is a plain path failed"
+  [ "$(git -C "$mate/projects/alpha" rev-parse HEAD)" = "$(git -C "$origin" rev-parse HEAD)" ] \
+    || fail "the seeded project is not at its origin's HEAD"
+  if git -C "$mate/projects/alpha" cat-file -e "$unreachable" 2>/dev/null; then
+    fail "the seed copied project alpha's origin object files instead of fetching through git"
+  fi
+  pass "a seeded project clones a plain-path origin through git's transport"
+}
+
 test_home_seed_validate_rejects_unparseable_registry_entry() {
   local home err
   home="$TMP_ROOT/unparseable-registry-home"
@@ -3025,6 +3079,8 @@ EOF
 test_fm_home_parameterization
 test_lock_status_is_per_home
 test_seed_allows_overlapping_clones_and_drops_owner
+test_seeded_home_clones_the_code_root_through_git
+test_seeded_project_clones_its_origin_through_git
 test_home_seed_validate_rejects_unparseable_registry_entry
 test_home_seed_refuses_broken_registry_symlink
 test_home_seed_refuses_unreadable_registry
