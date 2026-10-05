@@ -1,0 +1,38 @@
+{
+  "feature": "ship-local",
+  "project": "greeter",
+  "proves": {
+    "fm-spawn": 2,
+    "readme-visible-crew": 2,
+    "fm-merge-local": 4,
+    "fm-teardown": 5,
+    "feature-real-session": 5
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 150
+    },
+    {
+      "say": "ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. tell me when it is done, and wait for my go before landing it.",
+      "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 180
+    },
+    {
+      "say": "",
+      "until": "status.verb:done",
+      "budgetSec": 300
+    },
+    {
+      "say": "looks good. land it on main, you have my approval, then clean up and tell me.",
+      "until": "git.ahead:greeter>=1",
+      "budgetSec": 400
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean",
+      "budgetSec": 120
+    }
+  ]
+}
