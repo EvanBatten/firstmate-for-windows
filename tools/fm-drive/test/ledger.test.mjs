@@ -267,7 +267,7 @@ describe('record', () => {
   });
 });
 
-function inventoryTree(behaviors, trace) {
+function inventoryTree(behaviors, trace, { sessionScript = false } = {}) {
   const root = tmp('inv');
   const skill = join(root, '.agents', 'skills', 'verify-firstmate');
   mkdirSync(join(skill, 'features'), { recursive: true });
@@ -275,6 +275,7 @@ function inventoryTree(behaviors, trace) {
   writeFileSync(join(skill, 'behaviors.tsv'), behaviors);
   mkdirSync(join(root, 'tests', 'verification'), { recursive: true });
   writeFileSync(join(root, 'tests', 'verification', 'coverage.tsv'), 'script\tkind\n');
+  if (sessionScript) writeFileSync(join(root, 'tests', 'verification', 'register.verify.sh'), '. "$HERE/session-lib.sh"\n');
   writeFileSync(join(root, 'README.md'), '# t\n\n## Features\n\n- one\n');
   mkdirSync(join(root, 'tools', 'fm-drive', 'traces'), { recursive: true });
   writeFileSync(join(root, 'tools', 'fm-drive', 'traces', 'register.json'), JSON.stringify(trace));
@@ -282,6 +283,7 @@ function inventoryTree(behaviors, trace) {
   return join(skill, 'inventory.sh');
 }
 
+const RECORDED = '0123456789abcdef0123456789abcdef01234567 held through step 1, health clean; /tmp/fm-drive-artifacts/register';
 const registerTrace = (proves) => ({ feature: 'register', steps: [{ say: 'ahoy', until: 'projects.registered:greeter' }], proves });
 const inventory = (script, ...args) => spawnSync('bash', [script, ...args], { encoding: 'utf8', timeout: 60_000 });
 
@@ -302,6 +304,28 @@ describe('inventory.sh with trace refs', () => {
 
   test('verdict counts a trace-proven row as proven by its recorded run', () => {
     const script = inventoryTree(tsv(row('row-register', 'proven', 'register', 'sha held')), registerTrace({ 'row-register': 1 }));
+    const log = join(tmp('log'), 'run.log');
+    writeFileSync(log, 'result: other passed\n');
+    const r = inventory(script, 'verdict', log);
+    assert.equal(r.stdout, 'proven 1 of 1 behaviors; 0 unproven; 0 broken; 0 blocked here\n');
+  });
+
+  test('check holds a recorded row to its trace even when a session script shares its name', () => {
+    const script = inventoryTree(tsv(row('row-register', 'proven', 'register', RECORDED)), registerTrace({ 'row-dispatch': 1 }), { sessionScript: true });
+    const r = inventory(script, 'check');
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /^not ok - row 'row-register' is proven but ref 'register' names no tests\/verification\/register\.verify\.sh and no tools\/fm-drive\/traces\/register\.json that proves it$/m);
+  });
+
+  test('check refuses a row whose id is a trace key outside proves', () => {
+    const script = inventoryTree(tsv(row('row-register', 'proven', 'register', RECORDED)), { ...registerTrace({ 'row-dispatch': 1 }), 'row-register': 1 });
+    const r = inventory(script, 'check');
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /^not ok - row 'row-register' is proven but ref 'register'/m);
+  });
+
+  test('verdict counts a recorded row as proven even when a session script shares its name', () => {
+    const script = inventoryTree(tsv(row('row-register', 'proven', 'register', RECORDED)), registerTrace({ 'row-register': 1 }), { sessionScript: true });
     const log = join(tmp('log'), 'run.log');
     writeFileSync(log, 'result: other passed\n');
     const r = inventory(script, 'verdict', log);
