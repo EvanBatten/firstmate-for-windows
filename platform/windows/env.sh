@@ -76,7 +76,22 @@ else
   fi
 fi
 
+# A clone or worktree made with core.symlinks=false has .claude/skills as a
+# plain file; checking for one here costs no fork.
+for _fm_win_link in "$_fm_win_dir/../../.claude/skills" "$_fm_win_dir"/../../.git/worktrees/*/gitdir; do
+  case $_fm_win_link in
+    */gitdir)
+      [ -f "$_fm_win_link" ] || continue
+      read -r _fm_win_link < "$_fm_win_link" || :
+      _fm_win_link=${_fm_win_link%/.git}/.claude/skills ;;
+  esac
+  if [ -f "$_fm_win_link" ] && [ ! -L "$_fm_win_link" ]; then
+    bash "$_fm_win_dir/symlinks.sh" "$_fm_win_dir/../.." || :
+    break
+  fi
+done
+
 FM_PLATFORM_OVERLAY=$_fm_win_dir/overrides.sh
 export PATH MSYS FM_PLATFORM_OVERLAY FM_WIN_PRIVATE_ROOTS
 unset _fm_win_dir _fm_win_path _fm_win_msys _fm_win_word _fm_win_home _fm_win_out \
-  _fm_win_private _fm_win_roots _fm_win_root _fm_win_overlay_bash_env
+  _fm_win_private _fm_win_roots _fm_win_root _fm_win_overlay_bash_env _fm_win_link
