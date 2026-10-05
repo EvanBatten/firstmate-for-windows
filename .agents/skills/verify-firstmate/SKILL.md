@@ -72,14 +72,14 @@ Its `status` is exactly one of four words.
 
 Only `node tools/fm-drive/drive.mjs record <result.json>` changes a trace row.
 It reads a passing `run` result whose home health check held, sets each row the trace's `proves` names to `proven` with the trace as `ref` and the run as evidence, and prints `proven N of M behaviors; K unproven; J broken; B blocked here`.
-`record` writes nothing and exits 2 for a rejected trace, a run that failed in its environment, a run that missed a step, a run whose health check missed, a run on uncommitted changes, a commit that `origin/main` or a given `--head origin/<branch>` does not contain, and a row id the table does not have.
+`record` writes nothing and exits 2 for a rejected trace, a run that failed in its environment, a run that missed a step, a run whose steps differ from the trace at its commit or overran a step budget there, a run whose health check missed, a run on uncommitted changes, a commit that `origin/main` or a given `--head origin/<branch>` does not contain, and a row id the table does not have.
 Recording the same result twice leaves the table unchanged.
 
 `verify.sh doctor` runs `inventory.sh check` and refuses a checkout whose table has a hole, whether that is a `bin/` script, a feature file, or a README bullet with no row, a `proven` row whose script does not exist, or a malformed `ref`.
 `verify.sh run` ends with the fractional verdict `inventory.sh verdict` computes from that run's log, `proven N of M behaviors; K unproven; J broken; B blocked here`.
 That fraction, not the suite's own `<n> passed, <n> failed, <n> skipped` line, is what "verified" means for this repository.
 A `proven` row whose script skipped, or did not run at all, counts toward `unproven`, never toward `proven`, so a skip can never read as proof.
-A `proven` row whose ref is a trace counts as proven from the run `record` wrote into its evidence.
+A `proven` row whose evidence `record` wrote counts as proven from that run, and `inventory.sh check` holds it to its trace's `proves` even when a session script has the same name.
 
 ## Drive
 

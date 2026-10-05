@@ -46,9 +46,33 @@ BAD=0
 n_ok()  { printf 'ok - %s\n' "$1"; }
 n_bad() { printf 'not ok - %s\n' "$1"; BAD=$((BAD + 1)); }
 
+# A JSON string cannot hold an unescaped quote, so the first "proves" key
+# opens the trace's proves object, and its keys are row ids with no braces.
 trace_proves() {
   case "$1" in '' | *[!A-Za-z0-9._-]*) return 1 ;; esac
-  [ -f "$TRACES/$1.json" ] && grep -q "\"$2\"[[:space:]]*:" "$TRACES/$1.json"
+  [ -f "$TRACES/$1.json" ] || return 1
+  awk -v want="$2" '
+    { text = text $0 }
+    END {
+      if (!match(text, /"proves"[ \t\r]*:[ \t\r]*\{[^}]*\}/)) exit 1
+      body = substr(text, RSTART, RLENGTH)
+      sub(/^"proves"[ \t\r]*:[ \t\r]*\{/, "", body)
+      n = split(body, pairs, ",")
+      for (i = 1; i <= n; i++) {
+        key = pairs[i]
+        sub(/^[ \t\r]*"/, "", key)
+        sub(/"[ \t\r]*:.*$/, "", key)
+        if (key == want) exit 0
+      }
+      exit 1
+    }' "$TRACES/$1.json"
+}
+
+# record writes "<sha> held through step <n>, ..." as a trace-proven row's
+# evidence, so that row's ref names a trace even when a session script
+# shares the name.
+recorded_by_trace() {
+  [[ $1 =~ ^[0-9a-f]{40}\ held\ through\ step\ [0-9]+, ]]
 }
 
 row_source_exists() {
@@ -101,15 +125,15 @@ cmd_check() {
     n_bad "duplicate id '$id'"
   done
 
-  local status ref
-  while IFS=$'\t' read -r id _source _behavior status ref _evidence; do
+  local status ref evidence
+  while IFS=$'\t' read -r id _source _behavior status ref evidence; do
     case "$status" in
       proven | unproven | broken | blocked-here) ;;
       *) n_bad "row '$id' has an unknown status '$status'" ;;
     esac
     case "$status" in
       proven)
-        if [ -f "$SUITE/$ref.verify.sh" ]; then
+        if ! recorded_by_trace "$evidence" && [ -f "$SUITE/$ref.verify.sh" ]; then
           # A drive plays firstmate; only a real session proves a behavior.
           grep -q "session-lib.sh" "$SUITE/$ref.verify.sh" \
             || n_bad "row '$id' is proven by '$ref', which drives scripts itself instead of running a session; only a session script proves a behavior"
@@ -149,11 +173,11 @@ cmd_verdict() {
   local total proven=0 unproven=0 broken=0 blocked=0
   total=$(tail -n +2 "$TSV" | wc -l | tr -d ' ')
 
-  local id status ref outcome
-  while IFS=$'\t' read -r id _source _behavior status ref _evidence; do
+  local id status ref evidence outcome
+  while IFS=$'\t' read -r id _source _behavior status ref evidence; do
     case "$status" in
       proven)
-        if [ ! -f "$SUITE/$ref.verify.sh" ]; then
+        if recorded_by_trace "$evidence" || [ ! -f "$SUITE/$ref.verify.sh" ]; then
           # A trace-proven row's proof is the run record wrote, not this log.
           proven=$((proven + 1))
           continue
