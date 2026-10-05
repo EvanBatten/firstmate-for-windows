@@ -40,6 +40,10 @@
 #     waits on inside this hook-owned process tree (never a fire-and-forget
 #     shell &); Claude owns the process group, so its timeout/session teardown
 #     kills arm and watcher together, and the hook TERMs the arm with itself.
+#     A native Windows primary cannot signal that group and leaves the hook
+#     running when it exits, so the hook also watches the harness it serves:
+#     once that session has ended it TERMs its arm and never arms, retries,
+#     starts a successor, or rewakes again (outcome session-ended).
 #     HUP, TERM, and INT are translated through the ordinary durable failure
 #     handoff instead of leaving the generation frozen at arming. Claude does
 #     not deliver the exit 2 of a hook it terminated at the configured timeout
@@ -227,6 +231,16 @@ if [ "$RECOVER_SESSION_LOCK" -eq 1 ]; then
   fm_session_lock_owned_by_self "$STATE" || exit 0
 fi
 
+# --- the session this hook serves ----------------------------------------------
+# The innermost harness above this hook is the session its exit 2 would wake.
+# Once it is gone nobody is left to wake, and a watcher kept armed for it would
+# restart the herdr server a close had just stopped.
+HOOK_HARNESS_PID=$(fm_harness_ancestry_pids | sed -n '1p')
+case "$HOOK_HARNESS_PID" in ''|*[!0-9]*) exit 0 ;; esac
+hook_session_ended() {
+  ! kill -0 "$HOOK_HARNESS_PID" 2>/dev/null
+}
+
 # --- single-flight generation claim --------------------------------------------
 # Claude runs one background process per firing with no dedupe. Exactly one
 # generation owner arms and translates per event epoch: every firing defers to
@@ -283,6 +297,12 @@ autoarm_record() {  # <outcome>
   fm_autoarm_write_owned "$STATE" "$MY_GEN" "$1" >/dev/null 2>&1 || true
 }
 
+stand_down_session_ended() {
+  autoarm_record session-ended
+  [ -z "${OUT:-}" ] || rm -f "$OUT" 2>/dev/null || true
+  exit 0
+}
+
 # Claude terminates the complete async-hook process tree when the configured
 # hook timeout expires. The arm is intentionally allowed to follow a healthy
 # watcher until its next wake, so that wait cannot be shortened without adding
@@ -335,16 +355,31 @@ trap 'handle_autoarm_signal INT' INT
 # Every non-actionable close is checked against the same identity-matched live
 # watcher and fresh-beacon predicate used by the turn-end guard before it is
 # retried or translated into an operator-visible failure.
+# A guard beside the wait TERMs the arm once this hook's session has ended, so
+# the arm stops the watcher it owns.
 ARM_PID=
 CLOSED_ARM_PID=
+stop_arm_when_session_ends() {  # <arm-pid>
+  while kill -0 "$1" 2>/dev/null; do
+    if hook_session_ended; then
+      kill -TERM "$1" 2>/dev/null
+      return
+    fi
+    sleep 1
+  done
+}
 run_arm() {  # <output file, or empty for none>
+  local guard
   if [ -n "$1" ]; then
     FM_GUARD_GRACE="$GRACE" "$SCRIPT_DIR/fm-watch-arm.sh" >"$1" 2>&1 &
   else
     FM_GUARD_GRACE="$GRACE" "$SCRIPT_DIR/fm-watch-arm.sh" >/dev/null 2>&1 &
   fi
   ARM_PID=$!
+  stop_arm_when_session_ends "$ARM_PID" &
+  guard=$!
   wait "$ARM_PID" || true
+  kill "$guard" 2>/dev/null || true
   CLOSED_ARM_PID=$ARM_PID
   ARM_PID=
 }
@@ -410,6 +445,7 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
     [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
     exit 0
   fi
+  hook_session_ended && stand_down_session_ended
   attempt=$((attempt + 1))
   OUT=$(mktemp "$STATE/.claude-autoarm-output.XXXXXX") || OUT=
   if [ "$HOST_MODE" -eq 1 ]; then
@@ -466,6 +502,8 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
   [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
   OUT=
 done
+
+hook_session_ended && stand_down_session_ended
 
 # The need may have vanished mid-cycle (fleet torn down, X opted out): nothing
 # left to supervise, so close quietly instead of waking the model.
