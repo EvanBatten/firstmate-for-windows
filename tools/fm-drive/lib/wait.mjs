@@ -5,19 +5,58 @@ import { snapshotHome, evaluateUntil, recordedPaneIds } from './predicates.mjs';
 export const DEBOUNCE_MS = 40;
 export const SAFETY_TICK_MS = 1000;
 export const LIVENESS_TICK_MS = 500;
-export const HERDR_FACT_MIN_INTERVAL_MS = 3000;
+// Minimum gap between two fetches of one fact kind inside one wait.
+export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000 };
 
 // deps:
 //   liveness()            -> { alive: boolean, reason: string }   (sync or async)
 //   signals               -> { blocked: string|null }  set by the session's event stream
 //   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes'
-//   gitAhead              -> shared cache { [name]: { sha, count } } this function fills
+//   gitAhead              -> shared cache { [name]: { sha, count } } fetchFact fills
 //   seeds                 -> { [name]: sha }
 //   counters              -> { gitSpawns }
+function observe(home, deps, onSnapshot) {
+  const snap = snapshotHome(home);
+  snap.gitAhead = deps.gitAhead;
+  onSnapshot?.(snap);
+  return snap;
+}
+
+// The one dispatcher for every `needs` value. It fills snap or a deps cache and never decides the claim.
+export async function fetchFact(kind, { snap, atom, deps, home }) {
+  if (kind === 'git') {
+    const name = atom.args.name;
+    const sha = snap.projects[name]?.mainSha;
+    deps.gitAhead[name] = { sha, count: await gitAheadCount(home, name, deps.seeds?.[name], sha, deps.counters) };
+    return;
+  }
+  snap.herdr = snap.herdr ?? {};
+  await deps.fetchHerdr(kind, snap, recordedPaneIds(snap));
+}
+
+// Evaluates on one snapshot, fetching each outside fact the claim asks for once. With lastFetch,
+// a fact asked for sooner than its minimum interval is not fetched and retryInMs says when to look again.
+export async function holdsNow({ home, parsed, ctx, deps, onSnapshot, lastFetch }) {
+  const snap = observe(home, deps, onSnapshot);
+  const fetched = new Set();
+  for (;;) {
+    const r = evaluateUntil(parsed, snap, ctx);
+    const key = r.needs && `${r.needs}:${r.atom.raw}`;
+    if (r.ok || !r.needs || fetched.has(key)) return { ...r, snap };
+    if (lastFetch) {
+      const wait = FACT_MIN_INTERVAL_MS[r.needs] - (Date.now() - (lastFetch[r.needs] ?? 0));
+      if (wait > 0) return { ...r, snap, retryInMs: wait };
+      lastFetch[r.needs] = Date.now();
+    }
+    fetched.add(key);
+    await fetchFact(r.needs, { snap, atom: r.atom, ctx, deps, home });
+  }
+}
+
 export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot }) {
   const started = Date.now();
   const deadline = started + budgetMs;
-  let lastHerdrFetch = { tabs: 0, panes: 0 };
+  const lastFetch = {};
   let settled = false;
   let evaluating = false;
   let dirty = false;
@@ -40,38 +79,9 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
       if (evaluating) { dirty = true; return; }
       evaluating = true;
       try {
-        // Re-evaluate until nothing new is needed: a herdr or git fact fetched
-        // for one atom can make the next atom the deciding one.
-        for (let round = 0; round < 6 && !settled; round++) {
-          const snap = snapshotHome(home);
-          snap.gitAhead = deps.gitAhead;
-          onSnapshot?.(snap);
-          const r = evaluateUntil(parsed, snap, ctx);
-          if (r.ok) { finish({ ok: true, reason: r.reason, snap }); return; }
-          if (r.needs === 'git') {
-            const name = r.atom.args.name;
-            const sha = snap.projects[name]?.mainSha;
-            const seed = deps.seeds?.[name];
-            const count = await gitAheadCount(home, name, seed, sha, deps.counters);
-            deps.gitAhead[name] = { sha, count };
-            continue;
-          }
-          if (r.needs === 'tabs' || r.needs === 'panes') {
-            const now = Date.now();
-            if (now - lastHerdrFetch[r.needs] < HERDR_FACT_MIN_INTERVAL_MS) {
-              timers.push(setTimeout(evaluate, HERDR_FACT_MIN_INTERVAL_MS - (now - lastHerdrFetch[r.needs])));
-              return;
-            }
-            lastHerdrFetch[r.needs] = now;
-            snap.herdr = snap.herdr ?? {};
-            await deps.fetchHerdr(r.needs, snap, recordedPaneIds(snap));
-            const again = evaluateUntil(parsed, snap, ctx);
-            if (again.ok) { finish({ ok: true, reason: again.reason, snap }); return; }
-            if (again.needs === r.needs) return; // still lacking; wait for the next wake
-            continue;
-          }
-          return;
-        }
+        const r = await holdsNow({ home, parsed, ctx, deps, onSnapshot, lastFetch });
+        if (r.ok) finish({ ok: true, reason: r.reason, snap: r.snap });
+        else if (r.retryInMs) timers.push(setTimeout(evaluate, r.retryInMs));
       } finally {
         evaluating = false;
         if (dirty && !settled) { dirty = false; setTimeout(evaluate, 0); }
@@ -95,9 +105,7 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
       if (deps.signals?.blocked) {
         // A claim that already holds wins. A parked question only fails a
         // step whose until is still false.
-        const snap = snapshotHome(home);
-        snap.gitAhead = deps.gitAhead;
-        onSnapshot?.(snap);
+        const snap = observe(home, deps, onSnapshot);
         const r = evaluateUntil(parsed, snap, ctx);
         if (r.ok) { finish({ ok: true, reason: r.reason, snap }); return; }
         finish({ ok: false, reason: `the primary stopped to ask a question: ${deps.signals.blocked}`, blocked: true });
@@ -109,34 +117,12 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
     timers.push(setTimeout(async () => {
       // One last look right at the deadline, so a claim that became true in
       // the final debounce window is not lost.
-      const snap = snapshotHome(home);
-      snap.gitAhead = deps.gitAhead;
+      const snap = observe(home, deps);
       const r = evaluateUntil(parsed, snap, ctx);
       finish(r.ok ? { ok: true, reason: r.reason, snap } : { ok: false, reason: `not within ${Math.round(budgetMs / 1000)} s: ${r.reason}`, timeout: true, snap });
     }, Math.max(0, deadline - Date.now())));
     evaluate();
   });
-}
-
-export async function holdsNow({ home, parsed, ctx, deps, onSnapshot }) {
-  const snap = snapshotHome(home);
-  snap.gitAhead = deps.gitAhead;
-  onSnapshot?.(snap);
-  const fetched = new Set();
-  for (;;) {
-    const r = evaluateUntil(parsed, snap, ctx);
-    const fact = r.needs === 'git' ? `git:${r.atom.args.name}` : r.needs;
-    if (r.ok || !r.needs || fetched.has(fact)) return r;
-    fetched.add(fact);
-    if (r.needs === 'git') {
-      const name = r.atom.args.name;
-      const sha = snap.projects[name]?.mainSha;
-      deps.gitAhead[name] = { sha, count: await gitAheadCount(home, name, deps.seeds?.[name], sha, deps.counters) };
-    } else {
-      snap.herdr = snap.herdr ?? {};
-      await deps.fetchHerdr(r.needs, snap, recordedPaneIds(snap));
-    }
-  }
 }
 
 // `git rev-list --count <seed>..<sha>` in the project clone inside the home;
