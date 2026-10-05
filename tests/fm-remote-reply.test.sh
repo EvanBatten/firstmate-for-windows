@@ -790,6 +790,43 @@ fi
 stop_reply_listener || fail "the continuity listener did not stop"
 pass "a remote reply listener stays owned across empty waits and a delta"
 
+# Every handle re-arms the same reply command, even on a replay. The long floor
+# and short poll window put this re-arm inside the listener's floor sleep.
+rm -f -- "$PARENT/state/remote-replies/ios.caught-up"
+: > "$TMP_ROOT/rearm-polls"
+FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=8 FM_REMOTE_REPLY_WAIT_SECONDS=1 \
+FM_REMOTE_REPLY_POLL_LOG="$TMP_ROOT/rearm-polls" \
+  remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" >/dev/null 2>&1 &
+wait_for "$CLAIMS/$SID.claim" || fail "the re-armed reply listener never claimed the source"
+REARM_PID=$(sed -n '2p' "$CLAIMS/$SID.claim")
+for _ in $(seq 1 400); do
+  [ -f "$PARENT/state/remote-replies/ios.caught-up" ] && break
+  sleep 0.05
+done
+[ -f "$PARENT/state/remote-replies/ios.caught-up" ] \
+  || fail "the re-armed reply listener never finished an empty wait"
+sleep 2
+[ "$(wc -l < "$TMP_ROOT/rearm-polls" | tr -d ' ')" -eq 1 ] \
+  || fail "the reply listener was not sleeping out its launch floor when re-armed"
+remote_env "$ADAPTER" arm ios >/dev/null || fail "the unchanged reply source could not be re-armed"
+printf 'working [corr=fedcbafedcbafedc]: read after a same-command re-arm\n' \
+  >> "$REMOTE/state/parent-replies.status"
+GEN=$((GEN + 1))
+# Handling mirrors the line before it acknowledges, so stopping on the mirror
+# alone can leave this generation unhandled for the retirement case.
+for _ in $(seq 1 300); do
+  [ -f "$PARENT/state/procevent-inbox/$SID.$GEN.handled" ] && break
+  sleep 0.1
+done
+grep -q 'read after a same-command re-arm' "$PARENT/state/ios.status" \
+  || fail "re-arming the unchanged reply command stopped its sleeping listener"
+assert_present "$PARENT/state/procevent-inbox/$SID.$GEN.handled" \
+  "the re-armed listener did not acknowledge what it read"
+[ "$(sed -n '2p' "$CLAIMS/$SID.claim")" = "$REARM_PID" ] \
+  || fail "a same-command re-arm replaced the reply listener"
+stop_reply_listener || fail "the re-armed listener did not stop"
+pass "a same-command re-arm during the launch floor keeps the listener reading"
+
 # A failed transport is not an empty wait: do not launch a second read under
 # the same owner, even when the launch floor is short.
 : > "$TMP_ROOT/failed-polls"
