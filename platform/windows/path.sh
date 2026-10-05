@@ -22,19 +22,31 @@ while IFS= read -r _fm_win_line; do
 done < /proc/mounts
 unset _fm_win_line _fm_win_re
 
+
+# Sets <var> to <path> respelled through the mount that holds it.
+_fm_win_mount_spelling() {  # <var> <path>
+  local _fm_win_p=$2 i src best=-1 len=0
+  for i in "${!_fm_win_mount_src[@]}"; do
+    src=${_fm_win_mount_src[i],,}
+    case ${_fm_win_p,,}/ in
+      "$src"/*) [ "${#src}" -le "$len" ] || { best=$i len=${#src}; } ;;
+    esac
+  done
+  [ "$best" -lt 0 ] || _fm_win_p=${_fm_win_mount_dst[best]}${_fm_win_p:len}
+  printf -v "$1" '%s' "${_fm_win_p:-/}"
+}
+
 pwd() {
-  local dir i src best=-1 len=0
+  local dir
   if [ "$*" != -P ]; then
     builtin pwd "$@"
     return
   fi
   dir=$(builtin pwd -P) || return
-  for i in "${!_fm_win_mount_src[@]}"; do
-    src=${_fm_win_mount_src[i],,}
-    case ${dir,,}/ in
-      "$src"/*) [ "${#src}" -le "$len" ] || { best=$i len=${#src}; } ;;
-    esac
-  done
-  [ "$best" -lt 0 ] || dir=${_fm_win_mount_dst[best]}${dir:len}
-  printf '%s\n' "${dir:-/}"
+  _fm_win_mount_spelling dir "$dir"
+  printf '%s\n' "$dir"
 }
+
+# Upstream compares FM_HOME as a string with the home a session recorded, and
+# the primary may type either spelling.
+case ${FM_HOME:-} in /*) _fm_win_mount_spelling FM_HOME "$FM_HOME" ;; esac
