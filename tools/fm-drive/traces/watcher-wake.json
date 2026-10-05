@@ -10,7 +10,7 @@
   },
   "steps": [
     {
-      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. before committing, soak-test it: run hello and bye once every two seconds for four full minutes and check every run printed the same line. one commit on its own branch. use the opus model for the worker. tell me when it is done, and wait for my go before landing it.",
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. before committing, soak-test it: keep running hello and bye for three full minutes and check every run printed the same line. one commit on its own branch. use the opus model for the worker. tell me when it is done, and wait for my go before landing it.",
       "until": "projects.registered:greeter",
       "budgetSec": 150
     },
@@ -22,7 +22,7 @@
     {
       "say": "",
       "until": "status.verb:done && wake.delivered:signal>=1 && beacon.fresh",
-      "budgetSec": 480
+      "budgetSec": 420
     },
     {
       "say": "",
