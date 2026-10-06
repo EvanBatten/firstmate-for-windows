@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseUntil, evaluateUntil, snapshotHome, countLines, mainShaFromLsRemote, CATALOG } from '../lib/predicates.mjs';
 import { validateTrace, TraceError } from '../lib/trace.mjs';
-import { atShellPrompt, cliArgv } from '../lib/herdr.mjs';
+import { Herdr, atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
 import { waitUntil, holdsNow } from '../lib/wait.mjs';
 import * as sessionLib from '../lib/session.mjs';
@@ -1081,6 +1081,71 @@ describe('fake-herdr end to end', () => {
     assert.match(r.json.error, /folder trust/);
     assert.equal(r.json.readyMs, null, 'ready must not fire while trust is up');
     assert.ok(r.json.wallMs < (process.platform === 'win32' ? 90_000 : 30_000), `failed inside the bound (${r.json.wallMs} ms)`);
+  });
+});
+
+describe('herdr server environment', () => {
+  test('a server the driver starts gets the environment a captain has, not the driving agent environment', async () => {
+    const { dir, env } = fakeEnv({
+      FAKE_HERDR_SERVER_DOWN: '1',
+      FM_DRIVE_HERDR_SESSION: 'fm-drive-envtest',
+      FM_DRIVE_START_SERVER: '1',
+      FM_DRIVE_MODEL: 'opus',
+      FM_HOME: 'C:/captain/firstmate',
+      CLAUDECODE: '1',
+      CLAUDE_CODE_CHILD_SESSION: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_SESSION_ID: 'agent-session',
+      CLAUDE_CODE_MESSAGING_SOCKET: 'pipe',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'secret',
+      CLAUDE_PID: '4242',
+      CLAUDE_EFFORT: 'medium',
+      AI_AGENT: 'claude-code_agent',
+      GIT_EDITOR: 'true',
+      HERDR_PANE_ID: 'w41:p1',
+      HERDR_SOCKET_PATH: 'C:/captain/herdr.sock',
+      TMUX: '/tmp/tmux-1/default,1,0',
+      TMUX_PANE: '%1',
+      CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+      MSYS: 'winsymlinks:nativestrict',
+      CAPTAIN_USER_VAR: 'kept',
+    });
+    const h = await Herdr.attach(env);
+    await h.close();
+    const got = JSON.parse(readFileSync(join(dir, 'server-env.json'), 'utf8'));
+    const leaked = ['FM_DRIVE_HERDR_SESSION', 'FM_DRIVE_START_SERVER', 'FM_DRIVE_MODEL', 'FM_DRIVE_HERDR', 'FM_HOME', 'CLAUDECODE',
+      'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_SOCKET',
+      'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'AI_AGENT', 'GIT_EDITOR', 'HERDR_PANE_ID', 'HERDR_SOCKET_PATH',
+      'TMUX', 'TMUX_PANE'].filter((k) => k in got);
+    assert.deepEqual(leaked, []);
+    assert.equal(got.HERDR_SESSION, 'fm-drive-envtest');
+    assert.equal(got.CLAUDE_CODE_OAUTH_TOKEN, 'tok');
+    assert.equal(got.MSYS, 'winsymlinks:nativestrict');
+    assert.equal(got.CAPTAIN_USER_VAR, 'kept');
+    assert.equal(got.FAKE_HERDR_DIR, dir);
+  });
+});
+
+describe('seeded project', () => {
+  test('a shell script committed to the seeded project checks out with LF on a CRLF host', async () => {
+    const GREET = '#!/bin/sh\necho hello\n';
+    const s =new sessionLib.Session({ trace: { feature: 'seed', steps: [] }, env: process.env });
+    s.scratch = tmp('seed');
+    await s.seedProject('greeter');
+    const git = (...a) => {
+      const r = spawnSync('git', a, { encoding: 'utf8' });
+      assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
+    };
+    const work = join(s.scratch, 'work');
+    git('-c', 'core.autocrlf=true', 'clone', '-q', s.projectOrigin, work);
+    git('-C', work, 'config', 'core.autocrlf', 'true');
+    writeFileSync(join(work, 'greet.sh'), GREET);
+    git('-C', work, 'add', 'greet.sh');
+    git('-C', work, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'add greet');
+    git('-C', work, 'push', '-q', 'origin', 'main');
+    const fresh = join(s.scratch, 'fresh');
+    git('-c', 'core.autocrlf=true', 'clone', '-q', s.projectOrigin, fresh);
+    assert.equal(readFileSync(join(fresh, 'greet.sh'), 'utf8'), GREET);
   });
 });
 

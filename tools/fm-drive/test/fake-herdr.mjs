@@ -142,9 +142,18 @@ if (args[0] === '--apply') {
   const s = load();
   const verb = `${a[0]} ${a[1] ?? ''}`.trim();
   switch (verb) {
-    case 'status --json':
-      out({ client: { version: 'fake', protocol: 16, session: null }, server: { running: true, socket: '', protocol: 16, version: 'fake' } });
+    case 'status --json': {
+      const running = process.env.FAKE_HERDR_SERVER_DOWN !== '1' || s.serverUp === true;
+      out({ client: { version: 'fake', protocol: 16, session: null }, server: { running, socket: '', protocol: 16, version: 'fake' } });
       break;
+    }
+    case 'server': {
+      writeFileSync(join(DIR, 'server-env.json'), JSON.stringify(process.env));
+      s.serverUp = true;
+      save(s);
+      setInterval(() => { if (!load().serverUp) process.exit(0); }, 100);
+      break;
+    }
     case 'workspace list':
       out({ workspaces: [] });
       break;
@@ -163,6 +172,7 @@ if (args[0] === '--apply') {
     case 'tab close':
     case 'server stop':
       if (verb === 'workspace close') { killPrimary(s); save(s); }
+      if (verb === 'server stop') { s.serverUp = false; save(s); }
       out({});
       break;
     case 'pane process-info': {

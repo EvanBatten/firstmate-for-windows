@@ -39,6 +39,32 @@ export function atShellPrompt(text) {
   );
 }
 
+// Every pane of a server the driver starts inherits the server's environment, so
+// the server starts from what a captain's fresh terminal holds. These variables
+// come only from the shell that runs the driver.
+const DRIVER_ONLY_ENV = [
+  // Claude Code marks the shells it runs tools in. CLAUDE_CODE_CHILD_SESSION
+  // turns transcript saving off, and the messaging pair reaches the driving agent.
+  // The OAuth token is the driver's auth input, so it stays.
+  (k) => k.startsWith('CLAUDE_CODE_') && k !== 'CLAUDE_CODE_OAUTH_TOKEN',
+  (k) => ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'AI_AGENT'].includes(k),
+  // Claude Code sets GIT_EDITOR=true for its tool shells; a captain's git opens their editor.
+  (k) => k === 'GIT_EDITOR',
+  // FM_DRIVE_* are the driver's inputs, and any other FM_* belongs to a firstmate
+  // session around the driver. The driver passes the pane its own FM_PANE_PATH.
+  (k) => k.startsWith('FM_'),
+  // The driving shell's own herdr pane identity. herdr gives each pane its own,
+  // and the driver names the session.
+  (k) => k.startsWith('HERDR_'),
+  // firstmate's runtime detection lets $TMUX win over HERDR_ENV, so a pane that
+  // saw both would dispatch workers into the driver's tmux, not herdr.
+  (k) => k === 'TMUX' || k === 'TMUX_PANE',
+];
+
+function captainEnv(env) {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !DRIVER_ONLY_ENV.some((driverOnly) => driverOnly(k))));
+}
+
 export class Herdr {
   constructor({ bin, session, socketPath, transport, ownServer, log }) {
     this.bin = bin;
@@ -75,19 +101,8 @@ export class Herdr {
       }
       if (!named) session = `fm-drive-${randomBytes(4).toString('hex')}`;
       log(`starting a throwaway herdr server for session ${session}`);
-      // Never let the server inherit a tmux marker: firstmate's runtime
-      // auto-detection lets $TMUX win over HERDR_ENV, so a pane that saw
-      // both would dispatch workers into the driver's tmux, not herdr.
-      const serverEnv = { ...env, HERDR_SESSION: session };
-      delete serverEnv.TMUX;
-      delete serverEnv.TMUX_PANE;
-      const child = spawn(bin, ['server', '--session', session], {
-        env: serverEnv,
-        stdio: 'ignore',
-        shell: false,
-        windowsHide: true,
-        detached: false,
-      });
+      const serverEnv = { ...captainEnv(env), HERDR_SESSION: session };
+      const child = spawnHerdr(bin, ['server', '--session', session], serverEnv, 'ignore');
       child.on('error', () => {});
       ownServer = { child, session };
       spawns += 1;
@@ -218,12 +233,14 @@ function sessionArgs(session) {
 
 // A .mjs/.js/.cjs "binary" runs under this node, so a scripted stand-in for
 // herdr works the same on every platform without a shebang.
+function spawnHerdr(bin, args, env, stdio) {
+  const opts = { env, stdio, shell: false, windowsHide: true };
+  return /\.(mjs|cjs|js)$/i.test(bin) ? spawn(process.execPath, [bin, ...args], opts) : spawn(bin, args, opts);
+}
+
 function run(bin, args, env, timeoutMs) {
-  const scripted = /\.(mjs|cjs|js)$/i.test(bin);
   return new Promise((resolve, reject) => {
-    const child = scripted
-      ? spawn(process.execPath, [bin, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true })
-      : spawn(bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
+    const child = spawnHerdr(bin, args, env, ['ignore', 'pipe', 'pipe']);
     let out = '';
     let err = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error(`herdr ${args[0]} ${args[1] ?? ''} timed out after ${timeoutMs} ms`)); }, timeoutMs);

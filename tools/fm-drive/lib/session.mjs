@@ -397,6 +397,8 @@ export class Session {
     await cfg('core.autocrlf', 'false');
     await this.git(['-C', seed, 'checkout', '-q', '-b', 'main']).catch(() => {});
     writeFileSync(join(seed, 'README.md'), `# ${name}\n\nA throwaway project for a firstmate control run.\n`);
+    // A worker's shell script must run under sh after any clone, and a host with core.autocrlf=true checks out CRLF.
+    writeFileSync(join(seed, '.gitattributes'), '* text=auto eol=lf\n');
     await this.git(['-C', seed, 'add', '-A']);
     await this.git(['-C', seed, 'commit', '-qm', `start the ${name} project`]);
     await this.git(['-C', seed, 'push', '-q', '-u', 'origin', 'main']);
