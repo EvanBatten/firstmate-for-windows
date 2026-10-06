@@ -247,7 +247,7 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended', 'remote.ahead>=1'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended', 'remote.ahead>=1', 'remote.merged>=1', 'session.started', 'state.settled', 'teardown.refused', 'primary.idle.inflight'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
@@ -361,6 +361,24 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'turn.ended', at(15), { turns: session.signals.turns }).ok, true);
     const late = check(home, 'turn.ended', at(45), { turns: session.signals.turns });
     assert.deepEqual({ ok: late.ok, reason: late.reason, needs: late.needs }, { ok: false, reason: 'turn.ended: no primary turn has ended since the say', needs: 'turn' });
+  });
+
+  test('the wait loop opens the in-flight window on an In flight item and closes it on the first done line', async () => {
+    const home = buildHome('ship-in-flight');
+    const parsed = parseUntil('primary.idle.inflight');
+    const deps = { gitAhead: {}, gitUnlanded: {}, seeds: {}, counters: {}, signals: { turns: [], startedAt: null }, inflight: { from: null, to: null } };
+    const t0 = Date.now();
+    const open = await holdsNow({ home, parsed, ctx: ctx(), deps });
+    assert.deepEqual({ ok: open.ok, reason: open.reason }, { ok: false, reason: 'primary.idle.inflight: the primary rested 0 s while the task was In flight so far' });
+    assert.ok(deps.inflight.from >= t0 && deps.inflight.from <= Date.now() && deps.inflight.to === null, JSON.stringify(deps.inflight));
+    writeFileSync(join(home, 'state', 't1.status'), 'working: x\ndone [at=1]: ready\n');
+    const t1 = Date.now();
+    const closed = await holdsNow({ home, parsed, ctx: ctx(), deps });
+    assert.equal(closed.reason, 'primary.idle.inflight: the primary rested 0 s while the task was In flight before its done: line');
+    assert.ok(deps.inflight.to >= t1, JSON.stringify(deps.inflight));
+    const late = { ...deps, inflight: { from: null, to: null } };
+    await holdsNow({ home, parsed, ctx: ctx(), deps: late });
+    assert.deepEqual(late.inflight, { from: null, to: null }, 'a task first seen already done never opens the window');
   });
 
   test('mainShaFromLsRemote reads main', () => {
@@ -693,7 +711,8 @@ describe('fake-herdr end to end', () => {
     assert.equal(r.json.trace, 'e2e-proves');
     assert.deepEqual(r.json.proves, { 'row-register': 1 });
     assert.deepEqual(r.json.code, { sha, dirty: false });
-    assert.deepEqual(r.json.health, { until: 'home.clean && tabs.clean && wake.empty', ok: true, reason: 'holds' });
+    const { until, ok, reason } = r.json.health;
+    assert.deepEqual({ until, ok, reason }, { until: 'home.clean && tabs.clean && wake.empty && state.settled', ok: true, reason: 'holds' });
 
     const rec = runDrive(['record', join(env.FM_DRIVE_EVIDENCE, 'result.json')], env);
     assert.equal(rec.status, 0, rec.stderr);
@@ -992,6 +1011,22 @@ describe('fake-herdr end to end', () => {
     assert.ok(!existsSync(leaseFile(bare)), 'each run released its lease');
   });
 
+  test('a remote merge counts only a pull request the forge merged, never a push to main', () => {
+    const bare = remoteWithHistory();
+    const trace = { ...remoteTrace, steps: [remoteTrace.steps[0], { ...remoteTrace.steps[1], until: 'remote.merged>=1' }] };
+    const runWith = (mode) => {
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: remoteScript([{ pushRemote: 'NOTES.md', content: `hello from ${mode}\n` }]), FM_DRIVE_REMOTE_ORIGIN: bare, FM_DRIVE_GH: join(HERE, 'fake-gh.mjs'), FAKE_GH_MODE: mode, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      return runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    };
+    const merged = runWith('merged');
+    assert.equal(merged.status, 0, `stdout: ${merged.stdout}\nstderr: ${merged.stderr}`);
+    for (const mode of ['pushed', 'none']) {
+      const pushed = runWith(mode);
+      assert.equal(pushed.status, 1, `${mode}: ${pushed.stdout}`);
+      assert.match(pushed.json.steps.at(-1).reason, /remote\.merged>=1: 0 pull request\(s\) merged by the forge since the say, 1 commit\(s\) on remote main/, mode);
+    }
+  });
+
   test('a second run cannot lease a remote another live run holds', () => {
     const bare = remoteWithHistory();
     scratch.push(leaseFile(bare));
@@ -1020,7 +1055,7 @@ describe('fake-herdr end to end', () => {
     const runWith = (cleanup) => {
       const script = join(tmp('script'), 'script.json');
       writeFileSync(script, JSON.stringify({ 'add my project': base['add my project'], 'dispatch a worker': base['dispatch a worker'], 'clean up': cleanup }));
-      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_HEALTH_MS: '3000', FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
       const trace = {
         feature: 'e2e-cleanup-turn',
         steps: [

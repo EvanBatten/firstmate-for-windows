@@ -134,10 +134,11 @@ describe('record', () => {
 
   test('a run whose health check waited on anything but the driver\'s health check is refused', () => {
     const { root, sha } = ledgerRepo(BASE);
-    for (const [until, shown] of [['true', 'true'], ['home.clean', 'home.clean'], [undefined, 'nothing']]) {
+    const before = 'home.clean && tabs.clean && wake.empty';
+    for (const [until, shown] of [['true', 'true'], ['home.clean', 'home.clean'], [before, before], [undefined, 'nothing']]) {
       const r = record(root, resultFile('held', sha, (res) => ({ ...res, health: { until, ok: true, reason: 'holds' } })));
       assert.equal(r.status, 2, `until ${shown}`);
-      assert.equal(r.stderr, `fm-drive: record refused: the run's home health check waited on ${shown}, not home.clean && tabs.clean && wake.empty\n`);
+      assert.equal(r.stderr, `fm-drive: record refused: the run's home health check waited on ${shown}, not home.clean && tabs.clean && wake.empty && state.settled\n`);
       assert.equal(r.tsv, BASE);
     }
   });

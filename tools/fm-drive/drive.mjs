@@ -5,7 +5,7 @@ import { join, basename } from 'node:path';
 import { loadTrace, interpolate, refuseVacuousOnFreshHome, TraceError, RELAUNCH } from './lib/trace.mjs';
 import { Session, driveRoot, REST_BEFORE_SAY_MS } from './lib/session.mjs';
 import { waitUntil, holdsNow } from './lib/wait.mjs';
-import { parseUntil } from './lib/predicates.mjs';
+import { parseUntil, REMOTE_ATOMS } from './lib/predicates.mjs';
 import { HerdrError } from './lib/herdr.mjs';
 import { record, HEALTH } from './lib/ledger.mjs';
 
@@ -132,12 +132,13 @@ async function run(trace, traceName) {
       gitAhead,
       gitUnlanded: {},
       remote: null,
+      inflight: { from: null, to: null },
       remoteAhead: (base) => session.remoteAhead(base),
       seeds: session.seeds,
       counters: session.counters,
     };
     const onSnapshot = (snap) => session.noteTaskIds(snap);
-    const wantRemote = steps.some((s) => s.parsed.atoms.some((a) => a.name === 'remote.ahead'));
+    const wantRemote = steps.some((s) => s.parsed.atoms.some((a) => REMOTE_ATOMS.includes(a.name)));
     let since = await session.baseline(wantRemote);
     const ctxNow = () => ({ since, seeds: session.seeds, seenTaskIds: session.seenTaskIds });
     const timed = (i) => {
@@ -235,11 +236,16 @@ async function run(trace, traceName) {
     }
     result.pass = allOk && result.steps.length === steps.length && result.steps.at(-1).ok;
     if (result.pass) {
-      const h = await holdsNow({ home: session.home, parsed: parseUntil(HEALTH), ctx: ctxNow(), deps, onSnapshot });
-      result.health = { until: HEALTH, ok: h.ok, reason: h.reason };
+      // The last claim can hold while the primary is still finishing its cleanup, so the home is
+      // judged only after the primary has rested and its records have had time to settle.
+      const rest = await session.awaitRest(REST_BEFORE_SAY_MS);
+      const h = rest.ok
+        ? await waitUntil({ home: session.home, parsed: parseUntil(HEALTH), ctx: ctxNow(), budgetMs: Number.parseInt(env.FM_DRIVE_HEALTH_MS || '60000', 10), deps, onSnapshot })
+        : { ok: false, reason: `the primary never came to rest within ${Math.round(REST_BEFORE_SAY_MS / 1000)} s after the last step`, ms: 0 };
+      result.health = { until: HEALTH, ok: h.ok, reason: h.reason, restMs: rest.waitedMs, ms: h.ms };
       log(`health: ${h.ok ? 'clean' : `MISSED (${h.reason})`}`);
     }
-    exitCode = result.pass ? 0 : 1;
+    exitCode = result.pass && result.health?.ok ? 0 : 1;
   } catch (err) {
     if (err instanceof TraceError) {
       result.rejected = err.message;

@@ -61,7 +61,7 @@ The shipped traces are `register`, `ship-local`, `steer`, `watcher-wake`, `pr-la
 
 ### Claims about what happened after the say
 
-Some atoms count only what happened after the step's say: `turn.ended`, `wake.delivered`, `remote.ahead` and `lock.rotated`.
+Some atoms count only what happened after the step's say: `turn.ended`, `wake.delivered`, `remote.ahead`, `remote.merged` and `lock.rotated`.
 The driver records a baseline right before it types each say or `$relaunch`, and a `""` step uses the baseline of the say it waits on.
 These atoms are false at the say by construction, so a step that contains one passes only after something happened.
 
@@ -69,8 +69,15 @@ These atoms are false at the say by construction, so a step that contains one pa
 - `wake.delivered:REASON>=N` holds once `state/.watch-deliveries.log` has gained N lines with that reason since the say. REASON is one of `signal`, `stale`, `heartbeat`, `check`, `needs-decision`, `captain-held`, or `paused`.
 - `git.unlanded:NAME>=N` holds while the local branches of `projects/NAME` hold at least N commits that main lacks. It is a plain state atom, not a since-say atom.
 - `remote.ahead>=N` holds once main of the `{{remoteOrigin}}` repo is N commits past where it stood at the say. It needs a say that names `{{remoteOrigin}}`.
+- `remote.merged>=N` holds once `gh` reports N pull requests merged into that main whose merge commits landed since the say. A commit pushed straight to main never counts, even when GitHub marks its pull request merged, because that merge commit is the pull request's own head. `FM_DRIVE_GH` names the `gh` binary.
 - `{{remoteOrigin}}` is one standing scratch repo from `FM_DRIVE_REMOTE_ORIGIN`, a space-separated list of URLs. The driver leases one URL per run with a lease file under the temp directory, mirrors it under the scratch directory, and never creates, resets, or deletes a repo or fetches into the home's own clone. Two runs at once need two URLs; a run that finds every URL leased by a live run exits 3.
 - `git.ahead:NAME` is refused unless NAME is the project the driver seeded through `{{projectOrigin}}`. An unseeded clone would count any main as ahead.
+
+Three more atoms read records a behavior leaves behind:
+
+- `session.started` holds when `state/.session-start-complete` names the pid in `state/.lock`, so the session-start digest finished for the session now running.
+- `teardown.refused` holds when some `state/<id>.teardown-refused` records a cleanup that refused because it could not prove the work landed. Pair it with `turn.ended` in a following `""` step to also require that the turn ended with the work still there.
+- `primary.idle.inflight` holds once the primary rested at least 15 s while a backlog item was In flight and no `done:` line existed yet. The driver judges it from the Herdr status it logs to `primary-turns.log` and the backlog and status records it saw, so a primary that keeps one turn running until the worker is done fails it.
 
 ## Run one
 
@@ -86,14 +93,14 @@ Keep that CLI transport; do not replace it with a socket-only client.
 A trace that names `{{remoteOrigin}}` needs `FM_DRIVE_REMOTE_ORIGIN`, for example `FM_DRIVE_REMOTE_ORIGIN="https://github.com/<owner>/<scratch-repo>"`.
 The header of [`tools/fm-drive/lib/session.mjs`](../../../tools/fm-drive/lib/session.mjs) lists the other knobs.
 
-Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3 the environment failed (Herdr unusable, clone failed, primary never ready) or the launched home was not the captain path.
+Exit codes: 0 every step held and the home was healthy, 1 a step did not hold or the health check missed, 2 the trace was refused, 3 the environment failed (Herdr unusable, clone failed, primary never ready) or the launched home was not the captain path.
 
 ## Read the result
 
 ```json
 { "feature": "register", "trace": "register", "proves": {}, "code": { "sha": "<40 hex>", "dirty": false },
   "wallMs": 0, "pass": true, "readyMs": 0, "operableMs": 0, "predicateMs": 0,
-  "health": { "until": "home.clean && tabs.clean && wake.empty", "ok": true, "reason": "holds" },
+  "health": { "until": "home.clean && tabs.clean && wake.empty && state.settled", "ok": true, "reason": "holds", "restMs": 0, "ms": 0 },
   "fidelity": { "claudeConfig": "clean", "hooks": "repo", "captainMd": "untouched", "model": "opus" },
   "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched" },
   "steps": [ { "say": "...", "until": "...", "ms": 0, "ok": true, "reason": "...", "sayMs": 0 } ],
@@ -125,7 +132,7 @@ The evidence directory keeps `result.json`, `captain.log`, `primary-turns.log` (
 A trace is the session tier of `verify-firstmate`.
 It uses the same throwaway-home clone, the same real primary in Herdr, and the same claims read from `state/`, `data/`, Herdr's tab list and the project's git refs, kept as evidence under the temp directory.
 A trace names the inventory rows it proves in `proves`, a map from row id to that row's last proving step.
-`trace` is the trace file's name, `code` is the commit the home was cloned from and whether the checkout had uncommitted changes, and `health` is the home's cleanliness checked once after the last step held.
+`trace` is the trace file's name, `code` is the commit the home was cloned from and whether the checkout had uncommitted changes, and `health` is the home's cleanliness after the last step held. The driver first waits up to 120 s for the primary to rest (`restMs`), then up to 60 s for the claim (`ms`), so a cleanup still running when the last claim held is judged once it finishes. `state.settled` fails on a pending `state/<id>.backlog-close` or a lock left in `state/` other than the session's `.lock`, `.watch.lock` and `.supervise-daemon.lock`.
 `node tools/fm-drive/drive.mjs record <result.json>` turns a result into inventory rows as `verify-firstmate` describes; nothing else flips a trace row.
 A session script may call the driver instead of `session-lib.sh`'s poll loop when it wants deadlines, file-watch waits and a machine-readable timing record; wire that through `verify.sh` and `coverage.tsv` as `verify-firstmate` describes, and keep one owner for each feature's claims.
 Report the result JSON verbatim, then the outcome in the captain's terms.

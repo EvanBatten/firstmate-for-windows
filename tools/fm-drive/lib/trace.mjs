@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, TIMING_ONLY, RESERVED_UNTIL } from './predicates.mjs';
+import { parseUntil, snapshotHome, evaluateUntil, STARTUP_ONLY, TIMING_ONLY, RESERVED_UNTIL, REMOTE_ATOMS } from './predicates.mjs';
 
 export class TraceError extends Error {
   constructor(message) {
@@ -187,8 +187,8 @@ function refuseMisplacedSinceAtoms(steps, { project }) {
     }
     for (const a of step.parsed.atoms) earlier.add(a.raw);
     for (const atom of step.parsed.atoms) {
-      if (atom.name === 'remote.ahead' && !remote) {
-        throw new TraceError(`steps[${i}].until: remote.ahead needs a say that names {{remoteOrigin}}; the driver baselines only the remote it provisioned`);
+      if (REMOTE_ATOMS.includes(atom.name) && !remote) {
+        throw new TraceError(`steps[${i}].until: ${atom.name} needs a say that names {{remoteOrigin}}; the driver baselines only the remote it provisioned`);
       }
       if (atom.name === 'git.ahead' && atom.args.name !== seeded) {
         throw new TraceError(`steps[${i}].until: git.ahead:${atom.args.name} needs the project the driver seeds through {{projectOrigin}}; an unseeded clone counts any main as ahead`);

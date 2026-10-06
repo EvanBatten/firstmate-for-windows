@@ -8,7 +8,7 @@
   "steps": [
     {
       "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",
-      "until": "projects.registered:greeter",
+      "until": "projects.registered:greeter && session.started",
       "budgetSec": 300
     }
   ]

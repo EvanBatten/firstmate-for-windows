@@ -2,7 +2,7 @@
   "feature": "cleanup-refusal",
   "project": "greeter",
   "proves": {
-    "agents-7-teardown-refusal": 4
+    "agents-7-teardown-refusal": 5
   },
   "steps": [
     {
@@ -22,8 +22,13 @@
     },
     {
       "say": "hold off on greet.sh for now. clean up the greeter worker before anything lands, and tell me what happened.",
-      "until": "turn.ended && tasks.count>=1 && git.unlanded:greeter>=1",
+      "until": "teardown.refused && tasks.count>=1 && git.unlanded:greeter>=1",
       "budgetSec": 300
+    },
+    {
+      "say": "",
+      "until": "turn.ended && teardown.refused && tasks.count>=1 && git.unlanded:greeter>=1",
+      "budgetSec": 180
     },
     {
       "say": "ok, keep that work after all: verify greet.sh by running it, then land it on main; you have my approval. clean up after.",

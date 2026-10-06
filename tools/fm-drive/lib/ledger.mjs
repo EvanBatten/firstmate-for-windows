@@ -7,7 +7,7 @@ const BEHAVIORS = join('.agents', 'skills', 'verify-firstmate', 'behaviors.tsv')
 const TRACES = 'tools/fm-drive/traces';
 const TRUNK = 'origin/main';
 const STATUSES = ['proven', 'unproven', 'broken', 'blocked-here'];
-export const HEALTH = 'home.clean && tabs.clean && wake.empty';
+export const HEALTH = 'home.clean && tabs.clean && wake.empty && state.settled';
 
 // waitUntil's last look fires when the deadline timer does, so a step that
 // held on that look reports a little over its budget.
