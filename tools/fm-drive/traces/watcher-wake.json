@@ -21,7 +21,7 @@
     },
     {
       "say": "",
-      "until": "status.verb:done && wake.delivered:signal>=1 && beacon.fresh",
+      "until": "status.verb:done && primary.idle.inflight && wake.delivered:signal>=1 && beacon.fresh",
       "budgetSec": 420
     },
     {

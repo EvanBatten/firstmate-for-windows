@@ -761,6 +761,31 @@ test_local_only_truly_unpushed_refuses() {
   pass "local-only worktree with truly unpushed work is refused (safety preserved)"
 }
 
+test_unlanded_refusal_is_recorded_until_a_later_cleanup_succeeds() {
+  local case_dir rc record wt_head
+  case_dir=$(make_case refusal-record)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "unlanded work"
+  record="$case_dir/state/task-x1.teardown-refused"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "refusal-record: teardown should refuse"
+  grep -Eq '^refused \[at=[0-9]+\]: ' "$record" 2>/dev/null \
+    || fail "refusal-record: the refusal left no durable record: $(cat "$record" 2>&1)"
+  [ -e "$case_dir/state/task-x1.meta" ] || fail "refusal-record: the refusal removed the task record"
+
+  wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "refusal-record: cleanup after landing failed: $(cat "$case_dir/stderr")"
+  [ ! -e "$record" ] || fail "refusal-record: a completed cleanup left the refusal record behind"
+  pass "a refused cleanup leaves a durable record that a later completed cleanup removes"
+}
+
 test_local_only_merged_to_local_main_allows() {
   local case_dir rc
   case_dir=$(make_case merged-main)
@@ -4254,6 +4279,7 @@ test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses
+test_unlanded_refusal_is_recorded_until_a_later_cleanup_succeeds
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses

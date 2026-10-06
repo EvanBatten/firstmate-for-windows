@@ -1861,6 +1861,13 @@ teardown_treehouse_return() {
   return 1
 }
 
+# The refusal outlives this process as state/<id>.teardown-refused, so a later
+# session sees the stop-and-investigate result; a completed teardown removes it.
+record_unlanded_refusal() {
+  printf 'refused [at=%s]: %s holds work cleanup could not prove landed\n' "$(date +%s)" "$WT" \
+    > "$STATE/$ID.teardown-refused" 2>/dev/null || true
+}
+
 validate_worktree_teardown_safety() {
   local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
   [ -d "$WT" ] || return 0
@@ -3441,8 +3448,9 @@ if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
     safety_rc=$?
     if [ "$safety_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ]; then
       cleanup_stale_lock_for_safety_check "$WT" || exit 1
-      validate_worktree_teardown_safety || exit 1
+      validate_worktree_teardown_safety || { record_unlanded_refusal; exit 1; }
     else
+      record_unlanded_refusal
       exit 1
     fi
   fi
@@ -3775,7 +3783,7 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
   "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" "$STATE/$ID.devin-config.json" \
-  "$STATE/.$ID.branch-outcome-index" \
+  "$STATE/.$ID.branch-outcome-index" "$STATE/$ID.teardown-refused" \
   "$STATE/.secondmate-relaunch-$ID" "$STATE/.secondmate-relaunch-bound-$ID"
 # The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
 # retired endpoint; teardown only runs after landing is confirmed, so any

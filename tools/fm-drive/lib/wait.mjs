@@ -1,6 +1,6 @@
 import { watch } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { snapshotHome, evaluateUntil, recordedPaneIds } from './predicates.mjs';
+import { snapshotHome, evaluateUntil, recordedPaneIds, noteInflight } from './predicates.mjs';
 
 export const DEBOUNCE_MS = 40;
 export const SAFETY_TICK_MS = 1000;
@@ -10,12 +10,13 @@ export const FACT_MIN_INTERVAL_MS = { git: 0, tabs: 3000, panes: 3000, turn: 100
 
 // deps:
 //   liveness()            -> { alive: boolean, reason: string }   (sync or async)
-//   signals               -> { blocked: string|null, turns: TurnSpan[] }  set by the session's event stream
+//   signals               -> { blocked: string|null, turns: TurnSpan[], startedAt: number|null }  set by the session's event stream
+//   inflight              -> InflightWindow every snapshot updates
 //   fetchHerdr(kind, snap)-> fills snap.herdr for kind 'tabs' | 'panes', or samples the primary for 'turn'
 //   gitAhead              -> shared cache { [name]: { sha, count } } fetchFact fills
 //   gitUnlanded           -> shared cache { [name]: { tips, count } } fetchFact fills
-//   remote                -> { base, sha, count } of the {{remoteOrigin}} repo's main, which fetchFact fills
-//   remoteAhead(base)     -> { sha, count } of the remote's main past base
+//   remote                -> { base, sha, count, merged } of the {{remoteOrigin}} repo's main, which fetchFact fills
+//   remoteAhead(base)     -> { sha, count, merged } of the remote's main past base; merged is null when the forge did not answer
 //   seeds                 -> { [name]: sha }
 //   counters              -> { gitSpawns }
 function observe(home, deps, onSnapshot) {
@@ -23,6 +24,11 @@ function observe(home, deps, onSnapshot) {
   snap.gitAhead = deps.gitAhead;
   snap.gitUnlanded = deps.gitUnlanded;
   snap.turns = deps.signals?.turns ?? [];
+  snap.turnOpenAt = deps.signals?.startedAt ?? null;
+  if (deps.inflight) {
+    noteInflight(deps.inflight, snap);
+    snap.inflight = deps.inflight;
+  }
   snap.remote = deps.remote ?? null;
   onSnapshot?.(snap);
   return snap;
@@ -135,9 +141,8 @@ export async function waitUntil({ home, parsed, ctx, budgetMs, deps, onSnapshot 
     timers.push(setTimeout(async () => {
       // One last look right at the deadline, so a claim that became true in
       // the final debounce window is not lost.
-      const snap = observe(home, deps);
-      const r = evaluateUntil(parsed, snap, ctx);
-      finish(r.ok ? { ok: true, reason: r.reason, snap } : { ok: false, reason: `not within ${Math.round(budgetMs / 1000)} s: ${r.reason}`, timeout: true, snap });
+      const r = await holdsNow({ home, parsed, ctx, deps });
+      finish(r.ok ? { ok: true, reason: r.reason, snap: r.snap } : { ok: false, reason: `not within ${Math.round(budgetMs / 1000)} s: ${r.reason}`, timeout: true, snap: r.snap });
     }, Math.max(0, deadline - Date.now())));
     evaluate();
   });

@@ -8,6 +8,6 @@
     { "say": "ahoy! add my project from /tmp/greeter.git as greeter", "until": "projects.registered:greeter", "ms": 41000, "ok": true, "reason": "projects.registered:greeter" },
     { "say": "dispatch a worker", "until": "tasks.count>=1 && backlog.inflight>=1", "ms": 90000, "ok": true, "reason": "tasks.count>=1 && backlog.inflight>=1" }
   ],
-  "health": { "until": "home.clean && tabs.clean && wake.empty", "ok": true, "reason": "home.clean && tabs.clean && wake.empty" },
+  "health": { "until": "home.clean && tabs.clean && wake.empty && state.settled", "ok": true, "reason": "home.clean && tabs.clean && wake.empty" },
   "evidence": "/tmp/fm-drive-artifacts/register-20260929T150000Z"
 }

@@ -16,7 +16,7 @@
     },
     {
       "say": "once the pull request is up and looks right, merge it; you have my approval. then clean up and tell me.",
-      "until": "remote.ahead>=1",
+      "until": "remote.merged>=1",
       "budgetSec": 400
     },
     {

@@ -9,6 +9,8 @@
 //   FM_DRIVE_TOOLS_DIR    tools dir linked into the home as .tools (default: <root>/.tools)
 //   FM_DRIVE_PANE_PATH_EXTRA  extra PATH entries for the pane, before the inherited PATH
 //   FM_DRIVE_REMOTE_ORIGIN    space-separated scratch repo URLs; a trace that names {{remoteOrigin}} leases one per run
+//   FM_DRIVE_HEALTH_MS    how long the end-of-run health check waits for the home to settle (default 60000)
+//   FM_DRIVE_GH           gh binary that answers which pull requests merged into that repo (default: gh on PATH)
 //   CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CODE_OATH_TOKEN  passed to the pane as CLAUDE_CODE_OAUTH_TOKEN; never logged
 
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, cpSync, readdirSync, symlinkSync, realpathSync, lstatSync, statSync, copyFileSync, chmodSync, linkSync, readlinkSync, openSync, closeSync } from 'node:fs';
@@ -18,7 +20,7 @@ import { join, dirname, resolve, delimiter, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { Herdr, HerdrError, atShellPrompt, sleep } from './herdr.mjs';
-import { recordedPaneIds, readDeliveries, countLines, mainShaFromLsRemote, REST_STATUSES } from './predicates.mjs';
+import { recordedPaneIds, readDeliveries, countLines, mainShaFromLsRemote, mergedPrCount, REST_STATUSES } from './predicates.mjs';
 
 // Claude Code shows the trust dialog for C:\... but looks the project up as C:/..., so every slash and drive-letter form is written.
 export function trustProjectKeys(home) {
@@ -457,7 +459,28 @@ export class Session {
 
   async remoteAhead(base) {
     const sha = await this.fetchRemoteMain();
-    return { sha, count: sha === base ? 0 : Number.parseInt(await this.mirrorGit(['rev-list', '--count', `${base}..${sha}`]), 10) };
+    if (sha === base) return { sha, count: 0, merged: 0 };
+    const since = (await this.mirrorGit(['rev-list', `${base}..${sha}`])).split('\n').filter(Boolean);
+    const merged = await this.mergedPulls().then((prs) => mergedPrCount(prs, since), () => null);
+    return { sha, count: since.length, merged };
+  }
+
+  mergedPulls() {
+    const bin = this.env.FM_DRIVE_GH || 'gh';
+    const args = ['pr', 'list', '--repo', githubRepo(this.remote.url), '--state', 'merged', '--base', 'main', '--limit', '30', '--json', 'number,mergeCommit,headRefOid'];
+    this.counters.gitSpawns += 1;
+    return new Promise((resolvePromise, reject) => {
+      const child = /\.(?:mjs|cjs|js)$/.test(bin)
+        ? spawn(process.execPath, [bin, ...args], { env: this.env, stdio: ['ignore', 'pipe', 'ignore'], shell: false, windowsHide: true })
+        : spawn(bin, args, { env: this.env, stdio: ['ignore', 'pipe', 'ignore'], shell: false, windowsHide: true });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`gh exited ${code}`));
+        try { resolvePromise(JSON.parse(out)); } catch (err) { reject(err); }
+      });
+    });
   }
 
   launchLine() {
@@ -990,6 +1013,11 @@ export class Session {
   removeScratch() {
     try { rmSync(this.scratch, { recursive: true, force: true }); } catch {}
   }
+}
+
+// OWNER/REPO for a GitHub URL; any other origin is passed to gh as given.
+export function githubRepo(url) {
+  return url.match(/github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/)?.[1] ?? url;
 }
 
 function safeList(p) {

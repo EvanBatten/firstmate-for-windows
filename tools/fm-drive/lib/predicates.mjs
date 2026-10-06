@@ -13,12 +13,22 @@
 //   inbox.handled               some state/<id>.inbox/handled/ holds an acknowledged steer
 //   lock.held                   state/.lock exists and is non-empty (startup-only; never enough alone)
 //   lock.rotated                state/.lock differs from the identity in the say's baseline
+//   session.started             state/.session-start-complete names the pid that holds state/.lock, so
+//                               the session-start digest ran to the end for the session now running
 //   git.ahead:NAME>=N           projects/NAME main is at least N commits ahead of the seeded base
 //                               (refused unless NAME is the project seeded through {{projectOrigin}})
 //   git.unlanded:NAME>=N        local branches of projects/NAME hold at least N commits main lacks
 //   remote.ahead>=N             main of the {{remoteOrigin}} repo is at least N commits past where it
 //                               stood at the say (needs a say that names {{remoteOrigin}})
+//   remote.merged>=N            the forge reports at least N pull requests merged into that main since
+//                               the say, each by a merge commit that is not the PR's own head, so a
+//                               direct push to main never counts (needs a say that names {{remoteOrigin}})
 //   home.clean                  no state/*.meta task record remains
+//   state.settled               no state/<id>.backlog-close is pending and no lock is left in state/
+//                               but the session's .lock and the long-lived .watch.lock and
+//                               .supervise-daemon.lock
+//   teardown.refused            some state/<id>.teardown-refused records a cleanup that refused
+//                               because it could not prove the task's work landed
 //   tabs.clean                  no herdr tab labelled fm-<id> for a task this run ever recorded is open
 //   worker.alive                every recorded task's herdr pane still answers
 //   wake.empty                  state/.wake-queue is missing or has no non-blank line
@@ -27,13 +37,16 @@
 //   turn.ended                  the primary started a turn after the say and it came to rest (idle, done
 //                               or blocked); it only times a claim, so pair it with a home record an
 //                               earlier step made true
+//   primary.idle.inflight       the primary rested for at least IDLE_MIN_MS while a backlog item was In
+//                               flight and before any done: line, judged from the primary's Herdr
+//                               status and the home's backlog and status records as the driver saw them
 //   wake.delivered:REASON>=N    state/.watch-deliveries.log gained at least N lines with that reason
 //                               since the say (signal, stale, heartbeat, check, needs-decision,
 //                               captain-held, paused)
 //
 // Reserved, refused: "pong" and "bypass permissions on" prove only that the harness started.
 //
-// Since-say atoms (lock.rotated, turn.ended, wake.delivered, remote.ahead) compare against ctx.since,
+// Since-say atoms (lock.rotated, turn.ended, wake.delivered, remote.ahead, remote.merged) compare against ctx.since,
 // the Baseline the driver captured right before it typed the say a step waits on. They are false at
 // the say by construction.
 
@@ -46,7 +59,14 @@ export const TIMING_ONLY = ['turn.ended'];
 export const REST_STATUSES = ['idle', 'done', 'blocked'];
 export const STATUS_VERBS = ['done', 'needs-decision', 'blocked', 'failed', 'working', 'paused', 'resolved', 'note', 'captain-held'];
 export const HERDR_ATOMS = ['tabs.clean', 'worker.alive'];
+// Atoms about the {{remoteOrigin}} repo; the driver baselines that repo only when a step uses one.
+export const REMOTE_ATOMS = ['remote.ahead', 'remote.merged'];
 export const WAKE_REASONS = ['signal', 'stale', 'heartbeat', 'check', 'needs-decision', 'captain-held', 'paused'];
+// Locks that live as long as their owner: the session, the watcher and the away daemon.
+export const LIFETIME_LOCKS = ['.lock', '.watch.lock', '.supervise-daemon.lock'];
+// Longer than one status poll on the CLI transport (10 s), so a rest whose end the driver saw late
+// cannot make the overlap on its own.
+export const IDLE_MIN_MS = 15_000;
 const NAME = '[A-Za-z0-9._-]+';
 
 const ATOMS = [
@@ -60,16 +80,21 @@ const ATOMS = [
   { name: 'inbox.handled', re: /^inbox\.handled$/, args: [] },
   { name: 'lock.held', re: /^lock\.held$/, args: [] },
   { name: 'lock.rotated', re: /^lock\.rotated$/, args: [] },
+  { name: 'session.started', re: /^session\.started$/, args: [] },
   { name: 'git.ahead', re: new RegExp(`^git\\.ahead:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
   { name: 'git.unlanded', re: new RegExp(`^git\\.unlanded:(${NAME})>=(\\d+)$`), args: ['name', 'n'], int: ['n'], min: { n: 1 } },
   { name: 'remote.ahead', re: /^remote\.ahead>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
+  { name: 'remote.merged', re: /^remote\.merged>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
   { name: 'home.clean', re: /^home\.clean$/, args: [] },
+  { name: 'state.settled', re: /^state\.settled$/, args: [] },
+  { name: 'teardown.refused', re: /^teardown\.refused$/, args: [] },
   { name: 'tabs.clean', re: /^tabs\.clean$/, args: [] },
   { name: 'worker.alive', re: /^worker\.alive$/, args: [] },
   { name: 'wake.empty', re: /^wake\.empty$/, args: [] },
   { name: 'beacon.fresh', re: /^beacon\.fresh$/, args: [] },
   { name: 'file.contains', re: /^file\.contains:([^:]+):(.+)$/, args: ['rel', 'needle'] },
   { name: 'turn.ended', re: /^turn\.ended$/, args: [] },
+  { name: 'primary.idle.inflight', re: /^primary\.idle\.inflight$/, args: [] },
   { name: 'wake.delivered', re: new RegExp(`^wake\\.delivered:(${WAKE_REASONS.join('|')})>=(\\d+)$`), args: ['reason', 'n'], int: ['n'], min: { n: 1 } },
 ];
 
@@ -231,10 +256,15 @@ export function snapshotHome(home, nowMs = Date.now()) {
     projects[name] = { gitDir: true, mainSha: readMainSha(gitDir), branchTips: readBranchTips(gitDir) };
   }
   const wake = readText(join(state, '.wake-queue'));
+  const stateNames = listDir(state);
   return {
     home,
     nowMs,
     lock: (readText(join(state, '.lock')) ?? '').trim() || null,
+    sessionStartComplete: (readText(join(state, '.session-start-complete')) ?? '').trim() || null,
+    teardownRefusals: stateNames.filter((f) => f.endsWith('.teardown-refused') && !f.startsWith('.') && (readText(join(state, f)) ?? '').trim() !== ''),
+    pendingCloses: stateNames.filter((f) => f.endsWith('.backlog-close') && !f.startsWith('.')),
+    lockDebris: stateNames.filter(isLockDebris),
     projectsMd: readText(join(data, 'projects.md')),
     backlogMd: readText(join(data, 'backlog.md')),
     projects,
@@ -252,9 +282,13 @@ export function snapshotHome(home, nowMs = Date.now()) {
     gitAhead: {},
     // Filled by the wait loop: { [name]: { tips, count } }.
     gitUnlanded: {},
-    // Filled by the wait loop: the primary's turn spans, [{ startedAt, restAt }].
+    // Filled by the wait loop: the primary's turn spans, [{ startedAt, restAt }], and the start of the
+    // turn still running (null while the primary rests).
     turns: [],
-    // Filled by the wait loop: { base, sha, count } for the {{remoteOrigin}} repo's main.
+    turnOpenAt: null,
+    // Filled by the wait loop: the InflightWindow it has seen so far.
+    inflight: null,
+    // Filled by the wait loop: { base, sha, count, merged } for the {{remoteOrigin}} repo's main.
     remote: null,
   };
 }
@@ -269,6 +303,41 @@ export function backlogSectionItems(text, section) {
     if (inside && /^- \[.\]/.test(line)) count += 1;
   }
   return count;
+}
+
+// A lock entry (the lock, its owner directory, a steal or acquire helper) whose lock is not one
+// that lives as long as its owner.
+function isLockDebris(name) {
+  if (name === '.lock') return false;
+  const base = /^(.*?\.lock)(?:\..*)?$/.exec(name)?.[1];
+  return base !== undefined && (base === '.lock' || !LIFETIME_LOCKS.includes(base));
+}
+
+const DONE_LINE = /^done(?: \[[^\]\n]*\])*:/m;
+
+/**
+ * When a task was In flight without a done: line, as the wait loop saw it: from is the first
+ * snapshot that showed it, to the first later snapshot with a done: line. Both only ever get set.
+ * @typedef {{ from: number|null, to: number|null }} InflightWindow
+ */
+export function noteInflight(window, snap) {
+  const done = Object.values(snap.status).some((t) => DONE_LINE.test(t));
+  if (window.from === null) {
+    if (!done && backlogSectionItems(snap.backlogMd, 'In flight') >= 1) window.from = snap.nowMs;
+  } else if (window.to === null && done) {
+    window.to = snap.nowMs;
+  }
+}
+
+// The gaps between turn spans, the last one running until the open turn began or until now.
+export function restIntervals(turns, openAt, now) {
+  return turns.map((t, i) => ({ from: t.restAt, to: turns[i + 1]?.startedAt ?? openAt ?? now }));
+}
+
+/** @param {{ mergeCommit?: { oid?: string }|null, headRefOid?: string }[]} prs  gh pr list --json mergeCommit,headRefOid */
+export function mergedPrCount(prs, shasSince) {
+  const since = new Set(shasSince);
+  return prs.filter((pr) => since.has(pr.mergeCommit?.oid) && pr.mergeCommit.oid !== pr.headRefOid).length;
 }
 
 export function recordedPaneIds(snap) {
@@ -338,6 +407,12 @@ export function evaluateAtom(atom, snap, ctx) {
       const ok = ctx.since != null && snap.lock !== null && snap.lock !== ctx.since.lock;
       return { ok, reason: `lock ${snap.lock ?? 'absent'} vs baseline ${ctx.since?.lock ?? 'none'}` };
     }
+    case 'session.started': {
+      const holder = snap.lock?.split('\n')[0] ?? null;
+      const completed = snap.sessionStartComplete?.split('\n')[0] ?? null;
+      const ok = holder !== null && completed === holder;
+      return { ok, reason: completed === null ? 'no session-start digest completed' : `digest completed for ${completed}, lock held by ${holder ?? 'nobody'}` };
+    }
     case 'git.ahead': {
       const proj = snap.projects[a.name];
       if (!proj?.mainSha) return { ok: false, reason: `projects/${a.name} has no main yet` };
@@ -363,8 +438,23 @@ export function evaluateAtom(atom, snap, ctx) {
       const reason = r ? (r.count ? `${r.count} commit(s) on remote main since the say` : 'remote main unchanged since the say') : 'remote main not fetched';
       return { ok: false, reason, needs: 'remote' };
     }
+    case 'remote.merged': {
+      const base = ctx.since?.remoteSha;
+      if (!base) return { ok: false, reason: 'no remote baseline' };
+      const r = snap.remote?.base === base ? snap.remote : null;
+      const n = r?.merged ?? 0;
+      if (n >= a.n) return { ok: true, reason: `${n} pull request(s) merged into remote main since the say` };
+      const reason = !r ? 'remote main not fetched' : r.merged == null ? 'the forge has not answered' : `${n} pull request(s) merged by the forge since the say, ${r.count} commit(s) on remote main`;
+      return { ok: false, reason, needs: 'remote' };
+    }
     case 'home.clean':
       return { ok: snap.taskIds.length === 0, reason: snap.taskIds.length ? `task records remain: ${snap.taskIds.join(' ')}` : 'no task record' };
+    case 'state.settled': {
+      const left = [...snap.pendingCloses, ...snap.lockDebris];
+      return { ok: left.length === 0, reason: left.length ? `still in state/: ${left.join(' ')}` : 'no pending close or leftover lock' };
+    }
+    case 'teardown.refused':
+      return { ok: snap.teardownRefusals.length > 0, reason: snap.teardownRefusals.length ? `refusal recorded in ${snap.teardownRefusals.join(' ')}` : 'no cleanup refusal recorded' };
     case 'tabs.clean': {
       if (!snap.herdr?.tabLabels) return { ok: false, reason: 'tab list not fetched', needs: 'tabs' };
       const want = new Set([...(ctx.seenTaskIds ?? [])].map((id) => `fm-${id}`));
@@ -396,6 +486,14 @@ export function evaluateAtom(atom, snap, ctx) {
       const span = ctx.since && snap.turns.find((t) => t.startedAt > ctx.since.at);
       if (!span) return { ok: false, reason: 'no primary turn has ended since the say', needs: 'turn' };
       return { ok: true, reason: `turn rested ${span.restAt - ctx.since.at} ms after the say` };
+    }
+    case 'primary.idle.inflight': {
+      const w = snap.inflight;
+      if (!w?.from) return { ok: false, reason: 'no task seen In flight without a done: line' };
+      const end = w.to ?? snap.nowMs;
+      const best = Math.max(0, ...restIntervals(snap.turns, snap.turnOpenAt, snap.nowMs).map((r) => Math.min(r.to, end) - Math.max(r.from, w.from)));
+      if (best >= IDLE_MIN_MS) return { ok: true, reason: `the primary rested ${Math.round(best / 1000)} s while the task was In flight` };
+      return { ok: false, reason: `the primary rested ${Math.round(best / 1000)} s while the task was In flight${w.to ? ' before its done: line' : ' so far'}` };
     }
     case 'wake.delivered': {
       const n = ctx.since ? deliveriesSince(snap.deliveries, ctx.since, a.reason) : 0;
