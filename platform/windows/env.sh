@@ -7,9 +7,9 @@
 #   - umask 077, and BASH_ENV so every bash below a native program such as
 #     claude.exe gets it too. Git Bash mounts drives noacl: chmod changes
 #     nothing, and stat reports the mode the reading process's umask implies,
-#     not a mode stored on the file. At 077 every file reads as 600 or 700, so
-#     upstream's private-mode checks and `mkdir -m 700` pass. What keeps the
-#     files private is the directory ACL.
+#     not a mode stored on the file. At 077 every file reads as 600 or 700, 700
+#     exactly when it starts with #!, and overrides.sh compares private modes
+#     without that bit. What keeps the files private is the directory ACL.
 
 _fm_win_dir=${BASH_SOURCE[0]}
 case $_fm_win_dir in [A-Za-z]:*) _fm_win_dir=$(cygpath -u -- "$_fm_win_dir") ;; esac

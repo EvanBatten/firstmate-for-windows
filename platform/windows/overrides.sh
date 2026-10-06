@@ -6,6 +6,21 @@
 # to resolve again on every call. Resolving here keeps it in the sourcing shell.
 ! declare -F _fm_win_herdr_resolve >/dev/null || [ "$PATH" = "${_FM_WIN_HERDR_PATH_KEY-}" ] || _fm_win_herdr_resolve
 
+# A noacl drive stores no execute bit: stat reports owner execute exactly when
+# the content starts with #!, whatever chmod set. Every check runs as
+# `bash <file>`, so the bit only labels a file, and the comparison drops it while
+# keeping the group and other bits that the private home's umask sets (env.sh).
+if declare -F fm_pr_private_file_valid >/dev/null; then
+  fm_pr_private_file_valid() {
+    local path=$1 mode=$2 device=$3 actual
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    actual=$(fm_pr_file_mode "$path")
+    [ "${actual/#7/6}" = "${mode/#7/6}" ] || return 1
+    [ "$(fm_pr_file_device "$path")" = "$device" ] || return 1
+    [ "$(fm_pr_file_link_count "$path")" = 1 ]
+  }
+fi
+
 # A test fixture that puts its own fake `ps` first on PATH keeps the upstream
 # bodies, which read that fake as they do on Linux. MSYS's own ps is not a
 # fixture: Git's bin/bash.exe, which Claude runs hooks through, puts /usr/bin
