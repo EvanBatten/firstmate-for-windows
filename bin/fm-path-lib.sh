@@ -37,3 +37,22 @@ fm_basename_to() {  # <output-variable> <path>
   while [ "${fm_path%$'\n'}" != "$fm_path" ]; do fm_path=${fm_path%$'\n'}; done
   printf -v "$1" '%s' "$fm_path"
 }
+
+# Assigns <output-variable> what `$(cat <file> 2>/dev/null || true)` would,
+# without forking unless the file holds a NUL byte, which `read` stops at.
+# MSYS bash also drops a trailing CR before each newline it removes.
+fm_file_contents_to() {  # <output-variable> <file>
+  local fm_contents=
+  if { IFS= read -r -d '' fm_contents < "$2"; } 2>/dev/null; then
+    fm_contents=$(cat "$2" 2>/dev/null || true)
+  else
+    while :; do
+      case $OSTYPE:$fm_contents in
+        msys*:*$'\r\n') fm_contents=${fm_contents%$'\r\n'} ;;
+        *:*$'\n') fm_contents=${fm_contents%$'\n'} ;;
+        *) break ;;
+      esac
+    done
+  fi
+  printf -v "$1" '%s' "$fm_contents"
+}
