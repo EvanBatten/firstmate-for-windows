@@ -1152,6 +1152,47 @@ test_watcher_exits_when_its_state_directory_is_removed() {
   pass "watch-arm: a watcher exits when its state directory is removed"
 }
 
+# The deletion can also land while the watcher waits on a recovery lock, a
+# window seconds wide on Windows. A live holder parks the watcher in that wait,
+# observed as its queue lock held across a second, before the directory goes.
+test_watcher_exits_when_its_state_directory_is_removed_mid_lock_wait() {
+  local dir home state fakebin armout holder i
+  dir=$(make_case state-dir-removed-mid-wait)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  mkdir -p "$home/data"
+  start_owned_watcher "$home" "$state" "$fakebin" "$armout"
+
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait "$2" || exit 7
+    exec sleep 300
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$state/.watcher-down.lock" >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if [ "$(cat "$state/.watcher-down.lock/pid" 2>/dev/null)" = "$holder" ]       && [ "$(cat "$state/.wake-queue.lock/pid" 2>/dev/null)" = "$WATCH_PID" ]; then
+      sleep 1
+      [ "$(cat "$state/.wake-queue.lock/pid" 2>/dev/null)" = "$WATCH_PID" ] && break
+    fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  [ "$i" -lt 60 ] || { kill -TERM "$holder" 2>/dev/null; fail "watcher never waited on the held recovery lock: $(cat "$armout")"; }
+
+  rm -rf "$state"
+  wait_for_pid_gone "$WATCH_PID" 400 \
+    || { kill -TERM "$WATCH_PID" "$holder" 2>/dev/null; fail "watcher pid $WATCH_PID spun on a lock in its deleted state directory"; }
+  kill -TERM "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  wait_for_exit "$ARM_PID" 100 >/dev/null 2>&1 || true
+  grep -qF 'watcher: exiting - state directory' "$armout" \
+    || fail "watcher did not log the state-gone exit reason after its lock wait: $(cat "$armout")"
+  pass "watch-arm: a watcher waiting on a lock exits when its state directory is removed"
+}
+
 # The same for a deleted home whose state directory still exists elsewhere: the
 # lock is released through the ordinary cleanup so nothing stale is left behind.
 test_watcher_exits_when_its_home_is_removed() {
@@ -1200,6 +1241,7 @@ test_attached_arm_reports_the_delivered_wake_after_drain
 test_arm_refuses_an_unusable_launch_confirm_window
 test_arm_refuses_a_disposable_validation_checkout
 test_watcher_exits_when_its_state_directory_is_removed
+test_watcher_exits_when_its_state_directory_is_removed_mid_lock_wait
 test_watcher_exits_when_its_home_is_removed
 test_reaper_stops_a_tracked_watcher
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver

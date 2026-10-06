@@ -476,6 +476,31 @@ test_lock_release_with_unremovable_owner_keeps_errexit_caller() {
   pass "release keeps a set -eu caller alive when the owner directory cannot be removed"
 }
 
+# A lock whose directory is gone (its home was torn down) can never be taken,
+# so both waits give up with their distinct status instead of spinning.
+test_lock_wait_gives_up_when_its_directory_is_removed() {
+  local dir state out pid rc
+  dir=$(make_case lock-dir-removed)
+  state="$dir/state"
+  out="$dir/wait.out"
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    rm -rf "$2"
+    fm_lock_acquire_wait "$2/.gone.lock"
+    printf "wait=%s\n" "$?"
+    fm_lock_acquire_wait_max "$2/.gone.lock" 600
+    printf "wait_max=%s\n" "$?"
+  ' _ "$LIB" "$state" > "$out" 2>&1 &
+  pid=$!
+  rc=0
+  wait_for_exit "$pid" 200 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || fail "a lock wait spun on its deleted directory (rc=$rc): $(cat "$out")"
+  [ "$(cat "$out")" = "wait=3
+wait_max=3" ] || fail "a lock wait on a deleted directory did not give up with status 3: $(cat "$out")"
+  [ ! -e "$state" ] || fail "a lock wait recreated its deleted directory"
+  pass "lock waits give up with status 3 when the lock's directory is removed"
+}
+
 test_lock_steals_dead_pid_lock() {
   local dir state lockdir dead rc newpid
   dir=$(make_case lock-dead-steal)
@@ -1684,6 +1709,7 @@ test_live_stalled_watch_lock_is_replaced_past_hard_bound
 test_guard_warnings
 test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
+test_lock_wait_gives_up_when_its_directory_is_removed
 test_lock_stale_steal_single_winner_under_concurrency
 test_lock_reclaims_dead_steal_owner_without_nested_markers
 test_lock_recovers_dead_nested_steal_chain
