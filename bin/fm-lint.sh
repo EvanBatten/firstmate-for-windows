@@ -24,7 +24,8 @@
 # on context:
 #   - In CI (GITHUB_ACTIONS=true or CI=true), on the main branch, or when no
 #     merge-base against origin/main (or local main) can be found, it lints
-#     the full canonical set: bin/*.sh bin/backends/*.sh tests/*.sh, with
+#     the full canonical set: bin/*.sh bin/backends/*.sh tests/*.sh
+#     platform/windows/*.sh, with
 #     --external-sources and full dataflow. This is what CI always runs, so
 #     CI coverage never depends on a local diff.
 #   - Otherwise (an ordinary local branch with a real merge-base) it lints
@@ -40,6 +41,10 @@
 # backend-purity check. The backend-purity check rejects direct Beads CLI
 # invocations in the core bin/ and bin/backends/ scripts so every configured
 # backlog backend follows the same tasks-axi lifecycle path.
+# The overlay-return check rejects a return with no status in
+# platform/windows/*.sh: in a function run from a trap it returns the status
+# from before the trap, so `false || return` succeeds there, and the overlay's
+# wrappers run inside upstream's traps.
 #
 # Lint defaults to two concurrency-limited workers over two stable logical
 # shards, and each worker runs ONE canonical root per ShellCheck process, so a
@@ -392,6 +397,16 @@ fm_lint_run_workflows() {
   "$SELF_DIR/fm-lint-workflows.sh"
 }
 
+fm_lint_realpath() {  # <path>
+  [ -f "$1" ] || return 1
+  # shellcheck disable=SC2016 # Perl, not the shell, expands $ARGV.
+  "$PERL_BIN" -MCwd=realpath -e '
+    my $resolved = realpath($ARGV[0]);
+    exit 1 unless defined $resolved;
+    print $resolved;
+  ' "$1" 2>/dev/null
+}
+
 # Backend adapters belong behind tasks-axi. Keep direct Beads CLI invocations
 # out of firstmate's core scripts so every configured backend follows the same
 # lifecycle path.
@@ -403,13 +418,7 @@ fm_lint_run_backend_purity() {
     purity_roots=(bin/*.sh bin/backends/*.sh)
   else
     for path in "${ROOTS[@]}"; do
-      [ -f "$path" ] || continue
-      # shellcheck disable=SC2016 # Perl, not the shell, expands $ARGV.
-      canonical=$("$PERL_BIN" -MCwd=realpath -e '
-        my $resolved = realpath($ARGV[0]);
-        exit 1 unless defined $resolved;
-        print $resolved;
-      ' "$path" 2>/dev/null) || continue
+      canonical=$(fm_lint_realpath "$path") || continue
       case "$canonical" in
         "$ROOT"/bin/*.sh|"$ROOT"/bin/backends/*.sh)
           purity_roots+=("$canonical")
@@ -625,6 +634,38 @@ fm_lint_run_backend_purity() {
   }
 }
 
+fm_lint_run_overlay_returns() {
+  local findings path canonical
+  local -a overlay_roots
+  overlay_roots=()
+  if [ "$EXPLICIT_PATHS" -eq 0 ]; then
+    for path in platform/windows/*.sh; do
+      [ ! -f "$path" ] || overlay_roots+=("$path")
+    done
+  else
+    for path in "${ROOTS[@]}"; do
+      canonical=$(fm_lint_realpath "$path") || continue
+      case "$canonical" in
+        "$ROOT"/platform/windows/*.sh) overlay_roots+=("$canonical") ;;
+      esac
+    done
+  fi
+  [ "${#overlay_roots[@]}" -gt 0 ] || return 0
+  findings=$(LC_ALL=C awk '
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/[[:space:]]#.*$/, "", line)
+      if (line ~ /(^|[^[:alnum:]_$-])return[[:space:]]*($|[;&|)}])/)
+        print FILENAME ":" FNR ": bare return in the Windows overlay; name its status, as in return $?"
+    }
+  ' "${overlay_roots[@]}")
+  [ -z "$findings" ] || {
+    printf '%s\n' "$findings" >&2
+    return 1
+  }
+}
+
 JOBS=${FM_LINT_JOBS:-2}
 TELEMETRY=${FM_LINT_TELEMETRY:-}
 FAST=0
@@ -727,8 +768,9 @@ fm_lint_changed_base_ref() {
 }
 
 # fm_lint_is_canonical_root tests membership in the canonical set (a direct
-# *.sh child of bin/, bin/backends/, or tests/) without the shell case
-# statement's non-pathname wildcard matching a path separator by accident.
+# *.sh child of bin/, bin/backends/, tests/, or platform/windows/) without
+# the shell case statement's non-pathname wildcard matching a path separator
+# by accident.
 fm_lint_is_canonical_root() {
   local path=$1 dir base
   case "$path" in
@@ -740,7 +782,7 @@ fm_lint_is_canonical_root() {
     *) return 1 ;;
   esac
   case "$dir" in
-    bin|bin/backends|tests) return 0 ;;
+    bin|bin/backends|tests|platform/windows) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -765,7 +807,7 @@ else
   fi
 
   if [ "$full_lint" -eq 1 ]; then
-    ROOTS=(bin/*.sh bin/backends/*.sh tests/*.sh)
+    ROOTS=(bin/*.sh bin/backends/*.sh tests/*.sh platform/windows/*.sh)
   else
     CHANGED_MODE=1
     ROOTS=()
@@ -1184,6 +1226,7 @@ fi
 
 purity_rc=0
 fm_lint_run_backend_purity || purity_rc=$?
+fm_lint_run_overlay_returns || purity_rc=1
 if [ "$overall_rc" -eq 0 ] && [ "$purity_rc" -ne 0 ]; then
   overall_rc=$purity_rc
 fi

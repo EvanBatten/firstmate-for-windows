@@ -53,7 +53,7 @@ pwd() {
         if [ -n "$had_pwd" ]; then PWD=$pwd; else unset PWD; fi
         if [ -n "$had_oldpwd" ]; then OLDPWD=$oldpwd; else unset OLDPWD; fi
       else
-        dir=$(builtin pwd -P) || return
+        dir=$(builtin pwd -P) || return $?
       fi
       ;;
     *) builtin pwd "$@"; return $? ;;
