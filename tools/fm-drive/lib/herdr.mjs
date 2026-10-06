@@ -81,13 +81,7 @@ export class Herdr {
       const serverEnv = { ...env, HERDR_SESSION: session };
       delete serverEnv.TMUX;
       delete serverEnv.TMUX_PANE;
-      const child = spawn(bin, ['server', '--session', session], {
-        env: serverEnv,
-        stdio: 'ignore',
-        shell: false,
-        windowsHide: true,
-        detached: false,
-      });
+      const child = spawnHerdr(bin, ['server', '--session', session], serverEnv, 'ignore');
       child.on('error', () => {});
       ownServer = { child, session };
       spawns += 1;
@@ -218,12 +212,14 @@ function sessionArgs(session) {
 
 // A .mjs/.js/.cjs "binary" runs under this node, so a scripted stand-in for
 // herdr works the same on every platform without a shebang.
+function spawnHerdr(bin, args, env, stdio) {
+  const opts = { env, stdio, shell: false, windowsHide: true };
+  return /\.(mjs|cjs|js)$/i.test(bin) ? spawn(process.execPath, [bin, ...args], opts) : spawn(bin, args, opts);
+}
+
 function run(bin, args, env, timeoutMs) {
-  const scripted = /\.(mjs|cjs|js)$/i.test(bin);
   return new Promise((resolve, reject) => {
-    const child = scripted
-      ? spawn(process.execPath, [bin, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true })
-      : spawn(bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
+    const child = spawnHerdr(bin, args, env, ['ignore', 'pipe', 'pipe']);
     let out = '';
     let err = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error(`herdr ${args[0]} ${args[1] ?? ''} timed out after ${timeoutMs} ms`)); }, timeoutMs);
