@@ -423,6 +423,56 @@ describe('predicates over fixture homes', () => {
     assert.equal(recorded(buildHome('scout-reported'), 'greeter').ok, false, 'an item with no project tag is not for greeter');
   });
 
+  test('backlog.recorded refuses an item for a differently named project and a tag that is not the item tag', () => {
+    const B = (body) => `# Backlog\n\n${body}`;
+    const cases = [
+      ['longer name with shared prefix', B('## Queued\n- [ ] g1 - x (repo: greeter-two) (kind: ship)\n'), 'greeter'],
+      ['asked name is a prefix of the item repo', B('## Queued\n- [ ] g1 - x (repo: greeter) (kind: ship)\n'), 'greet'],
+      ['item repo is a prefix of the asked name', B('## Queued\n- [ ] g1 - x (repo: greet) (kind: ship)\n'), 'greeter'],
+      ['no space after colon', B('## Queued\n- [ ] g1 - x (repo:greeter) (kind: ship)\n'), 'greeter'],
+      ['tag on a continuation line only', B('## Queued\n- [ ] g1 - add greet.sh (kind: ship)\n  note (repo: greeter)\n'), 'greeter'],
+      ['item before any heading', '- [ ] g1 - x (repo: greeter)\n## Queued\n', 'greeter'],
+      ['plain bullet, not a checkbox', B('## Queued\n- g1 - x (repo: greeter)\n'), 'greeter'],
+    ];
+    const verdicts = cases.map(([name, text, project]) => {
+      const home = buildHome('empty');
+      writeFileSync(join(home, 'data', 'backlog.md'), text);
+      return [name, check(home, `backlog.recorded:${project}`).ok];
+    });
+    assert.deepEqual(verdicts, cases.map(([name]) => [name, false]));
+  });
+
+  test('backlog.recorded gives a verdict, never a throw, for any item spelling after the box', () => {
+    const verdict = (line) => {
+      const home = buildHome('empty');
+      writeFileSync(join(home, 'data', 'backlog.md'), `# Backlog\n\n## Queued\n${line}\n`);
+      try { return check(home, 'backlog.recorded:greeter').ok; } catch (err) { return `threw ${err.message}`; }
+    };
+    assert.deepEqual(
+      ['- [ ]  t1 - x (repo: greeter)', '- [ ]\tt1 - x (repo: greeter)', '- [ ] (repo: greeter)'].map(verdict),
+      [true, true, true],
+    );
+  });
+
+  test('backlog sections match their heading the way tasks-axi writes it, ignoring case and outer spaces', () => {
+    const B = (body) => `# Backlog\n\n${body}`;
+    const inflight = (text) => {
+      const home = buildHome('empty');
+      writeFileSync(join(home, 'data', 'backlog.md'), text);
+      return check(home, 'backlog.inflight>=1').ok;
+    };
+    assert.deepEqual([
+      B('##  In flight  \n- [ ] a\n'),
+      B('##\tIn flight\n- [ ] a\n'),
+      B('## in FLIGHT\n- [ ] a\n'),
+      B('## In flight\r\n- [ ] a\r\n'),
+      B('### In flight\n- [ ] a\n'),
+      B('## In  flight\n- [ ] a\n'),
+      B('## In flight extra\n- [ ] a\n'),
+      '- [ ] orphan\n## Queued\n',
+    ].map(inflight), [true, true, true, true, false, false, false, false]);
+  });
+
   test('scout reported', () => {
     const home = buildHome('scout-reported');
     assert.equal(check(home, 'tasks.kind:scout').ok, true);
@@ -1219,6 +1269,29 @@ describe('fake-herdr end to end', () => {
     assert.deepEqual(r.json.spawns.map((s) => s.id), ['t1']);
     const [{ ms }] = r.json.spawns;
     assert.ok(ms >= 1200 && ms < 6000, `the lock was held ${ms} ms`);
+  });
+
+  test('a later hold of the same record lock never replaces the spawn time, and a lock never released reads null', () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({
+      'add my project': base['add my project'],
+      'dispatch a worker': [
+        { mkdir: 'state/.meta-t1.lock' }, { delayMs: 1500 }, ...base['dispatch a worker'].filter((w) => w.delayMs === undefined), { remove: 'state/.meta-t1.lock' },
+        { delayMs: 1500 }, { mkdir: 'state/.meta-t1.lock' }, { delayMs: 3000 }, { remove: 'state/.meta-t1.lock' },
+        { mkdir: 'state/.meta-t2.lock' }, { delayMs: 500 }, { path: 'data/end.txt', content: 'end\n' },
+      ],
+    }));
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: file, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), {
+      feature: 'e2e-spawn-relock',
+      steps: [
+        { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+        { say: 'now dispatch a worker', until: 'file.contains:data/end.txt:end', budgetSec: 20 },
+      ],
+    })], env);
+    const spawns = r.json.spawns.map((s) => ({ id: s.id, ms: s.ms === null ? null : Math.round(s.ms / 500) * 500 }));
+    assert.deepEqual(spawns, [{ id: 't1', ms: 1500 }, { id: 't2', ms: null }], JSON.stringify(r.json.spawns));
   });
 
   test('a rejected trace never reaches herdr even with a live fake', () => {
