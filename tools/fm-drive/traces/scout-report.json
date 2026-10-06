@@ -34,7 +34,7 @@
     {
       "say": "",
       "until": "git.ahead:greeter>=1",
-      "budgetSec": 420
+      "budgetSec": 600
     },
     {
       "say": "",
