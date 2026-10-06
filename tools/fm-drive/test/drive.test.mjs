@@ -13,6 +13,7 @@ import { Herdr, atShellPrompt, cliArgv } from '../lib/herdr.mjs';
 import { prepareClaudeConfig, archiveClaudeConfig, isAuthStateKey, isCredentialFileName, homeIsOperable, isSessionStartBusy, isTrustPrompt, trustProjectKeys } from '../lib/session.mjs';
 import { waitUntil, holdsNow } from '../lib/wait.mjs';
 import * as sessionLib from '../lib/session.mjs';
+import { HEALTH } from '../lib/ledger.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DRIVE = join(HERE, '..', 'drive.mjs');
@@ -462,6 +463,88 @@ describe('predicates over fixture homes', () => {
     const old = new Date(Date.now() - 600_000);
     utimesSync(beacon, old, old);
     assert.equal(check(home, 'beacon.fresh').ok, false);
+  });
+});
+
+// Each shipped trace's proving step, evaluated on a home where the behavior it proves did not
+// happen, must not hold; the same step holds once the behavior's record is there.
+describe('shipped traces cannot prove a row without its behavior', () => {
+  const shipped = (name) => validateTrace(JSON.parse(readFileSync(join(HERE, '..', 'traces', `${name}.json`), 'utf8')));
+  const provingStep = (trace, row) => trace.steps[trace.proves[row] - 1].parsed;
+  const T0 = 1_000_000;
+  const since = (over = {}) => ({ since: { at: T0, lock: null, deliveries: new Map(), firstDelivery: null, remoteSha: 'a'.repeat(40), ...over }, seeds: {}, seenTaskIds: new Set() });
+  const holds = (parsed, home, c, patch) => {
+    const snap = snapshotHome(home);
+    Object.assign(snap, patch);
+    return evaluateUntil(parsed, snap, c);
+  };
+
+  test('register needs the session-start digest of the session that holds the lock', () => {
+    const step = provingStep(shipped('register'), 'fm-session-start');
+    const home = buildHome('ship-in-flight');
+    const without = holds(step, home, since());
+    assert.equal(without.ok, false, `a registered project alone proved session start: ${without.reason}`);
+    writeFileSync(join(home, 'state', '.session-start-complete'), '17\n');
+    assert.equal(holds(step, home, since()).ok, false, "a digest another session completed is not this session's");
+    writeFileSync(join(home, 'state', '.session-start-complete'), '4242\n');
+    assert.deepEqual(holds(step, home, since()), { ok: true, reason: 'holds' });
+  });
+
+  test('watcher-wake needs the primary to rest while the worker was In flight, before its done line', () => {
+    const trace = shipped('watcher-wake');
+    const home = buildHome('ship-in-flight');
+    writeFileSync(join(home, 'state', 't1.status'), 'working: implementing greet.sh\ndone: greet.sh on fm/greet-sh\n');
+    writeFileSync(join(home, 'state', '.watch-deliveries.log'), '28097\tproc-starttime=1 cmdline-hex=aa\tsignal: /h/state/t1.status\n');
+    writeFileSync(join(home, 'state', '.last-watcher-beat'), '');
+    const inflight = { from: T0 + 100_000, to: T0 + 300_000 };
+    const doneStep = trace.steps.findIndex((s) => s.parsed.atoms.some((a) => a.name === 'status.verb'));
+    for (const row of ['readme-low-token-supervision', 'feature-supervision-wakes']) assert.ok(trace.proves[row] > doneStep, `${row} is proven through the done step`);
+    const step = trace.steps[doneStep].parsed;
+    const polledThrough = holds(step, home, since(), { turns: [{ startedAt: T0 + 1_000, restAt: T0 + 310_000 }], inflight });
+    assert.equal(polledThrough.ok, false, `a primary that never ended its turn proved supervision: ${polledThrough.reason}`);
+    const rested = { turns: [{ startedAt: T0 + 1_000, restAt: T0 + 120_000 }, { startedAt: T0 + 300_500, restAt: T0 + 310_000 }], inflight };
+    assert.deepEqual(holds(step, home, since(), rested), { ok: true, reason: 'holds' });
+  });
+
+  test('cleanup-refusal needs the cleanup to have been refused, not only the work to survive', () => {
+    const trace = shipped('cleanup-refusal');
+    const step = provingStep(trace, 'agents-7-teardown-refusal');
+    const home = buildHome('ship-in-flight');
+    const patch = () => ({ turns: [{ startedAt: T0 + 1_000, restAt: T0 + 60_000 }], gitUnlanded: { greeter: { tips: snapshotHome(home).projects.greeter.branchTips, count: 1 } } });
+    const ignored = holds(step, home, since(), patch());
+    assert.equal(ignored.ok, false, `a primary that never ran cleanup proved the refusal: ${ignored.reason}`);
+    writeFileSync(join(home, 'state', 't1.teardown-refused'), 'refused [at=1001]: worktree /w holds work cleanup could not prove landed\n');
+    assert.deepEqual(holds(step, home, since(), patch()), { ok: true, reason: 'holds' });
+  });
+
+  test('pr-land needs the forge to report the pull request merged, not a push to main', () => {
+    const step = provingStep(shipped('pr-land'), 'fm-pr-merge');
+    const home = buildHome('empty');
+    const base = 'a'.repeat(40);
+    const pushed = holds(step, home, since(), { remote: { base, sha: 'b'.repeat(40), count: 1, merged: 0 } });
+    assert.equal(pushed.ok, false, `a direct push to main proved a merge: ${pushed.reason}`);
+    assert.deepEqual(holds(step, home, since(), { remote: { base, sha: 'b'.repeat(40), count: 1, merged: 1 } }), { ok: true, reason: 'holds' });
+  });
+
+  test('the end-of-run health check fails on a pending backlog close or a leftover lock', () => {
+    const health = parseUntil(HEALTH);
+    const clean = () => {
+      const home = buildHome('cleaned');
+      writeFileSync(join(home, 'state', '.lock'), '4242\n');
+      mkdirSync(join(home, 'state', '.watch.lock.owner.Ab12Cd'));
+      writeFileSync(join(home, 'state', '.watch.lock'), '');
+      return home;
+    };
+    const c = { since: null, seeds: {}, seenTaskIds: new Set(['t1']) };
+    const tabs = { herdr: { tabLabels: [] } };
+    assert.deepEqual(holds(health, clean(), c, tabs), { ok: true, reason: 'holds' }, 'the session lock and a live watcher are not debris');
+    const closing = clean();
+    writeFileSync(join(closing, 'state', 't1.backlog-close'), 'mode=close\n');
+    assert.equal(holds(health, closing, c, tabs).ok, false, 'a backlog close still pending passed the health check');
+    const locked = clean();
+    mkdirSync(join(locked, 'state', '.watch-cycle-exits.lock.owner.f4qe56'));
+    writeFileSync(join(locked, 'state', '.watch-cycle-exits.lock'), '');
+    assert.equal(holds(health, locked, c, tabs).ok, false, 'a leftover lock passed the health check');
   });
 });
 
@@ -930,6 +1013,32 @@ describe('fake-herdr end to end', () => {
     assert.equal(r.status, 3, r.stdout);
     assert.match(r.json.error, /FM_DRIVE_REMOTE_ORIGIN/);
     assert.ok(!existsSync(join(dir, 'calls.log')), 'herdr was never called');
+  });
+
+  test('the driver waits for the primary to finish its cleanup turn before the health check and close', () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const runWith = (cleanup) => {
+      const script = join(tmp('script'), 'script.json');
+      writeFileSync(script, JSON.stringify({ 'add my project': base['add my project'], 'dispatch a worker': base['dispatch a worker'], 'clean up': cleanup }));
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      const trace = {
+        feature: 'e2e-cleanup-turn',
+        steps: [
+          { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+          { say: 'now dispatch a worker', until: 'tasks.count>=1', budgetSec: 10 },
+          { say: 'clean up', until: 'home.clean && tabs.clean', budgetSec: 10 },
+        ],
+      };
+      return { r: runDrive(['run', writeTrace(tmp('trace'), trace)], env), evidence: env.FM_DRIVE_EVIDENCE };
+    };
+    const closing = [{ status: 'working' }, { path: 'state/t1.backlog-close', content: 'mode=close\n' }, { remove: 'state/t1.meta' }, { delayMs: 2500 }];
+    const finished = runWith([...closing, { remove: 'state/t1.backlog-close' }, { status: 'idle' }]);
+    assert.equal(finished.r.status, 0, `stdout: ${finished.r.stdout}\nstderr: ${finished.r.stderr}`);
+    assert.equal(finished.r.json.health.ok, true, finished.r.json.health.reason);
+    assert.ok(!existsSync(join(finished.evidence, 'home', 'state', 't1.backlog-close')), 'the run closed while the backlog close was still pending');
+    const stuck = runWith([...closing, { status: 'idle' }]);
+    assert.equal(stuck.r.status, 1, stuck.r.stdout);
+    assert.match(stuck.r.json.health.reason, /t1\.backlog-close/);
   });
 
   test('a dead primary fails its step at once', () => {
