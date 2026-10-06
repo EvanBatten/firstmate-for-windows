@@ -443,6 +443,27 @@ fm_link_tool() {
   return 0
 }
 
+# fm_make_unreadable <path> and fm_make_readable <path> take away and restore
+# the current user's read access. On Cygwin and MSYS mode bits are not enforced,
+# so an ACL entry denying read stands in for chmod 000.
+fm_make_unreadable() {
+  chmod 000 "$1"
+  case $(uname -s) in
+    MSYS*|MINGW*|CYGWIN*) MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /deny "$USERNAME:(R)" >/dev/null ;;
+  esac
+}
+
+fm_make_readable() {
+  case $(uname -s) in
+    MSYS*|MINGW*|CYGWIN*) MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /remove:d "$USERNAME" >/dev/null ;;
+  esac
+  chmod 600 "$1"
+}
+
+fm_is_unreadable() {
+  ! { : < "$1"; } 2>/dev/null
+}
+
 fm_fake_exit0() {
   local fakebin=$1 tool
   shift

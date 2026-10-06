@@ -641,8 +641,8 @@ test_backend_resolution_preserves_config_errors() {
   printf '%s\n' 'backend = "beads"' > "$user_config"
   printf '%s\n' 'backend = "markdown"' > "$project_config"
   for config in "$project_config" "$user_config"; do
-    chmod 000 "$config"
-    [ ! -r "$config" ] || fail "the backend configuration fixture is still readable"
+    fm_make_unreadable "$config"
+    fm_is_unreadable "$config" || fail "the backend configuration fixture is still readable"
     for resolver in fm_tasks_axi_backend fm_tasks_axi_backend_resolve; do
       rc=0
       out=$(env -u TASKS_AXI_BACKEND HOME="$case_dir/user-home" bash -c "$probe" _ \
@@ -652,7 +652,7 @@ test_backend_resolution_preserves_config_errors() {
       assert_grep "tasks-axi backend configuration cannot be read at $config" "$case_dir/stderr" \
         "$resolver did not identify the unreadable configuration"
     done
-    chmod 600 "$config"
+    fm_make_readable "$config"
     rm "$config"
   done
   pass "backend resolution preserves unreadable configuration errors for every caller"
@@ -672,16 +672,16 @@ test_backend_resolution_preserves_precedence_and_defaults() {
     out=$(env -u TASKS_AXI_BACKEND HOME="$case_dir/user-home" bash -c "$probe" _ \
       "$ROOT" "$resolver" "$case_dir/home") || fail "$resolver rejected readable user configuration"
     [ "$out" = beads ] || fail "$resolver ignored the user backend"
-    chmod 000 "$case_dir/user-home/.tasks-axi/config.toml"
+    fm_make_unreadable "$case_dir/user-home/.tasks-axi/config.toml"
     printf '%s\n' 'backend = "markdown"' > "$case_dir/home/.tasks.toml"
     out=$(env -u TASKS_AXI_BACKEND HOME="$case_dir/user-home" bash -c "$probe" _ \
       "$ROOT" "$resolver" "$case_dir/home") || fail "$resolver read a lower-priority user configuration"
     [ "$out" = markdown ] || fail "$resolver ignored the project backend"
-    chmod 000 "$case_dir/home/.tasks.toml"
+    fm_make_unreadable "$case_dir/home/.tasks.toml"
     out=$(env TASKS_AXI_BACKEND=beads HOME="$case_dir/user-home" bash -c "$probe" _ \
       "$ROOT" "$resolver" "$case_dir/home") || fail "$resolver read configuration despite an environment override"
     [ "$out" = beads ] || fail "$resolver ignored the environment backend"
-    chmod 600 "$case_dir/home/.tasks.toml" "$case_dir/user-home/.tasks-axi/config.toml"
+    fm_make_readable "$case_dir/home/.tasks.toml"; fm_make_readable "$case_dir/user-home/.tasks-axi/config.toml"
     rm "$case_dir/home/.tasks.toml" "$case_dir/user-home/.tasks-axi/config.toml"
   done
   pass "backend resolution preserves environment, project, user, and default precedence"
