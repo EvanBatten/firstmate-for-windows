@@ -277,6 +277,45 @@ SH
   pass "the backlog record guard keeps every verdict and resolves its paths with one perl"
 }
 
+test_file_contents_helper_matches_cat_and_lock_cycle_never_forks_it() {
+  local script="$TMP_ROOT/contents.sh" shim="$TMP_ROOT/cat-shim" log="$TMP_ROOT/cat.log" dir="$TMP_ROOT/contents"
+  mkdir -p "$shim" "$dir/adir" "$TMP_ROOT/lockstate"
+  printf '' > "$dir/empty"
+  printf '123\n' > "$dir/pid"
+  printf '123' > "$dir/bare"
+  printf '123\n\n\n' > "$dir/newlines"
+  printf '\n' > "$dir/newline"
+  printf '  12 3 \t\n' > "$dir/spaces"
+  printf '12\r\n' > "$dir/crlf"
+  printf 'a\b\nc\n' > "$dir/lines"
+  printf '12\0003\n' > "$dir/nul"
+  printf '\000\n' > "$dir/onlynul"
+  printf 'caf\303\251\377\n' > "$dir/bytes"
+  cat > "$shim/cat" <<SH
+#!/bin/sh
+printf 'cat\n' >> "$log"
+exec $(command -v cat) "\$@"
+SH
+  chmod +x "$shim/cat"
+  cat > "$script" <<'SH'
+. "$1/bin/fm-wake-lib.sh"
+for f in empty pid bare newlines newline spaces crlf lines nul onlynul bytes adir missing; do
+  { fm_file_contents_to got "$2/$f"; } 2>/dev/null
+  { want=$(cat "$2/$f" 2>/dev/null || true); } 2>/dev/null
+  [ "$got" = "$want" ] || printf 'contents %s: helper %q, cat %q\n' "$f" "$got" "$want"
+done
+PATH="$3:$PATH"
+: > "$4"
+fm_lock_try_acquire "$5/.x.lock" || printf 'lock not acquired\n'
+fm_lock_release "$5/.x.lock"
+[ ! -e "$5/.x.lock" ] && [ ! -L "$5/.x.lock" ] || printf 'lock left behind\n'
+calls=$(grep -c . "$4" || true)
+[ "$calls" -eq 0 ] || printf 'an uncontended lock cycle ran cat %s times\n' "$calls"
+SH
+  run_everywhere "file contents helper" "$script" "$dir" "$shim" "$log" "$TMP_ROOT/lockstate"
+  pass "fm_file_contents_to reads a file as \$(cat) does and a lock cycle never forks cat"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -287,4 +326,5 @@ else
   test_window_to_task_matches_the_meta_pipeline
   test_classify_stat_helpers_read_the_kernel_name_once
   test_backlog_record_guard_resolves_its_paths_in_one_perl
+  test_file_contents_helper_matches_cat_and_lock_cycle_never_forks_it
 fi
