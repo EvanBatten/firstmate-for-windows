@@ -344,6 +344,42 @@ SH
   pass "path and contents helpers assign any output variable name, their own locals' included"
 }
 
+test_spawn_shell_quote_round_trips_and_never_forks() {
+  local script="$TMP_ROOT/quote.sh" shim="$TMP_ROOT/quote-shim" log="$TMP_ROOT/quote.log" cmd
+  mkdir -p "$shim"
+  for cmd in sed cat tr awk perl; do
+    printf '#!/bin/sh\nprintf "%%s\\n" %s >> "%s"\nexit 1\n' "$cmd" "$log" > "$shim/$cmd"
+    chmod +x "$shim/$cmd"
+  done
+  awk '/^shell_quote\(\) \{/,/^\}/' "$ROOT/bin/fm-spawn.sh" > "$TMP_ROOT/quote-fn.sh"
+  cat > "$script" <<'SH'
+. "$2"
+PATH="$3:$PATH"
+: > "$4"
+check() {  # <input> [<expected>]
+  local got back
+  got=$(shell_quote "$1")
+  [ $# -lt 2 ] || [ "$got" = "$2" ] || printf 'shell_quote %q: got %q, want %q\n' "$1" "$got" "$2"
+  eval "back=$got"
+  [ "$back" = "$1" ] || printf 'shell_quote %q does not round-trip: %q\n' "$1" "$back"
+}
+check '' "''"
+check plain "'plain'"
+check "it's" "'it'\\''s'"
+check "''" "''\\'''\\'''"
+check '/tmp/launch.1.sh' "'/tmp/launch.1.sh'"
+check $'a\nb\'c\n'
+check $'trailing\n\n'
+check 'back\slash\'
+check 'amp & '"'"'&'"'"' \&'
+check '$(echo no) `x` ${y} * ? [a]'
+check $'caf\303\251 \t tab'
+[ ! -s "$4" ] || printf 'shell_quote ran %s\n' "$(< "$4")"
+SH
+  run_everywhere "spawn shell_quote" "$script" "$TMP_ROOT/quote-fn.sh" "$shim" "$log"
+  pass "fm-spawn's shell_quote round-trips every input through eval without starting a process"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -356,4 +392,5 @@ else
   test_backlog_record_guard_resolves_its_paths_in_one_perl
   test_file_contents_helper_matches_cat_and_lock_cycle_never_forks_it
   test_helpers_assign_any_output_variable_name
+  test_spawn_shell_quote_round_trips_and_never_forks
 fi

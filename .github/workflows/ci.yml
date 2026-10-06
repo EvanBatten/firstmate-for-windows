@@ -488,8 +488,8 @@ jobs:
           helpers_output=$(/bin/bash tests/fm-fork-free-helpers.test.sh)
           printf '%s\n' "$helpers_output"
           helpers_count=$(printf '%s\n' "$helpers_output" | grep -c '^ok - ')
-          [ "$helpers_count" -eq 9 ] || {
-            echo "::error::expected 9 fork-free helper bash 3.2 regressions, got $helpers_count"
+          [ "$helpers_count" -eq 10 ] || {
+            echo "::error::expected 10 fork-free helper bash 3.2 regressions, got $helpers_count"
             exit 1
           }
 
