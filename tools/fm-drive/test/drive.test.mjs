@@ -601,7 +601,7 @@ describe('shipped traces cannot prove a row without its behavior', () => {
     }
   });
 
-  test('whole-session needs three live workers at once, then three landings that carry the steer', () => {
+  test('whole-session needs three live workers at once', () => {
     const trace = shipped('whole-session');
     const fleet = (n) => {
       const home = workerHome({ project: 'greeter', kind: 'ship' });
@@ -615,20 +615,41 @@ describe('shipped traces cannot prove a row without its behavior', () => {
     assert.equal(holds(parallel, fleet(2), since(), panes('claude', 'claude')).ok, false, 'two workers proved three in parallel');
     assert.equal(holds(parallel, fleet(3), since(), panes('claude', null, 'claude')).ok, false, 'a third pane with no agent proved three live workers');
     assert.deepEqual(holds(parallel, fleet(3), since(), panes('claude', 'claude', 'claude')), { ok: true, reason: 'holds' });
+  });
 
-    const base = 'a'.repeat(40);
-    const sha = 'b'.repeat(40);
-    const landed = (count, greet) => {
+  test('whole-session needs every worker\'s own change on main, not three commits', async () => {
+    const step = provingStep(shipped('whole-session'), 'readme-disposable-worktrees');
+    const landed = async (commits) => {
       const home = workerHome({ project: 'greeter', kind: 'ship' });
-      mkdirSync(join(home, 'projects', 'greeter', '.git', 'refs', 'heads'), { recursive: true });
-      writeFileSync(join(home, 'projects', 'greeter', '.git', 'refs', 'heads', 'main'), `${sha}\n`);
-      writeFileSync(join(home, 'projects', 'greeter', 'greet.sh'), greet);
-      return holds(provingStep(trace, 'readme-disposable-worktrees'), home, { ...since(), seeds: { greeter: base } }, { gitAhead: { greeter: { sha, count } } });
+      const repo = join(home, 'projects', 'greeter');
+      rmSync(join(repo, '.git'), { recursive: true });
+      const g = (...a) => {
+        const out = spawnSync('git', ['-C', repo, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'core.autocrlf=false', ...a], { encoding: 'utf8' });
+        assert.equal(out.status, 0, `git ${a.join(' ')}: ${out.stderr}`);
+        return out.stdout.trim();
+      };
+      g('init', '-q', '-b', 'main');
+      writeFileSync(join(repo, 'README.md'), '# greeter\n');
+      g('add', '-A');
+      g('commit', '-qm', 'seed');
+      const seed = g('rev-parse', 'HEAD');
+      for (const [file, text] of commits) {
+        mkdirSync(dirname(join(repo, file)), { recursive: true });
+        writeFileSync(join(repo, file), text);
+        g('add', '-A');
+        g('commit', '-qm', file);
+      }
+      const r = await holdsNow({ home, parsed: step, ctx: { ...since(), seeds: { greeter: seed } }, deps: { gitAhead: {}, gitUnlanded: {}, seeds: { greeter: seed }, counters: {} } });
+      return { ok: r.ok, reason: r.reason };
     };
-    const shout = 'shout) echo "HELLO FROM THE CREW" ;;\n';
-    assert.equal(landed(2, shout).ok, false, 'two landings proved three');
-    assert.equal(landed(3, 'hello) echo hello ;;\n').ok, false, 'a greet.sh without the steered subcommand proved the steer landed');
-    assert.deepEqual(landed(3, shout), { ok: true, reason: 'holds' });
+    const greet = ['greet.sh', 'hello) echo hello ;;\n'];
+    const shout = ['greet.sh', 'hello) echo hello ;;\nshout) echo "HELLO FROM THE CREW" ;;\n'];
+    const farewell = ['farewell.sh', "echo 'goodbye from the crew'\n"];
+    const version = ['VERSION', '0.1.0\n'];
+    assert.equal((await landed([greet, shout, farewell])).ok, false, 'two of three workers landed and the step held');
+    assert.equal((await landed([greet, shout, ['tests/greet_test.sh', 'check shout\n']])).ok, false, 'one worker landing three commits proved three landings');
+    assert.equal((await landed([farewell, version, greet])).ok, false, 'a greet.sh without the steered subcommand proved the steer landed');
+    assert.deepEqual(await landed([shout, farewell, version]), { ok: true, reason: 'holds' });
   });
 
   test('register needs the session-start digest of the session that holds the lock', () => {
