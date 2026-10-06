@@ -1173,9 +1173,19 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# A lock lives beside the state it guards, so a missing directory means that
+# state was torn down: no holder can exist and none can be created, and the
+# waits return 3 rather than spin or recreate it.
+fm_lock_dir_gone() {  # <lockdir>
+  local dir
+  fm_dirname_to dir "$1"
+  [ ! -d "$dir" ]
+}
+
 fm_lock_acquire_wait() {
   local lockdir=$1
   while ! fm_lock_try_acquire "$lockdir"; do
+    ! fm_lock_dir_gone "$lockdir" || return 3
     sleep 0.1
   done
 }
@@ -1188,6 +1198,7 @@ fm_lock_acquire_wait_max() {  # <lockdir> <max-seconds>
   local lockdir=$1 seconds=$2 deadline
   deadline=$((SECONDS + seconds))
   while ! fm_lock_try_acquire "$lockdir"; do
+    ! fm_lock_dir_gone "$lockdir" || return 3
     [ "$SECONDS" -lt "$deadline" ] || return 1
     sleep 0.1
   done
