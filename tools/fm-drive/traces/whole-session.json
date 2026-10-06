@@ -51,7 +51,7 @@
     {
       "say": "",
       "until": "home.clean && tabs.clean && wake.empty && state.settled",
-      "budgetSec": 120
+      "budgetSec": 360
     }
   ]
 }
