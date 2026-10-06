@@ -1398,3 +1398,5 @@ fm_pr_poll_merge_notified_remove() {  # <state> <id>
   [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
   rm -f -- "$marker"
 }
+
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'
