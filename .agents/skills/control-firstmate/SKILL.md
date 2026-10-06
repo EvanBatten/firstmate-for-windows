@@ -93,7 +93,7 @@ Keep that CLI transport; do not replace it with a socket-only client.
 A trace that names `{{remoteOrigin}}` needs `FM_DRIVE_REMOTE_ORIGIN`, for example `FM_DRIVE_REMOTE_ORIGIN="https://github.com/<owner>/<scratch-repo>"`.
 The header of [`tools/fm-drive/lib/session.mjs`](../../../tools/fm-drive/lib/session.mjs) lists the other knobs.
 
-Exit codes: 0 every step held and the home was healthy, 1 a step did not hold or the health check missed, 2 the trace was refused, 3 the environment failed (Herdr unusable, clone failed, primary never ready) or the launched home was not the captain path.
+Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3 the environment failed (Herdr unusable, clone failed, primary never ready) or the launched home was not the captain path.
 
 ## Read the result
 
@@ -132,7 +132,7 @@ The evidence directory keeps `result.json`, `captain.log`, `primary-turns.log` (
 A trace is the session tier of `verify-firstmate`.
 It uses the same throwaway-home clone, the same real primary in Herdr, and the same claims read from `state/`, `data/`, Herdr's tab list and the project's git refs, kept as evidence under the temp directory.
 A trace names the inventory rows it proves in `proves`, a map from row id to that row's last proving step.
-`trace` is the trace file's name, `code` is the commit the home was cloned from and whether the checkout had uncommitted changes, and `health` is the home's cleanliness after the last step held. The driver first waits up to 120 s for the primary to rest (`restMs`), then up to 60 s for the claim (`ms`), so a cleanup still running when the last claim held is judged once it finishes. `state.settled` fails on a pending `state/<id>.backlog-close` or a lock left in `state/` other than the session's `.lock`, `.watch.lock` and `.supervise-daemon.lock`.
+`trace` is the trace file's name, `code` is the commit the home was cloned from and whether the checkout had uncommitted changes, and `health` is the home's cleanliness after the last step held. The driver first waits up to 120 s for the primary to rest (`restMs`), then up to 60 s for the claim (`ms`), so a cleanup still running when the last claim held is judged once it finishes. A missed health check leaves the exit code alone, and `record` refuses the result. `state.settled` fails on a pending `state/<id>.backlog-close` or a lock left in `state/` other than the session's `.lock`, `.watch.lock` and `.supervise-daemon.lock`.
 `node tools/fm-drive/drive.mjs record <result.json>` turns a result into inventory rows as `verify-firstmate` describes; nothing else flips a trace row.
 A session script may call the driver instead of `session-lib.sh`'s poll loop when it wants deadlines, file-watch waits and a machine-readable timing record; wire that through `verify.sh` and `coverage.tsv` as `verify-firstmate` describes, and keep one owner for each feature's claims.
 Report the result JSON verbatim, then the outcome in the captain's terms.

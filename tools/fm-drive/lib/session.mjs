@@ -1017,7 +1017,7 @@ export class Session {
 
 // OWNER/REPO for a GitHub URL; any other origin is passed to gh as given.
 export function githubRepo(url) {
-  return /github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? url;
+  return url.match(/github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/)?.[1] ?? url;
 }
 
 function safeList(p) {

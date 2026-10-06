@@ -55,6 +55,7 @@ function fakeEnv(extra = {}) {
       FM_DRIVE_TRANSPORT: 'cli',
       FM_DRIVE_QUIET: '1',
       FM_DRIVE_READY_MS: '20000',
+      FM_DRIVE_HEALTH_MS: '3000',
       FAKE_HERDR_DIR: fakeDir,
       ...extra,
     },
@@ -1055,7 +1056,7 @@ describe('fake-herdr end to end', () => {
     const runWith = (cleanup) => {
       const script = join(tmp('script'), 'script.json');
       writeFileSync(script, JSON.stringify({ 'add my project': base['add my project'], 'dispatch a worker': base['dispatch a worker'], 'clean up': cleanup }));
-      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_HEALTH_MS: '3000', FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: script, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
       const trace = {
         feature: 'e2e-cleanup-turn',
         steps: [
@@ -1072,7 +1073,7 @@ describe('fake-herdr end to end', () => {
     assert.equal(finished.r.json.health.ok, true, finished.r.json.health.reason);
     assert.ok(!existsSync(join(finished.evidence, 'home', 'state', 't1.backlog-close')), 'the run closed while the backlog close was still pending');
     const stuck = runWith([...closing, { status: 'idle' }]);
-    assert.equal(stuck.r.status, 1, stuck.r.stdout);
+    assert.equal(stuck.r.json.health.ok, false, stuck.r.stdout);
     assert.match(stuck.r.json.health.reason, /t1\.backlog-close/);
   });
 

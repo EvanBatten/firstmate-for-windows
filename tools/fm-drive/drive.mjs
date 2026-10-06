@@ -245,7 +245,7 @@ async function run(trace, traceName) {
       result.health = { until: HEALTH, ok: h.ok, reason: h.reason, restMs: rest.waitedMs, ms: h.ms };
       log(`health: ${h.ok ? 'clean' : `MISSED (${h.reason})`}`);
     }
-    exitCode = result.pass && result.health?.ok ? 0 : 1;
+    exitCode = result.pass ? 0 : 1;
   } catch (err) {
     if (err instanceof TraceError) {
       result.rejected = err.message;
