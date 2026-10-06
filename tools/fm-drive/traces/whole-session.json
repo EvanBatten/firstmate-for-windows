@@ -1,0 +1,62 @@
+{
+  "feature": "whole-session",
+  "project": "greeter",
+  "proves": {
+    "agents-7-parallel-dispatch": 5,
+    "readme-disposable-worktrees": 9,
+    "feature-ship-three-parallel": 10,
+    "readme-one-liaison": 10
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship three separate changes to it in parallel, one worker each, all starting from the current main: 1) add greet.sh with six subcommands, hello, bye, version, time, date and help, each printing one line, plus tests/greet_test.sh that runs every subcommand and checks its output; 2) add farewell.sh that prints 'goodbye from the crew'; 3) add a VERSION file containing 0.1.0. each change is one commit on its own branch. use the opus model for every worker. tell me when each is done, and wait for my go before landing any of them.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 150
+    },
+    {
+      "say": "",
+      "until": "backlog.recorded:greeter",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 150
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=2 && backlog.inflight>=2 && worker.alive",
+      "budgetSec": 150
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=3 && backlog.inflight>=3 && worker.alive",
+      "budgetSec": 150
+    },
+    {
+      "say": "one more thing for the worker on greet.sh: it also needs a seventh subcommand, shout, that prints HELLO FROM THE CREW, covered by its test. please pass that on to it now.",
+      "until": "inbox.handled",
+      "budgetSec": 240
+    },
+    {
+      "say": "when all three workers are done and their results check out, land them on main one at a time; you have my approval. check that greet.sh shout works before you land it. then clean up and tell me.",
+      "until": "git.ahead:greeter>=1",
+      "budgetSec": 600
+    },
+    {
+      "say": "",
+      "until": "git.ahead:greeter>=2",
+      "budgetSec": 300
+    },
+    {
+      "say": "",
+      "until": "git.ahead:greeter>=3 && file.contains:projects/greeter/greet.sh:HELLO FROM THE CREW",
+      "budgetSec": 300
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean && wake.empty && state.settled",
+      "budgetSec": 120
+    }
+  ]
+}
