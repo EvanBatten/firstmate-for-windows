@@ -16,7 +16,7 @@
       "budgetSec": 180
     },
     {
-      "say": "one more thing for the greeter worker: greet.sh also needs a fourth subcommand, shout, that prints HELLO FROM THE CREW, documented in the README with the others. please pass that on to it now.",
+      "say": "one more thing for the greeter worker: greet.sh also needs a seventh subcommand, shout, that prints HELLO FROM THE CREW, documented in the README with the others. please pass that on to it now.",
       "until": "inbox.handled",
       "budgetSec": 240
     },
