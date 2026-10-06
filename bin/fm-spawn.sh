@@ -5347,10 +5347,19 @@ SPAWN_LAUNCH_SENT=1
 if [ "$BACKEND" = herdr ]; then
   # A separate Enter is lost when it reaches a busy pane before the typed line
   # renders (issue #160); `pane run` types and submits in one request.
+  # Cleanup is disarmed before the request and re-armed only when the adapter
+  # proves the line never reached the pane (status 2).
+  HERDR_LAUNCH_REARM=0
   if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
+    HERDR_LAUNCH_REARM=$HERDR_PROJECTION_ABORT_CLEANUP
     HERDR_PROJECTION_ABORT_CLEANUP=0
   fi
-  spawn_send_text_line "$T" ". $(shell_quote "$LAUNCH_FILE")"
+  HERDR_LAUNCH_STATUS=0
+  spawn_send_text_line "$T" ". $(shell_quote "$LAUNCH_FILE")" || HERDR_LAUNCH_STATUS=$?
+  if [ "$HERDR_LAUNCH_STATUS" -ne 0 ]; then
+    [ "$HERDR_LAUNCH_STATUS" -ne 2 ] || HERDR_PROJECTION_ABORT_CLEANUP=$HERDR_LAUNCH_REARM
+    exit 1
+  fi
 else
   spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
   sleep 0.3

@@ -3062,9 +3062,18 @@ fm_backend_herdr_current_path() {  # <target>
 # ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
 # spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types
 # the command and submits it in one call (verified).
+# A failed run replays herdr's stderr and returns 2 when the line cannot have
+# reached the pane (no ready target, or herdr's structured pane_not_found or
+# server_not_running refusal), 1 on any other failure.
 fm_backend_herdr_send_text_line() {  # <target> <text>
-  fm_backend_herdr_target_ready "$1" || return 1
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  local err
+  fm_backend_herdr_target_ready "$1" || return 2
+  err=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" 2>&1 >/dev/null) && return 0
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  case $(printf '%s' "$err" | jq -r '.error.code // empty' 2>/dev/null) in
+    pane_not_found|server_not_running) return 2 ;;
+  esac
+  return 1
 }
 
 # fm_backend_herdr_send_literal: send TEXT as literal, UNSUBMITTED input - the
