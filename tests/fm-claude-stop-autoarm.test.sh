@@ -249,6 +249,19 @@ printf 'signal: task.status done: fixture peer cycle ended\n'
 exit 0
 SH
       ;;
+    killed-then-resurfaced)
+      cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+if [ "$(wc -l < "$FM_HOME/state/arm-ran" | tr -d ' ')" -eq 1 ]; then
+  printf 'watcher: attached pid=%s (beacon 2s)\n' "$$"
+  kill -KILL "$$"
+fi
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+touch "$FM_HOME/state/.last-watcher-beat"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'check: rearm-resurface\n'
+exit 0
+SH
+      ;;
     *)
       echo "unknown arm fixture: $kind" >&2
       return 2
@@ -598,6 +611,23 @@ test_failed_close_rewakes_with_failure_banner() {
   [ "$(epoch_outcome "$dir")" = failed ] || fail "epoch must record outcome=failed, got: $(epoch_outcome "$dir")"
   [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 2 ] || fail "failure must exhaust exactly two bounded arm attempts"
   pass "auto-arm: bounded failure verification emits one automatic-mechanism alarm"
+}
+
+test_arm_killed_mid_cycle_is_retried_into_one_rewake() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/killed-arm")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" killed-then-resurfaced
+  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
+  expect_code 2 "$status" "a wake whose arm was killed mid-cycle must still rewake"
+  [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 2 ] \
+    || fail "the killed arm must be retried exactly once: $(cat "$dir/state/arm-ran")"
+  assert_contains "$out" "check: rearm-resurface" "the retry must deliver the resurfaced wake"
+  [ "$(printf '%s\n' "$out" | grep -c '^firstmate watcher wake')" -eq 1 ] \
+    || fail "the killed arm and its retry must produce one rewake banner: $out"
+  assert_not_contains "$out" "auto-arm FAILED" "a recovered kill is not a mechanism failure"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "epoch must record outcome=rewake, got: $(epoch_outcome "$dir")"
+  pass "auto-arm: an arm killed mid-cycle is retried and its resurfaced wake rewakes once"
 }
 
 test_failed_cycles_notify_once_and_keep_retrying() {
@@ -1732,6 +1762,7 @@ test_actionable_close_with_live_successor_rewakes_once
 test_attached_cycle_end_starts_handling_successor
 test_unconfirmed_handling_successor_still_rewakes
 test_failed_close_rewakes_with_failure_banner
+test_arm_killed_mid_cycle_is_retried_into_one_rewake
 test_failed_cycles_notify_once_and_keep_retrying
 test_failure_notice_marker_write_refuses_delivery_and_retries
 test_unverified_clean_close_exhausts_retries
