@@ -1852,9 +1852,12 @@ fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
 
 shell_quote() {
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-  printf "'"
+  local rest=$1 quoted=
+  while case $rest in *\'*) true ;; *) false ;; esac; do
+    quoted=$quoted${rest%%\'*}"'\\''"
+    rest=${rest#*\'}
+  done
+  printf "'%s'" "$quoted$rest"
 }
 
 resolve_pi_executable() {
