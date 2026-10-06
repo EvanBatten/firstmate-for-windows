@@ -78,7 +78,6 @@ function killPrimary(s) {
 }
 
 const git = (cwd, ...a) => spawnSync('git', ['-C', cwd, ...a], { stdio: 'ignore' });
-// The agent herdr has detected in a pane, as `agent get` reports it.
 const agentFile = (pane) => join(DIR, `agent-${String(pane).replace(/[^\w.-]/g, '_')}`);
 
 async function applyWrites(home, writes, sayText) {

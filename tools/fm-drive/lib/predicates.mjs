@@ -298,7 +298,6 @@ export function snapshotHome(home, nowMs = Date.now()) {
   };
 }
 
-/** Every "- [ ]" item line of data/backlog.md with the "## " section it sits under. */
 export function backlogItems(text) {
   const items = [];
   let section = null;
