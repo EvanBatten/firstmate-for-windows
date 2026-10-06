@@ -118,4 +118,41 @@ default_clone "$A/fm"
 rm -rf "$A/fm/.git"
 expect "a copy outside any repo launches silently" "" "$(GIT_CEILING_DIRECTORIES=$A launch "$A/fm")"
 
+SW=$T/super-wt
+git init -q "$SW"
+git -C "$SW" -c protocol.file.allow=always -c core.symlinks=false submodule add -q "$ROOT" fm 2>/dev/null
+git -C "$SW/fm" worktree add -q --detach "$T/sub-wt"
+cp -R "$ROOT/platform/windows/." "$T/sub-wt/platform/windows/"
+launch "$T/sub-wt" >/dev/null
+expect "a launch from a submodule's worktree restores that worktree" "$all_links" "$(links "$T/sub-wt")"
+expect "and the submodule checkout it names only by its git dir" "$all_links" "$(links "$SW/fm")"
+expect "so a commit -a in the submodule records no type change" "" "$(tracked_status "$SW/fm")"
+
+stale_reused_by() {
+  default_clone "$1" && git -C "$1" worktree add -q --detach "$2" && rm -rf "$2" && default_clone "$2"
+}
+R=$T/reused
+stale_reused_by "$T/reuser" "$R"
+launch "$T/reuser" >/dev/null
+expect "a stale worktree path now holding an unrelated clone keeps that clone's files" "$all_files" "$(links "$R")"
+expect "and that clone's config" "false" "$(git -C "$R" config core.symlinks)"
+expect "while the launching checkout is restored" "$all_links true" "$(links "$T/reuser") $(git -C "$T/reuser" config core.symlinks)"
+
+R=$T/reused-locked
+stale_reused_by "$T/reuser-locked" "$R"
+: > "$R/.git/index.lock"
+launch "$T/reuser-locked" >/dev/null
+rm "$R/.git/index.lock"
+expect "a locked unrelated clone at a stale worktree path does not stop the launching checkout's repair" "$all_links true" "$(links "$T/reuser-locked") $(git -C "$T/reuser-locked" config core.symlinks)"
+
+R=$T/host
+default_clone "$R"
+default_clone "$T/inside"
+git -C "$T/inside" worktree add -q --detach "$R/wt"
+rm -rf "$R/wt"
+mkdir "$R/wt"
+launch "$T/inside" >/dev/null
+expect "a stale worktree path now a plain directory inside another repo leaves that repo's files" "$all_files" "$(links "$R")"
+expect "while the launching checkout is restored" "$all_links true" "$(links "$T/inside") $(git -C "$T/inside" config core.symlinks)"
+
 [ "$fails" -eq 0 ]
