@@ -498,7 +498,7 @@ fm_lock_prepare_owner() {
   local ownerdir=$1 mypid back
   fm_current_pid mypid || return 1
   printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  fm_file_contents_to back "$ownerdir/pid"
   [ "$back" = "$mypid" ]
 }
 
@@ -546,7 +546,7 @@ fm_lock_claim() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  fm_file_contents_to back "$ownerdir/pid"
   if [ "$back" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
     return 1
@@ -1212,7 +1212,7 @@ _fm_lock_acquire_wait_handoff() {  # <lockdir> <caller-pid>
     ownerdir=$lockdir
   fi
   fm_current_pid current || { fm_lock_release "$lockdir"; return 1; }
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  fm_file_contents_to back "$ownerdir/pid"
   if [ "$back" != "$current" ] \
     || ! printf '%s\n' "$caller_pid" > "$ownerdir/pid" 2>/dev/null \
     || [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" != "$caller_pid" ]; then
@@ -1288,14 +1288,14 @@ fm_lock_release() {
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
+    fm_file_contents_to pid "$ownerdir/pid"
     [ "$pid" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_file_contents_to pid "$lockdir/pid"
   [ "$pid" = "$current" ] || return 0
   fm_lock_discard_owner "$lockdir"
 }

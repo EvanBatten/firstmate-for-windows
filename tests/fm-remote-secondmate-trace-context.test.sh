@@ -154,7 +154,7 @@ remote_injected_traceparent() {
 }
 remote_staged_launch() {
   local staged
-  staged=$(sed -n "s/^pane send-text [^ ]* \\. '\([^']*\)' --session [^ ]*\$/\1/p" "$HERDR_LOG" | tail -1)
+  staged=$(sed -n "s/^pane run [^ ]* \\. '\([^']*\)' --session [^ ]*\$/\1/p" "$HERDR_LOG" | tail -1)
   [ -n "$staged" ] && [ -f "$staged" ] || return 1
   cat "$staged"
 }
@@ -212,7 +212,7 @@ assert_present "$REMOTE_HOME/config/trace-context" \
   "an enabled remote launch did not inherit the enablement flag into the remote home"
 GOTMP_LINE=$(grep -n 'export GOTMPDIR=' "$HERDR_LOG" | tail -1 | cut -d: -f1)
 TP_LINE=$(grep -n 'export TRACEPARENT=' "$HERDR_LOG" | tail -1 | cut -d: -f1)
-LAUNCH_LINE=$(grep -n "^pane send-text [^ ]* \\. '.*' --session " "$HERDR_LOG" | tail -1 | cut -d: -f1)
+LAUNCH_LINE=$(grep -n "^pane run [^ ]* \\. '.*' --session " "$HERDR_LOG" | tail -1 | cut -d: -f1)
 [ -n "$GOTMP_LINE" ] && [ -n "$TP_LINE" ] && [ -n "$LAUNCH_LINE" ] \
   || fail "remote pane log missing GOTMPDIR/TRACEPARENT/launch lines"
 [ "$TP_LINE" -gt "$GOTMP_LINE" ] \

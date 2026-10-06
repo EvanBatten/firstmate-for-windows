@@ -114,14 +114,13 @@ remote_env() {
 # What the remote pane received, read back from the fixture's verbatim log. The
 # fixture logs one line per invocation as the joined argv, so each payload sits
 # between the pane id and the trailing session selector. The Herdr adapter sends
-# a pre-launch export as a `pane run` line and the launch command itself as the
-# unsubmitted literal `pane send-text`.
+# each pre-launch export and the launch command itself as a `pane run` line.
 remote_pane_payload() {  # <verb>
   sed -n "s/^pane $1 [^ ]* \\(.*\\) --session [^ ]*\$/\\1/p" "$HERDR_LOG"
 }
 remote_launch_command() {
   local source_line staged
-  source_line=$(remote_pane_payload send-text | grep "^\. '.*'\$" | tail -1)
+  source_line=$(remote_pane_payload run | grep "^\. '.*'\$" | tail -1)
   staged=${source_line#". '"}
   staged=${staged%"'"}
   [ -n "$staged" ] && [ -f "$staged" ] || return 1

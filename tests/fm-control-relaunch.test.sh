@@ -2001,13 +2001,13 @@ case "${1:-} ${2:-}" in
         "$(cat "$D/herdr-pane")"
     fi
     exit 0 ;;
-  'pane send-text')
+  'pane send-text' | 'pane run')
     # Mirrors the tmux fake's `becomes`: delivering the launch brief is what
     # makes an agent exist on this pane, so the control plane's alive-wait can
-    # observe the replacement come up. A launch arrives as a short line sourcing
-    # the staged launch file rather than the literal command, so read that file
-    # back before deciding what was delivered - exactly as the tmux fake above
-    # and tests/fixtures.sh do.
+    # observe the replacement come up. A launch arrives through `pane run` as a
+    # short line sourcing the staged launch file rather than the literal
+    # command, so read that file back before deciding what was delivered -
+    # exactly as the tmux fake above and tests/fixtures.sh do.
     payload=${4:-}
     case "$payload" in
       ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
@@ -2177,7 +2177,7 @@ test_herdr_reclaim_adopts_a_pane_that_outlived_its_server() {
     || fail "the adopted record's tab id changed, got $(meta_field "$dir" rl68 herdr_tab_id)"
   [ "$(meta_field "$dir" rl68 window)" = 'fmlab:%7' ] \
     || fail "the adopted record's endpoint moved, got $(meta_field "$dir" rl68 window)"
-  assert_contains "$log" "pane send-text %7 " \
+  assert_contains "$log" "pane run %7 . '" \
     "the replacement's launch brief must be delivered into the adopted pane"
   pass "reclaim: a herdr pane that outlived its stopped server is adopted, never orphaned beside a new tab"
 }
