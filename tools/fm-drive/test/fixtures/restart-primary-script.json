@@ -5,10 +5,14 @@
   ],
   "ship one change": [
     { "delayMs": 300 },
+    { "path": "data/backlog.md", "content": "# Backlog\n\n## In flight\n## Queued\n- [ ] t1 - add greet.sh (repo: greeter) (kind: ship)\n## Done\n" },
+    { "delayMs": 300 },
     { "path": "state/t1.meta", "content": "kind=ship\nproject=greeter\nherdr_pane_id=pane-w1\n" },
     { "path": "state/t1.status", "content": "working: building greet.sh\n" },
     { "delayMs": 200 },
-    { "path": "data/backlog.md", "content": "# Backlog\n\n## In flight\n- [ ] t1 - greeter: add greet.sh (kind: ship)\n## Queued\n## Done\n" }
+    { "path": "data/backlog.md", "content": "# Backlog\n\n## In flight\n- [ ] t1 - add greet.sh (repo: greeter) (kind: ship)\n## Queued\n## Done\n" },
+    { "delayMs": 300 },
+    { "agentIn": "pane-w1", "agent": "claude" }
   ],
   "I'm back": [
     { "delayMs": 200 },
