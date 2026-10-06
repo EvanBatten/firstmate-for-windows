@@ -119,29 +119,27 @@ fm_backlog_string_has_control_byte() {  # <string>
   [[ $1 == *[[:cntrl:]]* ]]
 }
 
-fm_backlog_data_absolute() {
-  local data=$1 check
-  if fm_backlog_string_has_control_byte "$data"; then
+# Assigns <output-variable> the physical path of <data-dir>: status 2 for a
+# control byte, 1 when it is not a directory. Positional parameters, not
+# locals, hold the work, so any output name is safe.
+fm_backlog_data_absolute_to() {  # <output-variable> <data-dir>
+  if fm_backlog_string_has_control_byte "$2"; then
     printf 'error: data directory contains an invalid control byte\n' >&2
     return 2
   fi
-  check=$data
-  while [ "$check" != / ] && [ "${check%/}" != "$check" ]; do
-    check=${check%/}
+  set -- "$1" "$2" "$2"
+  while [ "$3" != / ] && [ "${3%/}" != "$3" ]; do
+    set -- "$1" "$2" "${3%/}"
   done
-  if [ ! -d "$check" ]; then
-    FM_BACKLOG_TRANSITION_ERROR="data directory is not a directory at $data"
-    return 1
-  fi
-  if ! data=$(CDPATH='' cd -- "$data" 2>/dev/null && pwd -P); then
-    return 1
-  fi
-  printf '%s\n' "$data"
+  [ -d "$3" ] || return 1
+  set -- "$1" "$(CDPATH='' cd -- "$2" 2>/dev/null && pwd -P)"
+  [ -n "$2" ] || return 1
+  printf -v "$1" '%s' "$2"
 }
 
 fm_backlog_file() {  # <data-dir>
   local data
-  data=$(fm_backlog_data_absolute "$1") || {
+  fm_backlog_data_absolute_to data "$1" || {
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
   }
@@ -155,7 +153,7 @@ fm_backlog_file() {  # <data-dir>
 # The directory a backlog's own `.tasks.toml` is resolved from.
 fm_backlog_root() {  # <data-dir>
   local data parent
-  data=$(fm_backlog_data_absolute "$1") || {
+  fm_backlog_data_absolute_to data "$1" || {
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
   }
@@ -171,7 +169,7 @@ fm_backlog_root() {  # <data-dir>
 
 fm_backlog_data_relative() {  # <data-dir>
   local data root
-  data=$(fm_backlog_data_absolute "$1") || {
+  fm_backlog_data_absolute_to data "$1" || {
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
   }
@@ -268,7 +266,7 @@ fm_backlog_source_present() {  # <data-dir> <authorized-data-dir> [root authoriz
 fm_backlog_tasks_axi_addressing() {  # <data-dir>
   FM_BACKLOG_AXI_FILE=
   local data root backend
-  data=$(fm_backlog_data_absolute "$1") || return $?
+  fm_backlog_data_absolute_to data "$1" || return $?
   root=$(fm_backlog_root "$data") || return $?
   backend=$(fm_tasks_axi_backend "$root" 2>&1) || {
     FM_BACKLOG_TRANSITION_ERROR=$backend
@@ -291,7 +289,7 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
     FM_BACKLOG_TRANSITION_SKIP="config/backlog-backend selects manual editing"
     return 1
   fi
-  if ! data=$(fm_backlog_data_absolute "$2"); then
+  if ! fm_backlog_data_absolute_to data "$2"; then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $2"
     return 2
   fi
@@ -421,7 +419,7 @@ fm_backlog_row_list() {  # <resolved-data-dir> [flag...]
 
 fm_backlog_row_probe() {  # <data-dir> <id>
   local data authorized_data=$1 id=$2 out state held blocked hold_kind command_status source_status
-  if ! data=$(fm_backlog_data_absolute "$1"); then
+  if ! fm_backlog_data_absolute_to data "$1"; then
     FM_BACKLOG_ROW_RESULT=error
     FM_BACKLOG_ROW_STATE=
     FM_BACKLOG_ROW_ERROR="data directory cannot be resolved: $1"
@@ -478,7 +476,7 @@ fm_backlog_row_probe() {  # <data-dir> <id>
 # how the selected adapter is addressed (ADDRESSING above).
 fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
   local data authorized_data=$1 verb=$2 id=$3 out command_status source_status
-  if ! data=$(fm_backlog_data_absolute "$1"); then
+  if ! fm_backlog_data_absolute_to data "$1"; then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
   fi
@@ -538,7 +536,7 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
   local data authorized_data=$1 id=$2 out command_status previous_arg=''
   local arg deliverable='' line body new_body tmp
   local -a row_args=()
-  if ! data=$(fm_backlog_data_absolute "$1"); then
+  if ! fm_backlog_data_absolute_to data "$1"; then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
     return 1
   fi
@@ -942,11 +940,11 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
       return 1
       ;;
   esac
-  authorized_data=$(fm_backlog_data_absolute "$2") || {
+  fm_backlog_data_absolute_to authorized_data "$2" || {
     FM_BACKLOG_TRANSITION_ERROR="authorized data directory cannot be resolved: $2"
     return 1
   }
-  data_resolved=$(fm_backlog_data_absolute "$data") || {
+  fm_backlog_data_absolute_to data_resolved "$data" || {
     FM_BACKLOG_TRANSITION_ERROR="data directory in pending-close record cannot be resolved: $data"
     return 1
   }
@@ -1037,7 +1035,7 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
 fm_backlog_close_marker_stage() {  # <temporary-path> <id> <data-dir> <spawn-gen> <state-dir> <cleanup-incomplete: 0|1> [--retain] [flag...]
   local tmp=$1 id=$2 data spawn_gen=$4 state=$5 cleanup_incomplete=$6 arg previous_arg=''
   local mode=close serialized_args=()
-  data=$(fm_backlog_data_absolute "$3") || {
+  fm_backlog_data_absolute_to data "$3" || {
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $3"
     return 1
   }

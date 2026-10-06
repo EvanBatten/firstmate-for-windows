@@ -339,7 +339,7 @@ load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
 # mutate path.
 tasks_axi() {
   local data file root backend
-  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  fm_backlog_data_absolute_to data "$DATA" || fail "data directory cannot be resolved: $DATA"
   root=$(fm_backlog_root "$data") || fail "$FM_BACKLOG_TRANSITION_ERROR"
   backend=$(fm_tasks_axi_backend "$root") || return 2
   if [ "$backend" = markdown ]; then
@@ -367,7 +367,7 @@ require_tasks_axi() {
 TASK_SHOW_OUTPUT=
 task_show() {  # <id>; sets TASK_SHOW_OUTPUT
   local data status=0 reason
-  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  fm_backlog_data_absolute_to data "$DATA" || fail "data directory cannot be resolved: $DATA"
   TASK_SHOW_OUTPUT=$(fm_backlog_row_show "$data" "$1" --full 2>/dev/null) || status=$?
   if [ "$status" -eq 124 ]; then
     reason=${TASK_SHOW_OUTPUT%%$'\n'*}
@@ -641,7 +641,7 @@ captain_migration_scan_load() {  # <resolved-data-dir>
 resolve_migrated_entry() {  # <origin-or-empty> <entry>
   local origin=$1 entry=$2 data root entries prefix derived show backend
   local candidate candidate_matches prefixed matches count prefixed_matches prefixed_count
-  data=$(fm_backlog_data_absolute "$DATA") || {
+  fm_backlog_data_absolute_to data "$DATA" || {
     printf 'fm-captain-hold: the migrated hold of %s cannot be resolved: %s\n' \
       "$entry" "${FM_BACKLOG_TRANSITION_ERROR:-the configured data directory $DATA cannot be resolved}" >&2
     return 2
@@ -1774,7 +1774,7 @@ EOF
 # quoted title - so a title containing commas or quotes cannot shift them.
 open_task_ids() {
   local data
-  data=$(fm_backlog_data_absolute "$DATA") || return 1
+  fm_backlog_data_absolute_to data "$DATA" || return 1
   fm_backlog_row_list "$data" 2>/dev/null | awk -F, '
     /^  [A-Za-z0-9._-]+,/ {
       id = $1
@@ -1877,7 +1877,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
       exit 2
       ;;
   esac
-  data=$(fm_backlog_data_absolute "$DATA") \
+  fm_backlog_data_absolute_to data "$DATA" \
     || { printf 'fm-captain-hold: data directory cannot be resolved: %s\n' "$DATA" >&2; exit 2; }
   root=$(fm_backlog_root "$data") \
     || { printf 'fm-captain-hold: %s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2; exit 2; }
