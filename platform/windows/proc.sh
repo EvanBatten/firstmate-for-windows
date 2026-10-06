@@ -168,8 +168,8 @@ fm_win_ps() {
   while [ $# -gt 0 ]; do
     case $1 in
       -o) spec=$2; shift 2 ;;
-      -eo|-Ao) table=1; spec=$2; shift 2 ;;
-      -e|-A) table=1; shift; continue ;;
+      -eo|-Ao|-axo) table=1; spec=$2; shift 2 ;;
+      -e|-A|-ax) table=1; shift; continue ;;
       -p) pid=$2; shift 2; continue ;;
       *) exec_real=1; break ;;
     esac
