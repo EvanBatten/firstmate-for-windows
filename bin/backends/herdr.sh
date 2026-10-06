@@ -3239,7 +3239,7 @@ fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unkn
 # (Enter only, never retyped) until native agent-state, a cleared composer, or
 # fm_composer_queued_enter_verdict confirms delivery. When native identity is
 # Claude, text is typed only into an empty composer and Enter is sent only
-# after the composer shows the payload (fm_backend_herdr_composer_payload_shown).
+# after the composer shows the payload (fm_backend_herdr_composer_await_payload).
 # A missing read, a shorter suffix, or a paste placeholder followed by a
 # literal remainder does not press Enter: the composer is cleared back to
 # empty and the verdict is send-failed, or unknown when the clear cannot be
@@ -3375,8 +3375,9 @@ fm_backend_herdr_composer_content() {  # <target>
   fm_composer_extract_selected_content "$caps" "$cap"
 }
 
-# fm_backend_herdr_composer_payload_shown: 0 when <after>, read from a
-# composer that was empty before the send, shows <text>.
+# fm_backend_herdr_composer_payload_check: 0 when <after>, read from a
+# composer that was empty before the send, shows <text>; 2 when it is still
+# rendering it (empty, or a literal prefix of <text>); 1 otherwise.
 # Literal equality ignores whitespace, the same comparison zellij uses, so a
 # wrapped payload still matches. It also ignores U+2063, the invisible mark
 # that starts operational inputs and separates the from-firstmate label:
@@ -3387,7 +3388,7 @@ fm_backend_herdr_composer_content() {  # <target>
 # is the same proof for one fast burst: Claude collapses that burst into the
 # placeholder and expands it on submit. A shorter literal suffix, or a placeholder followed by a literal
 # remainder, is the head-truncation shape and is not proof.
-fm_backend_herdr_composer_payload_shown() {  # <text> <after>
+fm_backend_herdr_composer_payload_check() {  # <text> <after>
   local text=$1 after=$2 literal
   fm_composer_normalize_spaces_var text
   fm_composer_normalize_spaces_var after
@@ -3395,13 +3396,32 @@ fm_backend_herdr_composer_payload_shown() {  # <text> <after>
   text=${text//$'\xE2\x81\xA3'/}
   after=${after//[$' \t\r\n\v\f']/}
   after=${after//$'\xE2\x81\xA3'/}
-  [ -n "$text" ] && [ -n "$after" ] || return 1
+  [ -n "$text" ] || return 1
+  [ -n "$after" ] || return 2
   [ "$after" = "$text" ] && return 0
+  [ "${text#"$after"}" = "$text" ] || return 2
   literal=$after
   while [[ $literal =~ \[Pastedtext#[0-9]+(\+[0-9]+lines?)?\] ]]; do
     literal=${literal/"${BASH_REMATCH[0]}"/}
   done
   [ -z "$literal" ]
+}
+
+# fm_backend_herdr_composer_await_payload: 0 once the composer shows <text>.
+# Claude on Windows renders send-text input 0.3 to 5 s after send-text returns
+# (measured live, issue #160), so a read that is still rendering is taken again
+# until FM_BACKEND_HERDR_PAYLOAD_WAIT seconds pass. A failed read or any other
+# content refuses at once.
+fm_backend_herdr_composer_await_payload() {  # <target> <text>
+  local target=$1 text=$2 content rc deadline=$((SECONDS + FM_BACKEND_HERDR_PAYLOAD_WAIT))
+  while content=$(fm_backend_herdr_composer_content "$target"); do
+    rc=0
+    fm_backend_herdr_composer_payload_check "$text" "$content" || rc=$?
+    [ "$rc" -eq 2 ] || return "$rc"
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep "$FM_BACKEND_HERDR_PAYLOAD_POLL"
+  done
+  return 1
 }
 
 # fm_backend_herdr_composer_clear: after a refused proof, press Ctrl+U until
@@ -3441,8 +3461,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
   if [ "$proof" = 1 ]; then
-    if ! content=$(fm_backend_herdr_composer_content "$target") \
-      || ! fm_backend_herdr_composer_payload_shown "$text" "$content"; then
+    if ! fm_backend_herdr_composer_await_payload "$target" "$text"; then
       if fm_backend_herdr_composer_clear "$target" "$text"; then
         printf 'send-failed'
       else
@@ -3709,6 +3728,11 @@ fm_backend_herdr_busy_state() {  # <target>
 # call-count assertions).
 FM_BACKEND_HERDR_SUBMIT_POLLS=${FM_BACKEND_HERDR_SUBMIT_POLLS:-6}
 FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=${FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP:-0.6}
+# FM_BACKEND_HERDR_PAYLOAD_WAIT (seconds) and FM_BACKEND_HERDR_PAYLOAD_POLL
+# bound fm_backend_herdr_composer_await_payload. The wait is twice the slowest
+# render measured live.
+FM_BACKEND_HERDR_PAYLOAD_WAIT=${FM_BACKEND_HERDR_PAYLOAD_WAIT:-10}
+FM_BACKEND_HERDR_PAYLOAD_POLL=${FM_BACKEND_HERDR_PAYLOAD_POLL:-0.2}
 
 fm_backend_herdr_submit_confirm_budget() {  # <caller-budget-seconds>
   awk -v b="${1:-0}" -v m="$FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP" 'BEGIN {
