@@ -3,9 +3,9 @@
   "project": "greeter",
   "proves": {
     "agents-7-parallel-dispatch": 5,
-    "readme-disposable-worktrees": 9,
-    "feature-ship-three-parallel": 10,
-    "readme-one-liaison": 10
+    "readme-disposable-worktrees": 8,
+    "feature-ship-three-parallel": 9,
+    "readme-one-liaison": 9
   },
   "steps": [
     {
@@ -45,13 +45,8 @@
     },
     {
       "say": "",
-      "until": "git.ahead:greeter>=2",
-      "budgetSec": 300
-    },
-    {
-      "say": "",
-      "until": "git.ahead:greeter>=3 && file.contains:projects/greeter/greet.sh:HELLO FROM THE CREW",
-      "budgetSec": 300
+      "until": "git.ahead:greeter>=3 && file.contains:projects/greeter/greet.sh:HELLO FROM THE CREW && file.contains:projects/greeter/farewell.sh:goodbye from the crew && file.contains:projects/greeter/VERSION:0.1.0",
+      "budgetSec": 600
     },
     {
       "say": "",

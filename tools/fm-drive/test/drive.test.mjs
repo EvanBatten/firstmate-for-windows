@@ -647,6 +647,7 @@ describe('shipped traces cannot prove a row without its behavior', () => {
     const farewell = ['farewell.sh', "echo 'goodbye from the crew'\n"];
     const version = ['VERSION', '0.1.0\n'];
     assert.equal((await landed([greet, shout, farewell])).ok, false, 'two of three workers landed and the step held');
+    assert.equal((await landed([greet, shout, version])).ok, false, 'the farewell worker never landed and the step held');
     assert.equal((await landed([greet, shout, ['tests/greet_test.sh', 'check shout\n']])).ok, false, 'one worker landing three commits proved three landings');
     assert.equal((await landed([farewell, version, greet])).ok, false, 'a greet.sh without the steered subcommand proved the steer landed');
     assert.deepEqual(await landed([shout, farewell, version]), { ok: true, reason: 'holds' });
