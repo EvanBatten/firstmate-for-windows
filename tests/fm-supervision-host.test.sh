@@ -551,7 +551,9 @@ test_branch_outcomes_present_a_long_away_window_once() {
   FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" archive >/dev/null 2>&1 || fail "fixture: could not archive the away posture"
 
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_contains "$drained" "[seq 33, newest of 3 for this task, recorded 0m ago] alpha: alpha still needs review 30" "a task's repeated captain outcomes must collapse to its newest"
+  # Alpha's age is however long the 41 appends above took, which passes a minute on Git Bash.
+  assert_re '^\[seq 33, newest of 3 for this task, recorded [0-9]+m ago\] alpha: alpha still needs review 30$' <(printf '%s\n' "$drained") \
+    "a task's repeated captain outcomes must collapse to its newest"
   [ "$(printf '%s\n' "$drained" | grep -c '] alpha: ')" -eq 1 ] || fail "a task's captain outcomes must take one line: $drained"
   assert_contains "$drained" "[seq 44, recorded 0m ago] beta: beta ready to merge" "another task's captain outcome must keep its own line"
   assert_re '^\([0-9]+ earlier routine outcome\(s\) not shown; bin/fm-branch-outcome.sh list keeps them\)$' <(printf '%s\n' "$drained") \
