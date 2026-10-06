@@ -225,6 +225,58 @@ SH
   pass "classify stat helpers resolve the kernel name once per process"
 }
 
+test_backlog_record_guard_resolves_its_paths_in_one_perl() {
+  local script="$TMP_ROOT/guard.sh" shim="$TMP_ROOT/perl-shim" log="$TMP_ROOT/perl.log" home="$TMP_ROOT/guard-home"
+  mkdir -p "$shim" "$home/data" "$home/plain" "$TMP_ROOT/outside"
+  : > "$home/data/backlog.md"
+  : > "$TMP_ROOT/outside/backlog.md"
+  : > "$home/afile"
+  ln -sfn "$TMP_ROOT/outside" "$home/escape"
+  ln -sfn "$TMP_ROOT/outside/backlog.md" "$home/data/swapped.md"
+  ln -sfn "$home/data/backlog.md" "$home/data/alias.md"
+  cat > "$shim/perl" <<SH
+#!/bin/sh
+printf 'perl\n' >> "$log"
+exec $(command -v perl) "\$@"
+SH
+  chmod +x "$shim/perl"
+  cat > "$script" <<'SH'
+PATH="$2:$PATH"
+. "$1/bin/fm-backlog-transition-lib.sh"
+log=$3 h=$4
+FM_HOME=$h
+c() {  # <want-rc> <want-error-substring> <path> <label> <root> [parent-only]
+  local want_rc=$1 want_err=$2 rc=0 calls
+  shift 2
+  : > "$log"
+  FM_BACKLOG_TRANSITION_ERROR=
+  fm_backlog_record_parent_authorized "$@" || rc=$?
+  calls=$(grep -c . "$log" || true)
+  [ "$rc" = "$want_rc" ] || printf '%s: rc %s, want %s (%s)\n' "$1" "$rc" "$want_rc" "$FM_BACKLOG_TRANSITION_ERROR"
+  case "$FM_BACKLOG_TRANSITION_ERROR" in
+    *"$want_err"*) ;;
+    *) printf '%s: error %q, want %q\n' "$1" "$FM_BACKLOG_TRANSITION_ERROR" "$want_err" ;;
+  esac
+  [ "$calls" -eq 1 ] || printf '%s: perl ran %s times for one guard check\n' "$1" "$calls"
+}
+c 0 '' "$h/data/backlog.md" "backlog file" "$h/data"
+c 0 '' "$h/data/new.md" "backlog file" "$h/data"
+c 0 '' "$h/data/backlog.md" "backlog file" "$h/data" parent-only
+c 1 'backlog file resolves outside its authorized directory' "$h/data/swapped.md" "backlog file" "$h/data"
+c 1 'backlog file resolves through a different final path' "$h/data/alias.md" "backlog file" "$h/data"
+c 0 '' "$h/data/swapped.md" "backlog file" "$h/data" parent-only
+c 1 'record authorized directory resolves outside this home' "$h/escape/backlog.md" record "$h/escape"
+c 1 'record authorized directory cannot be resolved' "$h/gone/sub/x" record "$h/gone/sub"
+c 1 'record authorized directory is not a directory' "$h/afile/x" record "$h/afile"
+c 1 'record parent directory cannot be resolved' "$h/data/no/such/x" record "$h/data"
+c 1 'record resolves outside its authorized directory' "$h/plain/x" record "$h/data"
+FM_HOME=
+c 0 '' "$h/escape/backlog.md" record "$h/escape"
+SH
+  run_everywhere "backlog record guard" "$script" "$shim" "$log" "$home"
+  pass "the backlog record guard keeps every verdict and resolves its paths with one perl"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -234,4 +286,5 @@ else
   test_recovery_marker_read_accepts_exactly_one_newline
   test_window_to_task_matches_the_meta_pipeline
   test_classify_stat_helpers_read_the_kernel_name_once
+  test_backlog_record_guard_resolves_its_paths_in_one_perl
 fi
