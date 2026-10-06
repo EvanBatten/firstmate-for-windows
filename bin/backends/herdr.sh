@@ -3048,7 +3048,18 @@ fm_backend_herdr_parse_target() {  # <target>
 
 fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_parse_target "$1" || return 1
+  [ "$FM_BACKEND_HERDR_SESSION" != "${FM_BACKEND_HERDR_PINNED_SESSION-}" ] || return 0
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
+}
+
+# fm_backend_herdr_session_pin: for the rest of this shell, pane calls on
+# <session> go to its running server without ensuring it first. A caller that
+# types several dependent lines into a pane it just created pins that pane's
+# session: Herdr restores pane ids with fresh shells after a server restart,
+# so ensuring mid-sequence would type the rest into a shell that lost the
+# earlier lines, while a pinned call fails with server_not_running instead.
+fm_backend_herdr_session_pin() {  # <session>
+  FM_BACKEND_HERDR_PINNED_SESSION=$1
 }
 
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on

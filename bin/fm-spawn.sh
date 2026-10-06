@@ -3771,6 +3771,7 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    fm_backend_herdr_session_pin "$HERDR_SES"
     spawn_herdr_presentation_order_lock_release
     ;;
   zellij)
