@@ -79,6 +79,8 @@ Launch it with `--trust`, or none of its project hooks load; it also has no turn
 
 ### Install and launch
 
+On Windows, follow [Install on Windows](platform/windows/INSTALL.md) instead.
+
 ```sh
 gh auth login
 git clone https://github.com/kunchenguid/firstmate
