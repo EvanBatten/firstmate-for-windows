@@ -184,7 +184,7 @@ fm_win_ps() {
   if [ "$exec_real" = 1 ] || { [ "$table" = 0 ] && [ -z "$pid" ]; } \
     || { [ "$table" = 1 ] && [ -n "$pid" ]; }; then
     /usr/bin/ps "${argv[@]}"
-    return
+    return $?
   fi
   if [ "$table" = 1 ]; then
     for f in /proc/[0-9]*; do

@@ -121,7 +121,7 @@ if declare -F harness_process_verdict >/dev/null; then
       done
       if [ -n "$name" ] || [ -L "$FM_PROC_COMM" ]; then
         verdict=$(harness_process_verdict "$pid")
-        [ -z "$verdict" ] || { echo "$verdict"; return; }
+        [ -z "$verdict" ] || { echo "$verdict"; return 0; }
       fi
       pid=$FM_PROC_PPID space=$FM_PROC_PSPACE
       case "$pid" in '' | *[!0-9]*) break ;; esac

@@ -38,7 +38,7 @@ herdr() {
   [ "$PATH" = "${_FM_WIN_HERDR_PATH_KEY-}" ] || _fm_win_herdr_resolve
   if [ "$_FM_WIN_HERDR_NATIVE" != 1 ]; then
     command herdr "$@"
-    return
+    return $?
   fi
   local args=() arg next_is_cwd=0
   for arg; do
@@ -104,7 +104,7 @@ _fm_win_herdr_create() {  # <tab|workspace> create <args...>
     jq -c --arg label "$label" '.result.layout as $l | {id: "cli:tab:create", result: {type: "tab_created",
       tab: {tab_id: $l.tab_id, workspace_id: $l.workspace_id, label: $label},
       root_pane: {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}}}' <<< "$layout"
-    return
+    return $?
   fi
 
   out=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "$@") || { printf '%s\n' "$out"; return 1; }
@@ -152,7 +152,7 @@ fm_backend_herdr_current_path() {  # <target>
   [ "$PATH" = "${_FM_WIN_HERDR_PATH_KEY-}" ] || _fm_win_herdr_resolve
   if [ "$_FM_WIN_HERDR_NATIVE" != 1 ]; then
     _fm_win_upstream_fm_backend_herdr_current_path "$@"
-    return
+    return $?
   fi
   fm_backend_herdr_target_ready "$1" || return 0
   path=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane get "$FM_BACKEND_HERDR_PANE" 2>/dev/null \

@@ -20,7 +20,7 @@ me="$USERDOMAIN\\$USERNAME"
 
 acl_outsiders() {
   local out line entry who entries=0
-  out=$(MSYS2_ARG_CONV_EXCL='*' icacls "$1" 2>&1) || { echo unreadable-acl; return; }
+  out=$(MSYS2_ARG_CONV_EXCL='*' icacls "$1" 2>&1) || { echo unreadable-acl; return 0; }
   while IFS= read -r line; do
     line=${line//$'\r'/}
     case $line in *':('*) ;; *) continue ;; esac
