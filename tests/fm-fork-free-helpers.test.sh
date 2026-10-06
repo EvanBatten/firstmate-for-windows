@@ -380,6 +380,46 @@ SH
   pass "fm-spawn's shell_quote round-trips every input through eval without starting a process"
 }
 
+test_backlog_data_absolute_to_resolves_like_cd_and_pwd() {
+  local script="$TMP_ROOT/data-abs.sh" dir="$TMP_ROOT/data-abs"
+  rm -rf "$dir"; mkdir -p "$dir/real dir" "$dir/café"
+  ln -s "real dir" "$dir/link" 2>/dev/null || true
+  : > "$dir/file"
+  cat > "$script" <<'SH'
+. "$1/bin/fm-backlog-transition-lib.sh"
+d=$2
+real=$(cd "$d/real dir" && pwd -P)
+check() {  # <want-status> <want-value> <data-dir>
+  local status=0 out=UNSET
+  FM_BACKLOG_TRANSITION_ERROR=untouched
+  fm_backlog_data_absolute_to out "$3" 2>/dev/null || status=$?
+  [ "$status" = "$1" ] || printf 'data %q: status %s, want %s\n' "$3" "$status" "$1"
+  [ "$status" != 0 ] || [ "$out" = "$2" ] || printf 'data %q: %q, want %q\n' "$3" "$out" "$2"
+  [ "$FM_BACKLOG_TRANSITION_ERROR" = untouched ] || printf 'data %q set the error global\n' "$3"
+}
+check 0 "$real" "$d/real dir"
+check 0 "$real" "$d/real dir///"
+check 0 "$(cd "$d/café" && pwd -P)" "$d/café"
+[ ! -L "$d/link" ] || check 0 "$real" "$d/link"
+check 0 / /
+check 0 / ///
+check 1 '' "$d/file"
+check 1 '' "$d/missing"
+check 1 '' "$d/file/"
+check 2 '' "$d/real dir"$'\n'
+check 2 '' "$d/tab"$'\t'"dir"
+err=$(fm_backlog_data_absolute_to out "$d/x"$'\001' 2>&1)
+[ "$err" = 'error: data directory contains an invalid control byte' ] || printf 'control byte message: %q\n' "$err"
+for name in out status data; do
+  unset "$name"
+  fm_backlog_data_absolute_to "$name" "$d/real dir" || printf 'into %s failed\n' "$name"
+  [ "${!name-UNSET}" = "$real" ] || printf 'into %s left %s\n' "$name" "${!name-UNSET}"
+done
+SH
+  run_everywhere "backlog data directory" "$script" "$dir"
+  pass "fm_backlog_data_absolute_to resolves a data directory as cd and pwd -P do, into any variable"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -393,4 +433,5 @@ else
   test_file_contents_helper_matches_cat_and_lock_cycle_never_forks_it
   test_helpers_assign_any_output_variable_name
   test_spawn_shell_quote_round_trips_and_never_forks
+  test_backlog_data_absolute_to_resolves_like_cd_and_pwd
 fi
