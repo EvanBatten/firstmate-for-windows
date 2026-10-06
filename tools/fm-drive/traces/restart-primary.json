@@ -1,6 +1,12 @@
 {
   "feature": "restart-primary",
   "project": "greeter",
+  "proves": {
+    "fm-lock": 3,
+    "agents-5-restart-non-event": 5,
+    "readme-restart-proof": 5,
+    "feature-restart-primary": 5
+  },
   "steps": [
     {
       "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter.",

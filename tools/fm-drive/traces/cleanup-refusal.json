@@ -1,0 +1,39 @@
+{
+  "feature": "cleanup-refusal",
+  "project": "greeter",
+  "proves": {
+    "agents-7-teardown-refusal": 4
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then ship one change to greeter: add greet.sh with two subcommands, hello and bye, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. tell me when it is done, and wait for my go before landing it.",
+      "until": "projects.registered:greeter",
+      "budgetSec": 150
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1",
+      "budgetSec": 180
+    },
+    {
+      "say": "",
+      "until": "status.verb:done && git.unlanded:greeter>=1",
+      "budgetSec": 400
+    },
+    {
+      "say": "hold off on greet.sh for now. clean up the greeter worker before anything lands, and tell me what happened.",
+      "until": "turn.ended && tasks.count>=1 && git.unlanded:greeter>=1",
+      "budgetSec": 300
+    },
+    {
+      "say": "ok, keep that work after all: verify greet.sh by running it, then land it on main; you have my approval. clean up after.",
+      "until": "git.ahead:greeter>=1",
+      "budgetSec": 400
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean",
+      "budgetSec": 120
+    }
+  ]
+}

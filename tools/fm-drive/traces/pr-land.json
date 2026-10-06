@@ -1,0 +1,28 @@
+{
+  "feature": "pr-land",
+  "proves": {
+    "fm-pr-merge": 3
+  },
+  "steps": [
+    {
+      "say": "ahoy! add my project from {{remoteOrigin}} as a direct-PR project called notes. you may push branches and open pull requests there. then ship one change to notes: append a new line to NOTES.md, creating it if it is missing, that says hello from the crew and gives today's date. one commit, opened as a pull request. use the opus model for the worker. tell me when the pull request is up.",
+      "until": "projects.registered:notes",
+      "budgetSec": 150
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1",
+      "budgetSec": 180
+    },
+    {
+      "say": "once the pull request is up and looks right, merge it; you have my approval. then clean up and tell me.",
+      "until": "remote.ahead>=1",
+      "budgetSec": 400
+    },
+    {
+      "say": "",
+      "until": "home.clean && tabs.clean",
+      "budgetSec": 120
+    }
+  ]
+}

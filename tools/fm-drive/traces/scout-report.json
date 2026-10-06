@@ -1,6 +1,10 @@
 {
   "feature": "scout-report",
   "project": "greeter",
+  "proves": {
+    "agents-7-scout-report-gate": 4,
+    "readme-ship-and-scout": 5
+  },
   "steps": [
     {
       "say": "ahoy! add my project from {{projectOrigin}} as a local-only project called greeter. then investigate, without changing anything in the project: which subcommands a friendly greeter CLI called greet.sh should have, and what each should print. I want a short written report I can read, not a change. use the opus model. when the report is in, tell me its findings and wait.",
