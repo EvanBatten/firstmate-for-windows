@@ -1200,6 +1200,27 @@ describe('fake-herdr end to end', () => {
     assert.ok(started.json.steps[1].ms >= 1500, `the step held only once the agent started (${started.json.steps[1].ms} ms)`);
   });
 
+  test("the result times each spawn by the task's record lock, from taking it to releasing it", () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({
+      'add my project': base['add my project'],
+      'dispatch a worker': [{ mkdir: 'state/.meta-t1.lock' }, { delayMs: 1200 }, ...base['dispatch a worker'], { remove: 'state/.meta-t1.lock' }],
+    }));
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: file, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), {
+      feature: 'e2e-spawn-time',
+      steps: [
+        { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+        { say: 'now dispatch a worker', until: 'tasks.count>=1 && state.settled', budgetSec: 10 },
+      ],
+    })], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.deepEqual(r.json.spawns.map((s) => s.id), ['t1']);
+    const [{ ms }] = r.json.spawns;
+    assert.ok(ms >= 1200 && ms < 6000, `the lock was held ${ms} ms`);
+  });
+
   test('a rejected trace never reaches herdr even with a live fake', () => {
     const { dir, env } = fakeEnv({ FM_DRIVE_ROOT: root });
     const r = runDrive(['run', join(FIXTURES, 'reject', 'lock-only.json')], env);
