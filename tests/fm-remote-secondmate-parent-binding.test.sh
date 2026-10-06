@@ -219,7 +219,7 @@ cmp -s "$REMOTE_HOME/.fm-secondmate-parent" <(
 remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >/dev/null \
   || fail "real remote secondmate launch failed"
 
-STAGED_LAUNCH=$(sed -n "s/^pane send-text [^ ]* \\. '\([^']*\)' --session [^ ]*\$/\1/p" "$HERDR_LOG" | tail -1)
+STAGED_LAUNCH=$(sed -n "s/^pane run [^ ]* \\. '\([^']*\)' --session [^ ]*\$/\1/p" "$HERDR_LOG" | tail -1)
 [ -n "$STAGED_LAUNCH" ] && [ -f "$STAGED_LAUNCH" ] \
   || fail "the remote launch did not deliver a staged command to assert against"
 DELIVERED_LINE=$(grep -F 'FM_PUBLIC_FOLLOWUP_PRIMARY_HOME' "$STAGED_LAUNCH" | tail -1 || true)

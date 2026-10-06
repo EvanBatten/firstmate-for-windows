@@ -5344,12 +5344,21 @@ if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
 fi
 sleep 0.3
 SPAWN_LAUNCH_SENT=1
-spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
-sleep 0.3
-if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
-  HERDR_PROJECTION_ABORT_CLEANUP=0
+if [ "$BACKEND" = herdr ]; then
+  # A separate Enter is lost when it reaches a busy pane before the typed line
+  # renders (issue #160); `pane run` types and submits in one request.
+  if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
+    HERDR_PROJECTION_ABORT_CLEANUP=0
+  fi
+  spawn_send_text_line "$T" ". $(shell_quote "$LAUNCH_FILE")"
+else
+  spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
+  sleep 0.3
+  if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
+    HERDR_PROJECTION_ABORT_CLEANUP=0
+  fi
+  spawn_send_key "$T" Enter
 fi
-spawn_send_key "$T" Enter
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"
