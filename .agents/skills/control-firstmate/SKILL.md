@@ -106,6 +106,7 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
   "fidelity": { "claudeConfig": "clean", "hooks": "repo", "captainMd": "untouched", "model": "opus" },
   "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched" },
   "steps": [ { "say": "...", "until": "...", "ms": 0, "ok": true, "reason": "...", "sayMs": 0 } ],
+  "spawns": [ { "id": "greeter-cli-g1", "heldAt": "<iso>", "ms": 0 } ],
   "overhead": { "transport": "socket", "herdrCalls": 0, "spawns": 0, "herdrSpawns": 0, "gitSpawns": 0, "setupSpawns": 0, "cleanupSpawns": 0, "setupMs": 0, "operableMs": 0, "closeMs": 0 },
   "evidence": "/tmp/fm-drive-artifacts/register-<utc>" }
 ```
@@ -121,6 +122,9 @@ There `hooks` must still be `repo`, and `captainMd` may be `untouched` or `writt
 `readyMs` is the first launch plus the wait for an operable home (`state/.lock` or `state/.session-start-complete`), and `operableMs` reports that wait alone.
 `predicateMs` is the total time spent waiting for claims, and the rest of `wallMs` is the driver's setup, typing, relaunch, and cleanup, which `overhead` breaks down.
 A step whose say waited for the primary to rest records that wait as `restMs`, outside the step's `ms`.
+`spawns` times each worker spawn apart from the primary.
+Its `ms` is how long `fm-spawn` held the task's `state/.meta-<id>.lock`, which it takes before it creates the worker's endpoint and releases after it moves the backlog item In flight.
+The driver sees that lock only during its waits, and `ms` is `null` when it never saw the lock released.
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
 A dead primary fails its step at once, never at the budget.
 A parked question fails the step only when that step's claim is still false.
