@@ -47,6 +47,7 @@ declare -A seen
 checkouts=()
 while IFS= read -r wt; do
   top=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || continue
+  [ "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)" = "$common" ] || continue
   [ -z "${seen[$top]:-}" ] || continue
   seen[$top]=1
   checkouts+=("$top")
