@@ -396,7 +396,7 @@ export function evaluateAtom(atom, snap, ctx) {
     case 'backlog.recorded': {
       const tag = `(repo: ${a.name})`;
       const hit = backlogItems(snap.backlogMd).filter((i) => i.line.includes(tag));
-      return { ok: hit.length > 0, reason: hit.length ? hit.map((i) => `${/^- \[.\] (\S+)/.exec(i.line)[1]} ${i.section}`).join(', ') : `no backlog item for ${a.name}` };
+      return { ok: hit.length > 0, reason: hit.length ? hit.map((i) => `${i.line.match(/^- \[.\]\s+(\S+)/)?.[1] ?? '?'} ${i.section}`).join(', ') : `no backlog item for ${a.name}` };
     }
     case 'tasks.kind': {
       const hit = snap.taskIds.filter((id) => snap.meta[id].kind === a.kind);
