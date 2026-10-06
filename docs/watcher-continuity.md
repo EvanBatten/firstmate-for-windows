@@ -360,8 +360,10 @@ Branch acknowledgement retiring the check-row receipts of exactly its granted se
 | Actionable output | Returns that reason normally. |
 | Zero/empty | Rechecks the home lock and beacon, attaches to a verified healthy successor when one exists, or resolves the close against the watcher's bounded terminal-delivery ledger. |
 
-An attached arm follows verified identity-matched successors and resolves the same way when that chain ends without one.
-It does this because it holds no handle on the watcher's stdout and cannot read the reason line itself.
+An attached arm follows verified identity-matched successors because it holds no handle on the watcher's stdout and cannot read the reason line itself.
+When a cycle it follows ends, the arm reads the terminal-delivery ledger first and reports a delivered wake without waiting for a successor.
+The arm can be the only reader of that wake, because nothing reads a Claude handling successor's own output.
+A cycle that delivered nothing waits for a successor and fails when none appears.
 
 ### Terminal-delivery ledger
 

@@ -267,6 +267,99 @@ test_attached_arm_still_fails_on_a_wake_it_did_not_deliver() {
   pass "watch-arm: a cycle that delivered no wake of its own still fails loudly"
 }
 
+test_attached_arm_reports_a_delivered_wake_without_a_successor_wait() {
+  local dir state fakebin out armout status started elapsed
+  dir=$(make_case attached-delivered-prompt)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  start_seed_watcher "$state" "$fakebin" "$out"
+  start_attached_arm "$state" "$fakebin" "$armout" 60
+
+  printf 'done: fixture finished\n' > "$state/demo.status"
+  wait_for_exit "$SEED_PID" 120
+  grep -q '^signal:' "$out" || fail "seed watcher did not surface the signal wake: $(cat "$out")"
+  started=$SECONDS
+  wait_for_exit "$ARM_PID" 1200
+  status=$?
+  elapsed=$((SECONDS - started))
+  grep -q '^signal:' "$armout" \
+    || fail "attached arm did not report the delivered wake: $(cat "$armout")"
+  expect_code 0 "$status" "an attached arm whose cycle delivered a wake must close successfully"
+  [ "$elapsed" -lt 30 ] \
+    || fail "attached arm held a delivered wake for ${elapsed}s waiting out its 60s successor window"
+  pass "watch-arm: an attached arm reports its cycle's delivered wake without waiting for a successor"
+}
+
+test_two_attached_arms_each_report_the_one_delivered_wake() {
+  local dir state fakebin out first second first_pid second_pid status rows
+  dir=$(make_case attached-arms-race)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  first="$dir/first-arm.out"
+  second="$dir/second-arm.out"
+  start_seed_watcher "$state" "$fakebin" "$out"
+  start_attached_arm "$state" "$fakebin" "$first" 2
+  first_pid=$ARM_PID
+  start_attached_arm "$state" "$fakebin" "$second" 2
+  second_pid=$ARM_PID
+
+  printf 'done: fixture finished\n' > "$state/demo.status"
+  wait_for_exit "$SEED_PID" 120
+  wait_for_exit "$first_pid" 600
+  status=$?
+  expect_code 0 "$status" "the first attached arm must close on the delivered wake"
+  wait_for_exit "$second_pid" 600
+  status=$?
+  expect_code 0 "$status" "the second attached arm must close on the same delivered wake"
+  grep -q '^signal:.*demo.status' "$first" || fail "first arm did not report the wake: $(cat "$first")"
+  grep -q '^signal:.*demo.status' "$second" || fail "second arm did not report the wake: $(cat "$second")"
+  rows=$(grep -c 'demo.status' "$state/.wake-queue")
+  [ "$rows" -ge 1 ] || fail "the wake was not durably recorded, so this case proves nothing"
+  [ "$(grep -c 'reason=attached-delivered-wake' "$state/.watch-cycle-exits.log")" -eq 2 ] \
+    || fail "each attached arm must ledger its own delivered close: $(cat "$state/.watch-cycle-exits.log")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null || fail "drain failed"
+  [ "$(grep -c 'demo.status' "$dir/drain.out")" -eq "$rows" ] \
+    || fail "two reporting arms must not add queue rows: queued $rows, drained $(grep -c 'demo.status' "$dir/drain.out")"
+  pass "watch-arm: racing attached arms each report the one delivered wake and add no queue rows"
+}
+
+test_arm_killed_after_the_handoff_leaves_the_wake_for_the_next_arm() {
+  local dir state fakebin out armout status
+  dir=$(make_case killed-after-handoff)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  armout="$dir/arm.out"
+  start_seed_watcher "$state" "$fakebin" "$out"
+  start_attached_arm "$state" "$fakebin" "$armout" 60
+  kill -STOP "$ARM_PID"
+
+  printf 'done: fixture finished\n' > "$state/demo.status"
+  wait_for_exit "$SEED_PID" 120
+  grep -q '^signal:' "$out" || fail "seed watcher did not surface the signal wake: $(cat "$out")"
+  kill -KILL "$ARM_PID" 2>/dev/null || true
+  wait "$ARM_PID" 2>/dev/null || true
+  ! grep -q '^signal:' "$armout" \
+    || fail "the arm reported before it was killed, so this case proves nothing: $(cat "$armout")"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_ARM_CONFIRM_TIMEOUT="$REARM_CONFIRM_SECONDS" "$WATCH_ARM" > "$dir/next-arm.out" &
+  ARM_PID=$!
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS"
+  status=$?
+  expect_code 0 "$status" "the next arm must close on the recovered wake"
+  grep -qF 'check: rearm-resurface' "$dir/next-arm.out" \
+    || fail "the next arm did not resurface the wake the killed arm held: $(cat "$dir/next-arm.out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null || fail "drain failed"
+  grep -q 'demo.status' "$dir/drain.out" \
+    || fail "the resurfaced wake did not present the original status row: $(cat "$dir/drain.out")"
+  pass "watch-arm: a wake whose attached arm died after the hand-off is resurfaced by the next arm"
+}
+
 test_rearm_resurfaces_durable_queue_and_remote_open_decision() {
   local dir home state fakebin result armout drainout status watcher_pid sequence generation decision_recovery_arm decision_successor
   dir=$(make_case rearm-resurface)
@@ -1245,6 +1338,9 @@ test_watcher_exits_when_its_state_directory_is_removed_mid_lock_wait
 test_watcher_exits_when_its_home_is_removed
 test_reaper_stops_a_tracked_watcher
 test_attached_arm_still_fails_on_a_wake_it_did_not_deliver
+test_attached_arm_reports_a_delivered_wake_without_a_successor_wait
+test_two_attached_arms_each_report_the_one_delivered_wake
+test_arm_killed_after_the_handoff_leaves_the_wake_for_the_next_arm
 test_rearm_resurfaces_durable_queue_and_remote_open_decision
 test_slow_rearm_recovery_is_still_surfaced
 test_marker_publish_failure_retains_recovery_evidence

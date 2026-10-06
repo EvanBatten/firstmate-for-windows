@@ -37,11 +37,12 @@
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
 # returns the FAILED line. On started it waits the child and propagates the wake
 # reason; on attached it stays live across identity-matched successors. A cycle
-# that ends with no reason line and no healthy successor is resolved against the
-# watcher's identity-bound delivery record: a matching record reports that wake
-# and exits 0, and only a cycle that delivered nothing is the typed nonzero
-# failure. Neither is ever a clean empty completion. On FAILED it exits non-zero
-# so the failure is loud. A live cycle already present means re-arm attaches - do
+# whose reason line this arm cannot read is resolved against the watcher's
+# identity-bound delivery record: a matching record reports that wake and exits
+# 0, read as soon as an attached cycle ends, and only a cycle that delivered
+# nothing and left no healthy successor is the typed nonzero failure. Neither is
+# ever a clean empty completion. On FAILED it exits non-zero so the failure is
+# loud. A live cycle already present means re-arm attaches - do
 # not start a second watcher.
 #
 # Every observed watcher cycle appends one tab-separated lifecycle record to
@@ -312,41 +313,45 @@ fail_unexplained_cycle() {
   return 1
 }
 
-# Close a cycle whose reason line this arm could not read against the bounded
-# terminal-delivery ledger the watcher publishes before releasing its lock.
-close_unobserved_cycle() {
-  local i reason clean_identity record_pid record_identity record_reason
+# Look the observed cycle up in the bounded terminal-delivery ledger the watcher
+# publishes before releasing its lock. Sets CYCLE_DELIVERED_REASON on a match.
+CYCLE_DELIVERED_REASON=
+cycle_delivered_reason() {
+  local i clean_identity record_pid record_identity record_reason
+  CYCLE_DELIVERED_REASON=
   clean_identity=$(printf '%s' "$cycle_watcher_identity" | tr '\t\r\n' '   ')
   i=0
   while ! fm_lock_try_acquire "$WATCH_DELIVERY_LOCK"; do
-    [ "$i" -lt 20 ] || {
-      fail_unexplained_cycle
-      return 1
-    }
+    [ "$i" -lt 20 ] || return 1
     sleep 0.02
     i=$((i + 1))
   done
-  reason=
   if [ -f "$WATCH_DELIVERY_LOG" ]; then
     while IFS=$'\t' read -r record_pid record_identity record_reason; do
       if [ "$record_pid" = "$cycle_watcher_pid" ] && [ "$record_identity" = "$clean_identity" ]; then
-        reason=$record_reason
+        CYCLE_DELIVERED_REASON=$record_reason
       fi
     done < "$WATCH_DELIVERY_LOG"
   fi
   fm_lock_release "$WATCH_DELIVERY_LOCK"
-  if [ -n "$reason" ]; then
-    printf '%s\n' "$reason"
+  [ -n "$CYCLE_DELIVERED_REASON" ]
+}
+
+# Close a cycle whose reason line this arm could not read.
+close_unobserved_cycle() {
+  if cycle_delivered_reason; then
+    printf '%s\n' "$CYCLE_DELIVERED_REASON"
     return 0
   fi
   fail_unexplained_cycle
   return 1
 }
 
-# Stay alive across identity-matched healthy holders. If one cycle ends, attach
-# to a verified successor. With no successor, report the wake that cycle durably
-# delivered, or fail loudly - never a clean empty completion that an adapter could
-# mistake for a no-op.
+# Stay alive across identity-matched healthy holders. When a cycle ends, report
+# the wake it durably delivered at once, because this arm may be its only reader:
+# nothing reads a Claude handling successor's own output. A cycle that delivered
+# nothing attaches to a verified successor, or fails loudly - never a clean empty
+# completion that an adapter could mistake for a no-op.
 attach_and_wait() {
   local attached_pid=$1
   while :; do
@@ -359,6 +364,11 @@ attach_and_wait() {
       fi
       sleep "$ATTACH_POLL"
       continue
+    fi
+    if cycle_delivered_reason; then
+      printf '%s\n' "$CYCLE_DELIVERED_REASON"
+      cycle_log_append unknown unknown attached-delivered-wake none
+      return 0
     fi
     if wait_for_healthy_successor; then
       cycle_log_append unknown unknown attached-cycle-ended "attached:$HEALTHY_PID"
