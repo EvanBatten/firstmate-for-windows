@@ -2,11 +2,11 @@
   "feature": "watcher-wake",
   "project": "greeter",
   "proves": {
-    "fm-claude-stop-autoarm": 3,
-    "fm-watch-arm": 3,
-    "readme-low-token-supervision": 4,
-    "fm-watch": 4,
-    "feature-supervision-wakes": 6
+    "fm-claude-stop-autoarm": 4,
+    "fm-watch-arm": 4,
+    "readme-low-token-supervision": 5,
+    "fm-watch": 5,
+    "feature-supervision-wakes": 7
   },
   "steps": [
     {
@@ -16,8 +16,13 @@
     },
     {
       "say": "",
-      "until": "tasks.count>=1 && backlog.inflight>=1",
-      "budgetSec": 180
+      "until": "backlog.recorded:greeter",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 150
     },
     {
       "say": "",

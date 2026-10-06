@@ -248,7 +248,7 @@ describe('trace refusal', () => {
   });
 
   test('every catalog entry parses in at least one spelling', () => {
-    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended', 'remote.ahead>=1', 'remote.merged>=1', 'session.started', 'state.settled', 'teardown.refused', 'primary.idle.inflight'];
+    const samples = ['projects.registered:greeter', 'tasks.count>=1', 'backlog.inflight>=1', 'tasks.kind:scout', 'status.verb:done', 'report.exists', 'report.mentions:greet', 'inbox.handled', 'lock.held', 'lock.rotated', 'git.ahead:greeter>=1', 'home.clean', 'tabs.clean', 'worker.alive', 'wake.empty', 'beacon.fresh', 'file.contains:data/projects.md:greeter', 'wake.delivered:signal>=1', 'git.unlanded:greeter>=1', 'turn.ended', 'remote.ahead>=1', 'remote.merged>=1', 'session.started', 'state.settled', 'teardown.refused', 'primary.idle.inflight', 'backlog.recorded:greeter'];
     const names = new Set(samples.map((s) => parseUntil(s).atoms[0].name));
     for (const c of CATALOG) assert.ok(names.has(c), `catalog entry ${c} has a sample`);
   });
@@ -398,11 +398,79 @@ describe('predicates over fixture homes', () => {
     const w = check(home, 'worker.alive', c);
     assert.equal(w.ok, false);
     assert.equal(w.needs, 'panes');
-    assert.equal(check(home, 'worker.alive', c, { herdr: { panes: { 'pane-w1': true } } }).ok, true);
-    assert.equal(check(home, 'worker.alive', c, { herdr: { panes: { 'pane-w1': false } } }).ok, false);
+    const alive = (panes) => { const r = check(home, 'worker.alive', c, { herdr: { panes } }); return { ok: r.ok, reason: r.reason }; };
+    assert.deepEqual(alive({ 'pane-w1': { agent: 'claude' } }), { ok: true, reason: 'holds' });
+    assert.deepEqual(alive({ 'pane-w1': { agent: null } }), { ok: false, reason: 'worker.alive: no agent started in pane(s): pane-w1' }, 'a pane holding only its shell is not a live worker');
+    assert.deepEqual(alive({ 'pane-w1': null }), { ok: false, reason: 'worker.alive: pane(s) gone: pane-w1' });
+    for (const agent of ['codex', 'pi', 'opencode', 'gemini']) assert.equal(alive({ 'pane-w1': { agent } }).ok, true, `${agent} counts as a started worker`);
     const conj = check(home, 'home.clean && tabs.clean', c);
     assert.equal(conj.ok, false);
     assert.equal(conj.needs, undefined, 'the cheap fs atom fails first, so no herdr fact is requested');
+  });
+
+  test('backlog.recorded needs an item for that project in any backlog section', () => {
+    const empty = buildHome('empty');
+    const recorded = (home, name) => { const r = check(home, `backlog.recorded:${name}`); return { ok: r.ok, reason: r.reason }; };
+    assert.deepEqual(recorded(empty, 'greeter'), { ok: false, reason: 'backlog.recorded:greeter: no backlog item for greeter' });
+    const backlog = join(empty, 'data', 'backlog.md');
+    writeFileSync(backlog, '# Backlog\n\n## In flight\n## Queued\n- [ ] n1 - append a line (repo: notes) (kind: ship)\n## Done\n');
+    assert.deepEqual(recorded(empty, 'greeter'), { ok: false, reason: 'backlog.recorded:greeter: no backlog item for greeter' }, "another project's item is not this request");
+    writeFileSync(backlog, '# Backlog\n\n## In flight\n## Queued\n- [ ] g1 - add greet.sh (repo: greeter) (kind: ship)\n## Done\n');
+    assert.deepEqual(recorded(empty, 'greeter'), { ok: true, reason: 'holds' }, 'a Queued item records the request');
+    writeFileSync(backlog, '# Backlog\n\n## In flight\n## Queued\n## Done\n- [x] g1 - add greet.sh (repo: greeter) (kind: ship) (done 2026-10-05)\n');
+    assert.deepEqual(recorded(empty, 'greeter'), { ok: true, reason: 'holds' }, 'a Done item still records it');
+    assert.equal(recorded(buildHome('ship-in-flight'), 'greeter').ok, true, 'an In flight item records it');
+    assert.equal(recorded(buildHome('scout-reported'), 'greeter').ok, false, 'an item with no project tag is not for greeter');
+  });
+
+  test('backlog.recorded refuses an item for a differently named project and a tag that is not the item tag', () => {
+    const B = (body) => `# Backlog\n\n${body}`;
+    const cases = [
+      ['longer name with shared prefix', B('## Queued\n- [ ] g1 - x (repo: greeter-two) (kind: ship)\n'), 'greeter'],
+      ['asked name is a prefix of the item repo', B('## Queued\n- [ ] g1 - x (repo: greeter) (kind: ship)\n'), 'greet'],
+      ['item repo is a prefix of the asked name', B('## Queued\n- [ ] g1 - x (repo: greet) (kind: ship)\n'), 'greeter'],
+      ['no space after colon', B('## Queued\n- [ ] g1 - x (repo:greeter) (kind: ship)\n'), 'greeter'],
+      ['tag on a continuation line only', B('## Queued\n- [ ] g1 - add greet.sh (kind: ship)\n  note (repo: greeter)\n'), 'greeter'],
+      ['item before any heading', '- [ ] g1 - x (repo: greeter)\n## Queued\n', 'greeter'],
+      ['plain bullet, not a checkbox', B('## Queued\n- g1 - x (repo: greeter)\n'), 'greeter'],
+    ];
+    const verdicts = cases.map(([name, text, project]) => {
+      const home = buildHome('empty');
+      writeFileSync(join(home, 'data', 'backlog.md'), text);
+      return [name, check(home, `backlog.recorded:${project}`).ok];
+    });
+    assert.deepEqual(verdicts, cases.map(([name]) => [name, false]));
+  });
+
+  test('backlog.recorded gives a verdict, never a throw, for any item spelling after the box', () => {
+    const verdict = (line) => {
+      const home = buildHome('empty');
+      writeFileSync(join(home, 'data', 'backlog.md'), `# Backlog\n\n## Queued\n${line}\n`);
+      try { return check(home, 'backlog.recorded:greeter').ok; } catch (err) { return `threw ${err.message}`; }
+    };
+    assert.deepEqual(
+      ['- [ ]  t1 - x (repo: greeter)', '- [ ]\tt1 - x (repo: greeter)', '- [ ] (repo: greeter)'].map(verdict),
+      [true, true, true],
+    );
+  });
+
+  test('backlog sections match their heading the way tasks-axi writes it, ignoring case and outer spaces', () => {
+    const B = (body) => `# Backlog\n\n${body}`;
+    const inflight = (text) => {
+      const home = buildHome('empty');
+      writeFileSync(join(home, 'data', 'backlog.md'), text);
+      return check(home, 'backlog.inflight>=1').ok;
+    };
+    assert.deepEqual([
+      B('##  In flight  \n- [ ] a\n'),
+      B('##\tIn flight\n- [ ] a\n'),
+      B('## in FLIGHT\n- [ ] a\n'),
+      B('## In flight\r\n- [ ] a\r\n'),
+      B('### In flight\n- [ ] a\n'),
+      B('## In  flight\n- [ ] a\n'),
+      B('## In flight extra\n- [ ] a\n'),
+      '- [ ] orphan\n## Queued\n',
+    ].map(inflight), [true, true, true, true, false, false, false, false]);
   });
 
   test('scout reported', () => {
@@ -416,7 +484,7 @@ describe('predicates over fixture homes', () => {
     assert.equal(check(home, 'status.verb:done').ok, true);
     assert.equal(check(home, 'wake.empty').ok, false);
     assert.equal(check(home, 'git.ahead:greeter>=1', ctx({ seeds: { greeter: 'a'.repeat(40) } })).ok, false, 'packed-refs main equals the seed');
-    const w = check(home, 'worker.alive', ctx(), { herdr: { panes: { 'pane-s1': true } } });
+    const w = check(home, 'worker.alive', ctx(), { herdr: { panes: { 'pane-s1': { agent: 'claude' } } } });
     assert.equal(w.ok, true, 'a window=herdr:<pane> record names its pane too');
   });
 
@@ -497,6 +565,41 @@ describe('shipped traces cannot prove a row without its behavior', () => {
     Object.assign(snap, patch);
     return evaluateUntil(parsed, snap, c);
   };
+
+  // A worker trace times the primary filing the request apart from the spawn that starts the worker,
+  // so a red spawn names which of the two was slow.
+  const WORKER_TRACES = { 'cleanup-refusal': ['greeter', 'ship'], 'pr-land': ['notes', 'ship'], 'restart-primary': ['greeter', 'ship'], 'scout-report': ['greeter', 'scout'], 'ship-local': ['greeter', 'ship'], steer: ['greeter', 'ship'], 'watcher-wake': ['greeter', 'ship'] };
+  const spawnSteps = (trace) => {
+    const b = trace.steps.findIndex((s) => s.parsed.atoms.some((a) => a.name === 'backlog.inflight'));
+    return { a: trace.steps[b - 1], b: trace.steps[b] };
+  };
+  const workerHome = ({ project, kind, section, record }) => {
+    const home = buildHome('empty');
+    writeFileSync(join(home, 'data', 'projects.md'), `# Projects\n\n- ${project} [local-only] - a throwaway project\n`);
+    mkdirSync(join(home, 'projects', project, '.git'), { recursive: true });
+    if (section) {
+      const item = `- [ ] w1 - the captain's change (repo: ${project}) (kind: ${kind})\n`;
+      writeFileSync(join(home, 'data', 'backlog.md'), `# Backlog\n\n## In flight\n${section === 'In flight' ? item : ''}## Queued\n${section === 'Queued' ? item : ''}## Done\n`);
+    }
+    if (record) writeFileSync(join(home, 'state', 'w1.meta'), `kind=${kind}\nproject=${project}\nherdr_pane_id=pane-w1\n`);
+    return home;
+  };
+
+  test('every worker trace claims the request recorded before it claims the worker started', () => {
+    const files = readdirSync(join(HERE, '..', 'traces')).map((f) => f.replace(/\.json$/, ''));
+    assert.deepEqual(files.filter((f) => shipped(f).steps.some((s) => s.parsed.atoms.some((a) => a.name === 'backlog.inflight'))).sort(), Object.keys(WORKER_TRACES).sort());
+    for (const [name, [project, kind]] of Object.entries(WORKER_TRACES)) {
+      const { a, b } = spawnSteps(shipped(name));
+      const claims = (step, home, panes) => holds(step.parsed, home, since(), panes ? { herdr: { panes } } : {}).ok;
+      assert.equal(claims(a, workerHome({ project, kind })), false, `${name}: a registered project with nothing filed recorded the request`);
+      const queued = workerHome({ project, kind, section: 'Queued' });
+      assert.equal(claims(a, queued), true, `${name}: a Queued item for ${project} did not record the request`);
+      assert.equal(claims(b, queued), false, `${name}: a filed request with no worker proved the spawn`);
+      const dispatched = workerHome({ project, kind, section: 'In flight', record: true });
+      assert.equal(claims(b, dispatched, { 'pane-w1': { agent: null } }), false, `${name}: a worker pane with no agent in it proved the spawn`);
+      assert.equal(claims(b, dispatched, { 'pane-w1': { agent: 'claude' } }), true, `${name}: a dispatched worker whose agent started did not prove the spawn`);
+    }
+  });
 
   test('register needs the session-start digest of the session that holds the lock', () => {
     const step = provingStep(shipped('register'), 'fm-session-start');
@@ -1111,7 +1214,7 @@ describe('fake-herdr end to end', () => {
     assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     const j = r.json;
     assert.equal(j.pass, true);
-    assert.equal(j.steps.length, 5);
+    assert.equal(j.steps.length, 6);
     assert.ok(j.steps.every((s) => s.ok), JSON.stringify(j.steps));
     assert.equal(j.overhead.gitSpawns, 1, 'git.ahead cost exactly one git process');
     // Measured fake restart-primary wall: 49206 ms on Windows vs ~1734 ms on Linux.
@@ -1121,6 +1224,74 @@ describe('fake-herdr end to end', () => {
     assert.equal(texts.filter((t) => t.startsWith('ahoy! add my project')).length, 1);
     assert.equal(texts.filter((t) => t.startsWith("ahoy, I'm back")).length, 1);
     assert.equal(state.launches, 2);
+  });
+
+  test('worker.alive waits for herdr to detect an agent in the worker pane, not just for the pane', () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const shellOnly = base['dispatch a worker'].filter((w) => w.agentIn === undefined);
+    assert.equal(shellOnly.length, base['dispatch a worker'].length - 1, 'the fixture registers the worker agent once');
+    const runWith = (dispatch) => {
+      const file = join(tmp('script'), 'script.json');
+      writeFileSync(file, JSON.stringify({ 'add my project': base['add my project'], 'dispatch a worker': dispatch }));
+      const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: file, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+      return runDrive(['run', writeTrace(tmp('trace'), {
+        feature: 'e2e-worker-started',
+        steps: [
+          { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+          { say: 'now dispatch a worker', until: 'tasks.count>=1 && worker.alive', budgetSec: 6 },
+        ],
+      })], env);
+    };
+    const shell = runWith(shellOnly);
+    assert.equal(shell.status, 1, shell.stdout);
+    assert.equal(shell.json.steps[1].reason, 'not within 6 s: worker.alive: no agent started in pane(s): pane-w1');
+    const started = runWith([...shellOnly, { delayMs: 1500 }, { agentIn: 'pane-w1', agent: 'claude' }]);
+    assert.equal(started.status, 0, `stdout: ${started.stdout}\nstderr: ${started.stderr}`);
+    assert.ok(started.json.steps[1].ms >= 1500, `the step held only once the agent started (${started.json.steps[1].ms} ms)`);
+  });
+
+  test("the result times each spawn by the task's record lock, from taking it to releasing it", () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({
+      'add my project': base['add my project'],
+      'dispatch a worker': [{ mkdir: 'state/.meta-t1.lock' }, { delayMs: 1200 }, ...base['dispatch a worker'], { remove: 'state/.meta-t1.lock' }],
+    }));
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: file, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), {
+      feature: 'e2e-spawn-time',
+      steps: [
+        { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+        { say: 'now dispatch a worker', until: 'tasks.count>=1 && state.settled', budgetSec: 10 },
+      ],
+    })], env);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.deepEqual(r.json.spawns.map((s) => s.id), ['t1']);
+    const [{ ms }] = r.json.spawns;
+    assert.ok(ms >= 1200 && ms < 6000, `the lock was held ${ms} ms`);
+  });
+
+  test('a later hold of the same record lock never replaces the spawn time, and a lock never released reads null', () => {
+    const base = JSON.parse(readFileSync(join(FIXTURES, 'e2e-script.json'), 'utf8'));
+    const file = join(tmp('script'), 'script.json');
+    writeFileSync(file, JSON.stringify({
+      'add my project': base['add my project'],
+      'dispatch a worker': [
+        { mkdir: 'state/.meta-t1.lock' }, { delayMs: 1500 }, ...base['dispatch a worker'].filter((w) => w.delayMs === undefined), { remove: 'state/.meta-t1.lock' },
+        { delayMs: 1500 }, { mkdir: 'state/.meta-t1.lock' }, { delayMs: 3000 }, { remove: 'state/.meta-t1.lock' },
+        { mkdir: 'state/.meta-t2.lock' }, { delayMs: 500 }, { path: 'data/end.txt', content: 'end\n' },
+      ],
+    }));
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: file, FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), {
+      feature: 'e2e-spawn-relock',
+      steps: [
+        { say: 'ahoy! add my project from {{projectOrigin}} as greeter', until: 'projects.registered:greeter', budgetSec: 10 },
+        { say: 'now dispatch a worker', until: 'file.contains:data/end.txt:end', budgetSec: 20 },
+      ],
+    })], env);
+    const spawns = r.json.spawns.map((s) => ({ id: s.id, ms: s.ms === null ? null : Math.round(s.ms / 500) * 500 }));
+    assert.deepEqual(spawns, [{ id: 't1', ms: 1500 }, { id: 't2', ms: null }], JSON.stringify(r.json.spawns));
   });
 
   test('a rejected trace never reaches herdr even with a live fake', () => {
@@ -1304,6 +1475,10 @@ describe('cli transport argv mapping', () => {
 });
 
 describe('grafted onboarding config and shell prompts', () => {
+  test("agent.get reads herdr's agent record for a pane over the CLI", () => {
+    assert.deepEqual(cliArgv('agent.get', { target: 'w1:p1' }), ['agent', 'get', 'w1:p1']);
+  });
+
   test("B's throwaway CLAUDE_CONFIG_DIR is created and does not write ~/.claude.json", () => {
     const home = tmp('claude-home');
     const userHome = tmp('user-home');

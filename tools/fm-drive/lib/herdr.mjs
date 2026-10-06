@@ -280,6 +280,7 @@ export function cliArgv(method, params) {
     case 'tab.close': return ['tab', 'close', p.tab_id];
     case 'pane.get': return ['pane', 'get', p.pane_id];
     case 'pane.process_info': return ['pane', 'process-info', '--pane', p.pane_id];
+    case 'agent.get': return ['agent', 'get', p.target];
     case 'pane.send_input': {
       const keys = p.keys ?? [];
       if (p.text !== undefined && keys.length === 1 && keys[0] === 'enter') return ['pane', 'run', p.pane_id, p.text];

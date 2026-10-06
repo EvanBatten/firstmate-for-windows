@@ -54,6 +54,8 @@ The shipped `register` trace is the smallest real one.
 - The driver refuses `pong`, `bypass permissions on`, and a trace whose only claims are `lock.held` with exit 2 before any Herdr call, because they prove the harness started, not that firstmate did anything.
 - Pane text is never a claim; a captain line that made the primary say the right thing but write nothing fails its step.
 - A worker is dispatched when its record exists **and** its backlog item is In flight (`tasks.count>=1 && backlog.inflight>=1`); a record alone is a spawn still in progress, and relaunching over it lets Claude's exit kill the spawn, whose cleanup then removes the record.
+- Every shipped trace that starts a worker waits for it in two steps, so a red run names who was slow. The first step claims the primary filed the captain's request (`backlog.recorded:NAME`, an item tagged `(repo: NAME)` in any backlog section) within 90 s. The second claims the worker started (`tasks.count>=1 && backlog.inflight>=1 && worker.alive`) within 150 s after that.
+- `worker.alive` holds only when Herdr has detected an agent in every recorded worker pane (`agent get`, any agent Herdr knows). A pane that still holds only the shell `fm-spawn` opened does not count.
 
 Check a trace without starting Herdr or Claude with `node tools/fm-drive/drive.mjs check <trace.json>`.
 `check` clones the root and refuses, with exit 2, a trace whose every `until` already holds on that fresh home; `run` does the same before it starts anything.
@@ -104,6 +106,7 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
   "fidelity": { "claudeConfig": "clean", "hooks": "repo", "captainMd": "untouched", "model": "opus" },
   "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched" },
   "steps": [ { "say": "...", "until": "...", "ms": 0, "ok": true, "reason": "...", "sayMs": 0 } ],
+  "spawns": [ { "id": "greeter-cli-g1", "heldAt": "<iso>", "ms": 0 } ],
   "overhead": { "transport": "socket", "herdrCalls": 0, "spawns": 0, "herdrSpawns": 0, "gitSpawns": 0, "setupSpawns": 0, "cleanupSpawns": 0, "setupMs": 0, "operableMs": 0, "closeMs": 0 },
   "evidence": "/tmp/fm-drive-artifacts/register-<utc>" }
 ```
@@ -119,6 +122,9 @@ There `hooks` must still be `repo`, and `captainMd` may be `untouched` or `writt
 `readyMs` is the first launch plus the wait for an operable home (`state/.lock` or `state/.session-start-complete`), and `operableMs` reports that wait alone.
 `predicateMs` is the total time spent waiting for claims, and the rest of `wallMs` is the driver's setup, typing, relaunch, and cleanup, which `overhead` breaks down.
 A step whose say waited for the primary to rest records that wait as `restMs`, outside the step's `ms`.
+`spawns` times each worker spawn apart from the primary.
+Its `ms` is how long `fm-spawn` held the task's `state/.meta-<id>.lock`, which it takes before it creates the worker's endpoint and releases after it moves the backlog item In flight.
+The driver sees that lock only during its waits, and `ms` is `null` when it never saw the lock released.
 Each step's `reason` names the first atom that decided it, so a failed step reads as `home.clean && tabs.clean: home.clean: task records remain: greeter-cli-g1`.
 A dead primary fails its step at once, never at the budget.
 A parked question fails the step only when that step's claim is still false.

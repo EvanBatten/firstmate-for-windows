@@ -2,7 +2,7 @@
   "feature": "steer",
   "project": "greeter",
   "proves": {
-    "fm-send": 3
+    "fm-send": 4
   },
   "steps": [
     {
@@ -12,8 +12,13 @@
     },
     {
       "say": "",
-      "until": "tasks.count>=1 && backlog.inflight>=1",
-      "budgetSec": 180
+      "until": "backlog.recorded:greeter",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 150
     },
     {
       "say": "one more thing for the greeter worker: greet.sh also needs a seventh subcommand, shout, that prints HELLO FROM THE CREW, documented in the README with the others. please pass that on to it now.",

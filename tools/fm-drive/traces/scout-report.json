@@ -2,8 +2,8 @@
   "feature": "scout-report",
   "project": "greeter",
   "proves": {
-    "agents-7-scout-report-gate": 4,
-    "readme-ship-and-scout": 5
+    "agents-7-scout-report-gate": 5,
+    "readme-ship-and-scout": 6
   },
   "steps": [
     {
@@ -13,8 +13,13 @@
     },
     {
       "say": "",
-      "until": "tasks.kind:scout && backlog.inflight>=1",
-      "budgetSec": 180
+      "until": "backlog.recorded:greeter",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
+      "until": "tasks.kind:scout && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 150
     },
     {
       "say": "",

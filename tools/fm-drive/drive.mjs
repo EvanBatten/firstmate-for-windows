@@ -285,6 +285,7 @@ async function run(trace, traceName) {
       operableMs: result.operableMs,
       closeMs: result.overhead.closeMs,
     };
+    result.spawns = session.spawnTimes();
     result.wallMs = Date.now() - T0;
     if (!result.rejected) {
       try { writeFileSync(join(session.evidenceDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch {}

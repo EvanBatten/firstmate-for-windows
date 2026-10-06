@@ -2,10 +2,10 @@
   "feature": "restart-primary",
   "project": "greeter",
   "proves": {
-    "fm-lock": 3,
-    "agents-5-restart-non-event": 5,
-    "readme-restart-proof": 5,
-    "feature-restart-primary": 5
+    "fm-lock": 4,
+    "agents-5-restart-non-event": 6,
+    "readme-restart-proof": 6,
+    "feature-restart-primary": 6
   },
   "steps": [
     {
@@ -15,8 +15,13 @@
     },
     {
       "say": "now ship one change: add greet.sh with three subcommands, hello, bye and version, each printing one line, plus a README section that documents them. one commit on its own branch. use the opus model for the worker. when it is done, verify the result by running it and land it on main; you have my approval.",
-      "until": "tasks.count>=1 && backlog.inflight>=1",
-      "budgetSec": 180
+      "until": "backlog.recorded:greeter",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 150
     },
     {
       "say": "$relaunch",

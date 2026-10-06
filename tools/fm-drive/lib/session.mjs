@@ -235,6 +235,10 @@ export class Session {
     this.projectOrigin = null;
     this.remote = null;
     this.seenTaskIds = new Set();
+    // A fresh fm-spawn takes state/.meta-<id>.lock before it creates the worker's endpoint and
+    // releases it after it moves the backlog item In flight, so the first hold the driver sees for
+    // an id times that spawn apart from the primary.
+    this.spawnLocks = new Map();
     this.taskTmps = new Set();
     this.baselineWorkspaces = new Set();
     this.signals = { blocked: null, status: null, shellDead: null, turns: [], startedAt: null, restSince: null };
@@ -805,7 +809,8 @@ export class Session {
     } else if (kind === 'panes') {
       snap.herdr.panes = {};
       for (const id of paneIds) {
-        snap.herdr.panes[id] = await this.herdr.call('pane.get', { pane_id: id }).then(() => true).catch(() => false);
+        const answers = await this.herdr.call('pane.get', { pane_id: id }).then(() => true, () => false);
+        snap.herdr.panes[id] = answers ? { agent: await this.herdr.call('agent.get', { target: id }).then((r) => r?.agent?.agent || null, () => null) } : null;
       }
     }
   }
@@ -901,6 +906,17 @@ export class Session {
       const t = snap.meta[id]?.tasktmp;
       if (t) this.taskTmps.add(t);
     }
+    for (const name of snap.lockDebris) {
+      const id = name.match(/^\.meta-(.+)\.lock$/)?.[1];
+      if (id && !this.spawnLocks.has(id)) this.spawnLocks.set(id, { id, heldAt: snap.nowMs, releasedAt: null });
+    }
+    for (const s of this.spawnLocks.values()) {
+      if (s.releasedAt === null && !snap.lockDebris.includes(`.meta-${s.id}.lock`)) s.releasedAt = snap.nowMs;
+    }
+  }
+
+  spawnTimes() {
+    return [...this.spawnLocks.values()].map((s) => ({ id: s.id, heldAt: new Date(s.heldAt).toISOString(), ms: s.releasedAt === null ? null : s.releasedAt - s.heldAt }));
   }
 
   removeTaskTmps() {

@@ -7,7 +7,8 @@
   "dispatch a worker": [
     { "delayMs": 250 },
     { "path": "state/t1.meta", "content": "kind=ship\nproject=greeter\nherdr_pane_id=pane-w1\n" },
-    { "path": "state/t1.status", "content": "working: building\n" }
+    { "path": "state/t1.status", "content": "working: building\n" },
+    { "agentIn": "pane-w1", "agent": "claude" }
   ],
   "land it": [
     { "delayMs": 200 },

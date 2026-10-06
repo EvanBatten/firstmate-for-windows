@@ -78,6 +78,7 @@ function killPrimary(s) {
 }
 
 const git = (cwd, ...a) => spawnSync('git', ['-C', cwd, ...a], { stdio: 'ignore' });
+const agentFile = (pane) => join(DIR, `agent-${String(pane).replace(/[^\w.-]/g, '_')}`);
 
 async function applyWrites(home, writes, sayText) {
   for (const w of writes) {
@@ -115,6 +116,8 @@ async function applyWrites(home, writes, sayText) {
       s.status = w.status;
       s.statuses = [...(s.statuses ?? []), { status: w.status, t: Date.now() }];
       save(s);
+    } else if (w.agentIn !== undefined) {
+      writeFileSync(agentFile(w.agentIn), w.agent ?? 'claude');
     } else if (w.killPrimary) {
       const s = load();
       killPrimary(s);
@@ -190,6 +193,12 @@ if (args[0] === '--apply') {
     case 'pane get':
       out({ pane: { pane_id: a[2], agent_status: s.status ?? (process.env.FAKE_HERDR_STATUS || 'idle') } });
       break;
+    case 'agent get': {
+      const agent = existsSync(agentFile(a[2])) ? readFileSync(agentFile(a[2]), 'utf8') : null;
+      if (agent === null) { out({ error: { code: 'agent_not_found', message: `agent target ${a[2]} not found` } }); process.exit(1); }
+      out({ agent: { agent, agent_status: 'working', pane_id: a[2] } });
+      break;
+    }
     case 'pane read':
       if (!primaryAlive(s)) process.stdout.write('\n$ \n');
       else if (s.startingCalls > 0) process.stdout.write(`\nfirstmate on main\n❯ ${s.launchLine}\n`);
