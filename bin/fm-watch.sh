@@ -2596,9 +2596,9 @@ rerecord_device_shifted_pr_poll() {  # <id>
   local id=$1
   fm_pr_poll_registration_device_shifted "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 1
   PR_POLL_CONTROL_LOCK="$STATE/.control-$id.lock"
-  fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || exit 1
+  fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || { exit_if_world_gone; exit 1; }
   PR_POLL_PUBLISH_LOCK="$STATE/.pr-poll-publish-$id.lock"
-  fm_lock_acquire_wait "$PR_POLL_PUBLISH_LOCK" || exit 1
+  fm_lock_acquire_wait "$PR_POLL_PUBLISH_LOCK" || { exit_if_world_gone; exit 1; }
   if fm_pr_poll_registration_rerecord_device "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
     triage_log "re-recorded PR poll identity for $id after its state volume device number changed"
   else
@@ -2609,33 +2609,16 @@ rerecord_device_shifted_pr_poll() {  # <id>
   return 0
 }
 
-resurface_after_downtime() {
-  # Handling successors already have a predecessor-delivered wake on the way.
-  # Re-announcing from this cycle is what turned a lost handshake into an
-  # unbounded recovery loop; stay in the poll loop and supervise instead.
-  if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
-    return 0
-  fi
-  if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
-    if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
-      echo "watcher: recovery state could not be consumed safely" >&2
-      exit 1
-    fi
-    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
-  fi
-  wake "check: rearm-resurface"
-}
-
-while :; do
-  # Home-gone exit: a deleted home, state directory, or code root means this
-  # watcher's world is gone (a torn-down temporary home or a discarded
-  # disposable checkout). Exit with a logged reason rather than writing state
-  # into nothing, or into a live home from a checkout that no longer exists.
-  # A detached helper this watcher started (home-summary refresh, reconcile)
-  # can recreate a deleted state directory before the next poll, so a lock
-  # with no holder at all is read as the same teardown: only a fresh watcher
-  # ever recreates the lock, and that case is the self-eviction below.
-  # Scoped to this process alone: no other watcher is signalled.
+# Home-gone exit: a deleted home, state directory, or code root means this
+# watcher's world is gone (a torn-down temporary home or a discarded
+# disposable checkout). Exit with a logged reason rather than writing state
+# into nothing, or into a live home from a checkout that no longer exists.
+# A detached helper this watcher started (home-summary refresh, reconcile)
+# can recreate a deleted state directory before the next poll, so a lock
+# with no holder at all is read as the same teardown: only a fresh watcher
+# ever recreates the lock, and that case is the poll loop's self-eviction.
+# Scoped to this process alone: no other watcher is signalled.
+exit_if_world_gone() {
   if [ "$WATCH_HOME_EXISTED" -eq 1 ] && [ ! -d "$FM_HOME" ]; then
     echo "watcher: exiting - home no longer exists: $FM_HOME" >&2
     exit 1
@@ -2649,6 +2632,28 @@ while :; do
     echo "watcher: exiting - code root no longer exists: $SCRIPT_DIR" >&2
     exit 1
   fi
+}
+
+resurface_after_downtime() {
+  # Handling successors already have a predecessor-delivered wake on the way.
+  # Re-announcing from this cycle is what turned a lost handshake into an
+  # unbounded recovery loop; stay in the poll loop and supervise instead.
+  if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" = 1 ]; then
+    return 0
+  fi
+  if [ "$WATCHER_RECOVERY_PENDING" -ne 1 ]; then
+    if ! fm_recovery_marker_arm_check "$WATCHER_DOWNTIME_MARKER"; then
+      exit_if_world_gone
+      echo "watcher: recovery state could not be consumed safely" >&2
+      exit 1
+    fi
+    [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
+  fi
+  wake "check: rearm-resurface"
+}
+
+while :; do
+  exit_if_world_gone
 
   # Self-eviction: if the singleton lock no longer names this process, a second
   # watcher has taken over (e.g. a transient duplicate from a racy arm). Stand
@@ -2765,7 +2770,7 @@ while :; do
           path=$FM_PR_POLL_SNAPSHOT_PATH
           number=$FM_PR_POLL_SNAPSHOT_NUMBER
           PR_POLL_CONTROL_LOCK="$STATE/.control-$id.lock"
-          fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || exit 1
+          fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || { exit_if_world_gone; exit 1; }
           if ! fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
             pr_poll_control_release || exit 1
             triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
