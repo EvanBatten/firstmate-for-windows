@@ -568,7 +568,7 @@ describe('shipped traces cannot prove a row without its behavior', () => {
 
   // A worker trace times the primary filing the request apart from the spawn that starts the worker,
   // so a red spawn names which of the two was slow.
-  const WORKER_TRACES = { 'cleanup-refusal': ['greeter', 'ship'], 'pr-land': ['notes', 'ship'], 'restart-primary': ['greeter', 'ship'], 'scout-report': ['greeter', 'scout'], 'ship-local': ['greeter', 'ship'], steer: ['greeter', 'ship'], 'watcher-wake': ['greeter', 'ship'] };
+  const WORKER_TRACES = { 'cleanup-refusal': ['greeter', 'ship'], 'pr-land': ['notes', 'ship'], 'restart-primary': ['greeter', 'ship'], 'scout-report': ['greeter', 'scout'], 'ship-local': ['greeter', 'ship'], steer: ['greeter', 'ship'], 'watcher-wake': ['greeter', 'ship'], 'whole-session': ['greeter', 'ship'] };
   const spawnSteps = (trace) => {
     const b = trace.steps.findIndex((s) => s.parsed.atoms.some((a) => a.name === 'backlog.inflight'));
     return { a: trace.steps[b - 1], b: trace.steps[b] };
@@ -599,6 +599,58 @@ describe('shipped traces cannot prove a row without its behavior', () => {
       assert.equal(claims(b, dispatched, { 'pane-w1': { agent: null } }), false, `${name}: a worker pane with no agent in it proved the spawn`);
       assert.equal(claims(b, dispatched, { 'pane-w1': { agent: 'claude' } }), true, `${name}: a dispatched worker whose agent started did not prove the spawn`);
     }
+  });
+
+  test('whole-session needs three live workers at once', () => {
+    const trace = shipped('whole-session');
+    const fleet = (n) => {
+      const home = workerHome({ project: 'greeter', kind: 'ship' });
+      const items = Array.from({ length: n }, (_, i) => `- [ ] w${i + 1} - change ${i + 1} (repo: greeter) (kind: ship)\n`).join('');
+      writeFileSync(join(home, 'data', 'backlog.md'), `# Backlog\n\n## In flight\n${items}## Queued\n## Done\n`);
+      for (let i = 1; i <= n; i += 1) writeFileSync(join(home, 'state', `w${i}.meta`), `kind=ship\nproject=greeter\nherdr_pane_id=pane-w${i}\n`);
+      return home;
+    };
+    const panes = (...agents) => ({ herdr: { panes: Object.fromEntries(agents.map((agent, i) => [`pane-w${i + 1}`, { agent }])) } });
+    const parallel = provingStep(trace, 'agents-7-parallel-dispatch');
+    assert.equal(holds(parallel, fleet(2), since(), panes('claude', 'claude')).ok, false, 'two workers proved three in parallel');
+    assert.equal(holds(parallel, fleet(3), since(), panes('claude', null, 'claude')).ok, false, 'a third pane with no agent proved three live workers');
+    assert.deepEqual(holds(parallel, fleet(3), since(), panes('claude', 'claude', 'claude')), { ok: true, reason: 'holds' });
+  });
+
+  test('whole-session needs every worker\'s own change on main, not three commits', async () => {
+    const step = provingStep(shipped('whole-session'), 'readme-disposable-worktrees');
+    const landed = async (commits) => {
+      const home = workerHome({ project: 'greeter', kind: 'ship' });
+      const repo = join(home, 'projects', 'greeter');
+      rmSync(join(repo, '.git'), { recursive: true });
+      const g = (...a) => {
+        const out = spawnSync('git', ['-C', repo, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', 'core.autocrlf=false', ...a], { encoding: 'utf8' });
+        assert.equal(out.status, 0, `git ${a.join(' ')}: ${out.stderr}`);
+        return out.stdout.trim();
+      };
+      g('init', '-q', '-b', 'main');
+      writeFileSync(join(repo, 'README.md'), '# greeter\n');
+      g('add', '-A');
+      g('commit', '-qm', 'seed');
+      const seed = g('rev-parse', 'HEAD');
+      for (const [file, text] of commits) {
+        mkdirSync(dirname(join(repo, file)), { recursive: true });
+        writeFileSync(join(repo, file), text);
+        g('add', '-A');
+        g('commit', '-qm', file);
+      }
+      const r = await holdsNow({ home, parsed: step, ctx: { ...since(), seeds: { greeter: seed } }, deps: { gitAhead: {}, gitUnlanded: {}, seeds: { greeter: seed }, counters: {} } });
+      return { ok: r.ok, reason: r.reason };
+    };
+    const greet = ['greet.sh', 'hello) echo hello ;;\n'];
+    const shout = ['greet.sh', 'hello) echo hello ;;\nshout) echo "HELLO FROM THE CREW" ;;\n'];
+    const farewell = ['farewell.sh', "echo 'goodbye from the crew'\n"];
+    const version = ['VERSION', '0.1.0\n'];
+    assert.equal((await landed([greet, shout, farewell])).ok, false, 'two of three workers landed and the step held');
+    assert.equal((await landed([greet, shout, version])).ok, false, 'the farewell worker never landed and the step held');
+    assert.equal((await landed([greet, shout, ['tests/greet_test.sh', 'check shout\n']])).ok, false, 'one worker landing three commits proved three landings');
+    assert.equal((await landed([farewell, version, greet])).ok, false, 'a greet.sh without the steered subcommand proved the steer landed');
+    assert.deepEqual(await landed([shout, farewell, version]), { ok: true, reason: 'holds' });
   });
 
   test('register needs the session-start digest of the session that holds the lock', () => {

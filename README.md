@@ -80,6 +80,7 @@ Launch it with `--trust`, or none of its project hooks load; it also has no turn
 ### Install and launch
 
 On Windows, follow [Install on Windows](platform/windows/INSTALL.md) instead.
+It lists the tools to install before you clone and the Herdr launch steps.
 
 ```sh
 gh auth login
