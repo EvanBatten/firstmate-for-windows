@@ -172,7 +172,7 @@ test_list_files_reports_the_shell_inventory() {
   # working-tree diff a local test run happens to have, so this stays a pure
   # inventory check independent of fm-lint.sh's own changed-file mode below.
   listed=$(CI=true "$LINT" --list-files)
-  expected=$(find bin bin/backends tests -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
+  expected=$(find bin bin/backends tests platform/windows -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
   [ "$(printf '%s\n' "$listed" | LC_ALL=C sort)" = "$expected" ] \
     || fail "fm-lint.sh --list-files did not return the complete shell inventory"
   pass "fm-lint.sh --list-files reports the complete shell inventory"
@@ -529,7 +529,7 @@ test_ci_forces_full_lint_even_with_empty_diff() {
   # No git stub: CI=true must short-circuit fm-lint.sh's mode selection before
   # it ever consults git, so this proves CI wins regardless of local diff state.
   listed=$(CI=true "$LINT" --list-files)
-  expected=$(find bin bin/backends tests -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
+  expected=$(find bin bin/backends tests platform/windows -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
   [ "$(printf '%s\n' "$listed" | LC_ALL=C sort)" = "$expected" ] \
     || fail "CI=true did not force the full canonical file set"
   pass "fm-lint.sh forces a full lint in CI even when the local diff would be empty"
@@ -545,7 +545,7 @@ test_main_branch_forces_full_lint() {
   # not the ambient CI signal a real CI run would otherwise supply.
   listed=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' \
     FM_TEST_GIT_BRANCH=main "$LINT" --list-files)
-  expected=$(find bin bin/backends tests -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
+  expected=$(find bin bin/backends tests platform/windows -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
   [ "$(printf '%s\n' "$listed" | LC_ALL=C sort)" = "$expected" ] \
     || fail "fm-lint.sh did not force a full lint when HEAD is on main"
   pass "fm-lint.sh forces a full lint when HEAD is on main"
@@ -1221,6 +1221,80 @@ test_rejects_direct_beads_cli_in_explicit_core_path() {
   pass "fm-lint.sh enforces backend purity for explicit core paths"
 }
 
+# fm_lint_overlay_repo <tmp> <fakebin>: a minimal repo with this lint owner and
+# an empty Windows overlay, so a case can seed overlay files and lint them.
+fm_lint_overlay_repo() {
+  local tmp=$1 fakebin=$2
+  mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests" "$tmp/repo/platform/windows"
+  cp "$LINT" "$tmp/repo/bin/fm-lint.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/tests/noop.test.sh"
+  chmod +x "$tmp/repo/bin/fm-lint.sh" "$tmp/repo/bin/fm-lint-workflows.sh"
+  fm_lint_stub_shellcheck "$fakebin" "$tmp/shellcheck.log"
+}
+
+# A bare return in a function run from a trap returns the status from before the
+# trap, so `false || return` succeeds there. The overlay's wrappers run inside
+# upstream's traps, so every return in it names its status.
+test_rejects_a_bare_return_in_the_windows_overlay() {
+  local tmp fakebin spelling out rc
+  tmp=$(fm_test_tmproot fm-lint-overlay-return)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_overlay_repo "$tmp" "$fakebin"
+
+  # shellcheck disable=SC2016 # Overlay source text, not expansions.
+  for spelling in \
+    'return' \
+    'false || return' \
+    'false && return' \
+    '{ echo x; return; }' \
+    'case $1 in *) builtin pwd "$@"; return ;; esac' \
+    'return # trailing note' \
+    'return&'
+  do
+    printf '#!/usr/bin/env bash\nf() {\n  %s\n}\n' "$spelling" > "$tmp/repo/platform/windows/bare.sh"
+    rc=0
+    out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" bin/fm-lint.sh 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "lint accepted a bare return in the Windows overlay: $spelling"
+    assert_contains "$out" "platform/windows/bare.sh:3: bare return in the Windows overlay" \
+      "lint did not name the bare return: $spelling"$'\n'"$out"
+  done
+
+  # shellcheck disable=SC2016 # Overlay source text, not expansions.
+  for spelling in \
+    'return 0' \
+    'return $?' \
+    'false || return "$rc"' \
+    '# a bare return here would be wrong' \
+    'fm_return_status' \
+    'echo "do not return"'
+  do
+    printf '#!/usr/bin/env bash\nf() {\n  %s\n}\n' "$spelling" > "$tmp/repo/platform/windows/bare.sh"
+    rc=0
+    out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" bin/fm-lint.sh 2>&1) || rc=$?
+    [ "$rc" -eq 0 ] || fail "lint rejected a return that names its status: $spelling"$'\n'"$out"
+  done
+
+  printf '#!/usr/bin/env bash\nf() {\n  return\n}\n' > "$tmp/repo/platform/windows/bare.sh"
+  rc=0
+  out=$(cd "$tmp/repo" && PATH="$fakebin:$PATH" bin/fm-lint.sh platform/windows/bare.sh 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an explicit overlay path bypassed the bare-return check"
+  pass "fm-lint.sh rejects a bare return in the Windows overlay"
+}
+
+test_windows_overlay_has_no_bare_return() {
+  local tmp fakebin out rc
+  tmp=$(fm_test_tmproot fm-lint-overlay-real)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_overlay_repo "$tmp" "$fakebin"
+  cp "$ROOT"/platform/windows/*.sh "$tmp/repo/platform/windows/"
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" bin/fm-lint.sh 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the Windows overlay has a bare return:"$'\n'"$out"
+  pass "the Windows overlay names the status of every return"
+}
+
 test_ignores_ambient_shellcheck_opts() {
   if ! pinned_ready; then
     pass "SKIP (ShellCheck $REQUIRED not resolved): ambient options regression check"
@@ -1885,6 +1959,8 @@ test_rejects_wrong_shellcheck_version
 test_catches_a_real_lint_defect
 test_rejects_direct_beads_cli_invocations
 test_rejects_direct_beads_cli_in_explicit_core_path
+test_rejects_a_bare_return_in_the_windows_overlay
+test_windows_overlay_has_no_bare_return
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
