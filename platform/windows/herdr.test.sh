@@ -57,7 +57,17 @@ else
   not_ok "the presentation lock path resolves"
 fi
 
-ws=$(fm_backend_herdr_cli "$S" workspace create --cwd "$T" --label o3t --no-focus | jq -r '.result.workspace.workspace_id // empty')
+wsout=$(fm_backend_herdr_cli "$S" workspace create --cwd "$T" --label o3t --no-focus)
+ws=$(jq -r '.result.workspace.workspace_id // empty' <<< "$wsout")
+expect_eq "a workspace create answers with its laid-out tab as the workspace's root tab and active tab" "o3t true" \
+  "$(jq -r '.result | "\(.workspace.label) \(.root_pane.tab_id == .tab.tab_id and .workspace.active_tab_id == .tab.tab_id
+    and .root_pane.workspace_id == .workspace.workspace_id and (.root_pane.pane_id | type) == "string")"' <<< "$wsout")"
+tabout=$(fm_backend_herdr_cli "$S" tab create --workspace "$ws" --cwd "$T" --label o3t-shape --no-focus)
+expect_eq "a tab create answers as the CLI would, naming its tab and root pane" "cli:tab:create tab_created o3t-shape true" \
+  "$(jq -r --arg ws "$ws" '"\(.id) \(.result.type) \(.result.tab.label) \(.result.tab.workspace_id == $ws
+    and .result.root_pane.tab_id == .result.tab.tab_id and .result.root_pane.workspace_id == $ws
+    and (.result.root_pane.pane_id | type) == "string")"' <<< "$tabout")"
+fm_backend_herdr_cli "$S" tab close "$(jq -r .result.tab.tab_id <<< "$tabout")" >/dev/null
 created=$(fm_backend_herdr_create_task "$S:$ws" fm-o3t "$T" "")
 pane=${created#* }
 target=$S:$pane

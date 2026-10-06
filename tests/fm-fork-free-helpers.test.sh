@@ -316,6 +316,110 @@ SH
   pass "fm_file_contents_to reads a file as \$(cat) does and a lock cycle never forks cat"
 }
 
+test_helpers_assign_any_output_variable_name() {
+  local script="$TMP_ROOT/names.sh"
+  printf '42
+' > "$TMP_ROOT/names-pid"
+  cat > "$script" <<'SH'
+. "$1/bin/fm-path-lib.sh"
+for name in fm_path fm_contents got; do
+  unset "$name"
+  fm_dirname_to "$name" /a/b/c
+  [ "${!name-UNSET}" = /a/b ] || printf 'fm_dirname_to into %s left %s
+' "$name" "${!name-UNSET}"
+  unset "$name"
+  fm_basename_to "$name" /a/b/c
+  [ "${!name-UNSET}" = c ] || printf 'fm_basename_to into %s left %s
+' "$name" "${!name-UNSET}"
+  unset "$name"
+  fm_file_contents_to "$name" "$2"
+  [ "${!name-UNSET}" = 42 ] || printf 'fm_file_contents_to into %s left %s
+' "$name" "${!name-UNSET}"
+  fm_file_contents_to "$name" "$2.missing"
+  [ "${!name-UNSET}" = '' ] || printf 'fm_file_contents_to of a missing file into %s left %s
+' "$name" "${!name-UNSET}"
+done
+SH
+  run_everywhere "output variable names" "$script" "$TMP_ROOT/names-pid"
+  pass "path and contents helpers assign any output variable name, their own locals' included"
+}
+
+test_spawn_shell_quote_round_trips_and_never_forks() {
+  local script="$TMP_ROOT/quote.sh" shim="$TMP_ROOT/quote-shim" log="$TMP_ROOT/quote.log" cmd
+  mkdir -p "$shim"
+  for cmd in sed cat tr awk perl; do
+    printf '#!/bin/sh\nprintf "%%s\\n" %s >> "%s"\nexit 1\n' "$cmd" "$log" > "$shim/$cmd"
+    chmod +x "$shim/$cmd"
+  done
+  awk '/^shell_quote\(\) \{/,/^\}/' "$ROOT/bin/fm-spawn.sh" > "$TMP_ROOT/quote-fn.sh"
+  cat > "$script" <<'SH'
+. "$2"
+PATH="$3:$PATH"
+: > "$4"
+check() {  # <input> [<expected>]
+  local got back
+  got=$(shell_quote "$1")
+  [ $# -lt 2 ] || [ "$got" = "$2" ] || printf 'shell_quote %q: got %q, want %q\n' "$1" "$got" "$2"
+  eval "back=$got"
+  [ "$back" = "$1" ] || printf 'shell_quote %q does not round-trip: %q\n' "$1" "$back"
+}
+check '' "''"
+check plain "'plain'"
+check "it's" "'it'\\''s'"
+check "''" "''\\'''\\'''"
+check '/tmp/launch.1.sh' "'/tmp/launch.1.sh'"
+check $'a\nb\'c\n'
+check $'trailing\n\n'
+check 'back\slash\'
+check 'amp & '"'"'&'"'"' \&'
+check '$(echo no) `x` ${y} * ? [a]'
+check $'caf\303\251 \t tab'
+[ ! -s "$4" ] || printf 'shell_quote ran %s\n' "$(< "$4")"
+SH
+  run_everywhere "spawn shell_quote" "$script" "$TMP_ROOT/quote-fn.sh" "$shim" "$log"
+  pass "fm-spawn's shell_quote round-trips every input through eval without starting a process"
+}
+
+test_backlog_data_absolute_to_resolves_like_cd_and_pwd() {
+  local script="$TMP_ROOT/data-abs.sh" dir="$TMP_ROOT/data-abs"
+  rm -rf "$dir"; mkdir -p "$dir/real dir" "$dir/café"
+  ln -s "real dir" "$dir/link" 2>/dev/null || true
+  : > "$dir/file"
+  cat > "$script" <<'SH'
+. "$1/bin/fm-backlog-transition-lib.sh"
+d=$2
+real=$(cd "$d/real dir" && pwd -P)
+check() {  # <want-status> <want-value> <data-dir>
+  local status=0 out=UNSET
+  FM_BACKLOG_TRANSITION_ERROR=untouched
+  fm_backlog_data_absolute_to out "$3" 2>/dev/null || status=$?
+  [ "$status" = "$1" ] || printf 'data %q: status %s, want %s\n' "$3" "$status" "$1"
+  [ "$status" != 0 ] || [ "$out" = "$2" ] || printf 'data %q: %q, want %q\n' "$3" "$out" "$2"
+  [ "$FM_BACKLOG_TRANSITION_ERROR" = untouched ] || printf 'data %q set the error global\n' "$3"
+}
+check 0 "$real" "$d/real dir"
+check 0 "$real" "$d/real dir///"
+check 0 "$(cd "$d/café" && pwd -P)" "$d/café"
+[ ! -L "$d/link" ] || check 0 "$real" "$d/link"
+check 0 / /
+check 0 / ///
+check 1 '' "$d/file"
+check 1 '' "$d/missing"
+check 1 '' "$d/file/"
+check 2 '' "$d/real dir"$'\n'
+check 2 '' "$d/tab"$'\t'"dir"
+err=$(fm_backlog_data_absolute_to out "$d/x"$'\001' 2>&1)
+[ "$err" = 'error: data directory contains an invalid control byte' ] || printf 'control byte message: %q\n' "$err"
+for name in out status data; do
+  unset "$name"
+  fm_backlog_data_absolute_to "$name" "$d/real dir" || printf 'into %s failed\n' "$name"
+  [ "${!name-UNSET}" = "$real" ] || printf 'into %s left %s\n' "$name" "${!name-UNSET}"
+done
+SH
+  run_everywhere "backlog data directory" "$script" "$dir"
+  pass "fm_backlog_data_absolute_to resolves a data directory as cd and pwd -P do, into any variable"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -327,4 +431,7 @@ else
   test_classify_stat_helpers_read_the_kernel_name_once
   test_backlog_record_guard_resolves_its_paths_in_one_perl
   test_file_contents_helper_matches_cat_and_lock_cycle_never_forks_it
+  test_helpers_assign_any_output_variable_name
+  test_spawn_shell_quote_round_trips_and_never_forks
+  test_backlog_data_absolute_to_resolves_like_cd_and_pwd
 fi

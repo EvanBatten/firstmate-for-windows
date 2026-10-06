@@ -2007,6 +2007,92 @@ test_projection_create_never_closes_a_concurrent_same_label_tab() {
   pass "herdr presentation create: concurrent same-label tabs are never prune targets"
 }
 
+# Each row: case name, workspace create, tab create, tab list, pane list, and
+# the expected "<status>|<last stderr line>|<ids>". Focus and the seeded-tab
+# prune are stubbed so the four responses are the create's own herdr calls.
+test_projection_create_reads_each_response_shape_exactly() {
+  local dir fb row name ws tab tabs panes want got n=0
+  local ok_ws='{"result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}'
+  local ok_tab='{"result":{"tab":{"tab_id":"w9:t2"},"root_pane":{"pane_id":"w9:p2"}}}'
+  local ok_tabs='{"result":{"tabs":[{"tab_id":"w9:t2"}]}}'
+  local ok_panes='{"result":{"panes":[{"pane_id":"w9:p2","tab_id":"w9:t2"}]}}'
+  local ids='w9 w9:t1 w9:p1 w9:t2 w9:p2'
+  local ws_bad='error: herdr presentation workspace create returned incomplete IDs; leaving its journal quarantined'
+  local tab_bad='error: herdr presentation task-tab create returned incomplete IDs; leaving its journal quarantined'
+  local unparsed='error: could not parse the disposable herdr presentation workspace shape'
+  local diverged='error: disposable herdr presentation workspace did not converge to exactly one task pane'
+  dir="$TMP_ROOT/projection-create-shapes"; mkdir -p "$dir"
+  fb=$(make_herdr_fakebin "$dir")
+  while IFS='~' read -r name ws tab tabs panes want; do
+    n=$((n + 1))
+    mkdir -p "$dir/$n"; : > "$dir/$n/log"
+    printf '%s\n' "$ws" > "$dir/$n/1.out"
+    printf '%s\n' "$tab" > "$dir/$n/2.out"
+    printf '%s\n' "$tabs" > "$dir/$n/3.out"
+    printf '%s\n' "$panes" > "$dir/$n/4.out"
+    got=$(PATH="$fb:$PATH" FM_HERDR_LOG="$dir/$n/log" FM_HERDR_RESPONSES="$dir/$n" HERDR_SESSION=fmtest \
+      bash -c '
+        . "$0/bin/backends/herdr.sh"
+        fm_backend_herdr_projection_focus_snapshot() { printf "captain-ws\tcaptain-tab"; }
+        fm_backend_herdr_projection_focus_restore() { return 0; }
+        fm_backend_herdr_workspace_prune_seeded_default_tab() { return 0; }
+        rc=0
+        fm_backend_herdr_projection_create_task /tmp/proj label fm-task-p2 2>"$1" || rc=$?
+        printf "%s|%s|%s %s %s %s %s" "$rc" "$(tail -n 1 "$1")" \
+          "$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID" "$FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID" \
+          "$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID" "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" \
+          "$FM_BACKEND_HERDR_PROJECTION_PANE_ID"
+      ' "$ROOT" "$dir/$n/err")
+    [ "$got" = "$want" ] || fail "projection create shape '$name': want '$want', got '$got'"
+  done <<EOF
+complete~$ok_ws~$ok_tab~$ok_tabs~$ok_panes~0||$ids
+numeric ids~{"result":{"workspace":{"workspace_id":9},"tab":{"tab_id":1},"root_pane":{"pane_id":2}}}~{"result":{"tab":{"tab_id":3},"root_pane":{"pane_id":4}}}~{"result":{"tabs":[{"tab_id":3}]}}~{"result":{"panes":[{"pane_id":4,"tab_id":3}]}}~1|$diverged|9 1 2 3 4
+workspace missing root pane~{"result":{"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"}}}~$ok_tab~$ok_tabs~$ok_panes~1|$ws_bad|w9 w9:t1   
+workspace not json~{"result":~$ok_tab~$ok_tabs~$ok_panes~1|$ws_bad|    
+workspace null ids~{"result":{"workspace":{"workspace_id":null},"tab":{"tab_id":false},"root_pane":{"pane_id":"w9:p1"}}}~$ok_tab~$ok_tabs~$ok_panes~1|$ws_bad|  w9:p1  
+workspace result is a string~{"result":"w9"}~$ok_tab~$ok_tabs~$ok_panes~1|$ws_bad|    
+tab missing pane~$ok_ws~{"result":{"tab":{"tab_id":"w9:t2"}}}~$ok_tabs~$ok_panes~1|$tab_bad|w9 w9:t1 w9:p1 w9:t2 
+tab result is a string~$ok_ws~{"result":"t"}~$ok_tabs~$ok_panes~1|$tab_bad|w9 w9:t1 w9:p1  
+tabs not an array~$ok_ws~$ok_tab~{"result":{"tabs":{}}}~$ok_panes~1|$unparsed|$ids
+panes not json~$ok_ws~$ok_tab~$ok_tabs~{"result":~1|$unparsed|$ids
+tab list empty~$ok_ws~$ok_tab~~$ok_panes~1|$unparsed|$ids
+result not an object~$ok_ws~$ok_tab~{"result":7}~$ok_panes~1|$unparsed|$ids
+seeded tab remains~$ok_ws~$ok_tab~{"result":{"tabs":[{"tab_id":"w9:t2"},{"tab_id":"w9:t1"}]}}~$ok_panes~1|$diverged|$ids
+only the seeded tab~$ok_ws~$ok_tab~{"result":{"tabs":[{"tab_id":"w9:t1"}]}}~$ok_panes~1|$diverged|$ids
+pane in another tab~$ok_ws~$ok_tab~$ok_tabs~{"result":{"panes":[{"pane_id":"w9:p2","tab_id":"w9:t1"}]}}~1|$diverged|$ids
+no panes~$ok_ws~$ok_tab~$ok_tabs~{"result":{"panes":[]}}~1|$diverged|$ids
+tab entries are strings~$ok_ws~$ok_tab~{"result":{"tabs":["w9:t2"]}}~$ok_panes~1|$diverged|$ids
+pane entries are strings~$ok_ws~$ok_tab~$ok_tabs~{"result":{"panes":["w9:p2"]}}~1|$diverged|$ids
+EOF
+  [ "$n" -eq 18 ] || fail "projection create shapes: ran $n of 18 rows"
+  pass "herdr presentation create: every create and shape response reads to the same verdict and ids"
+}
+
+# A pinned session's pane calls go straight to its server; any other session,
+# and the same calls before the pin, still check the server first.
+test_session_pin_skips_the_server_check_only_for_its_session() {
+  local dir log fb status_calls
+  dir="$TMP_ROOT/session-pin"; mkdir -p "$dir/responses"
+  log="$dir/log"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$dir/responses" bash -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_send_text_line fmtest:w1:p1 "echo before" || exit 1
+    fm_backend_herdr_session_pin fmtest || exit 1
+    fm_backend_herdr_send_text_line fmtest:w1:p1 "echo pinned" || exit 1
+    fm_backend_herdr_send_key fmtest:w1:p1 Enter || exit 1
+    fm_backend_herdr_send_text_line other:w1:p1 "echo other" || exit 1
+  ' "$ROOT" || fail "pane calls around a session pin should succeed: $(cat "$log")"
+  status_calls=$(grep -c $'\x1fstatus\x1f--json\x1f--session\x1ffmtest$' "$log")
+  [ "$status_calls" = 1 ] || fail "only the call before the pin should check the fmtest server, saw $status_calls checks"
+  status_calls=$(grep -c $'\x1fstatus\x1f--json\x1f--session\x1fother$' "$log")
+  [ "$status_calls" = 1 ] || fail "an unpinned session should still check its server, saw $status_calls checks"
+  [ "$(grep -c $'\x1fpane\x1frun\x1f' "$log")" = 3 ] || fail "every pane run should still reach herdr: $(cat "$log")"
+  grep -q $'\x1fpane\x1fsend-keys\x1fw1:p1\x1fenter\x1f--session\x1ffmtest$' "$log" \
+    || fail "the pinned key send should still reach herdr: $(cat "$log")"
+  pass "herdr session pin: pinned pane calls skip the server check, other sessions keep it"
+}
+
 test_projection_focus_snapshot_requires_exact_workspace_and_tab() {
   local dir log resp fb out
   dir="$TMP_ROOT/projection-focus-snapshot"; mkdir -p "$dir/responses"
@@ -5844,6 +5930,8 @@ test_projection_journal_is_atomic_and_uses_128_bit_token
 test_projection_journal_v2_binds_and_advances_exact_endpoint
 test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane
 test_projection_create_never_closes_a_concurrent_same_label_tab
+test_projection_create_reads_each_response_shape_exactly
+test_session_pin_skips_the_server_check_only_for_its_session
 test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
 test_projection_close_refuses_active_tab

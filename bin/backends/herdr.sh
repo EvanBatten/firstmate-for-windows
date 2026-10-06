@@ -2564,7 +2564,7 @@ EOF
 # A missing, failed, or malformed create response stays ambiguous and grants no
 # cleanup authority.
 fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-label>
-  local cwd=$1 workspace_label=$2 task_label=$3 session out tabs panes tab_count pane_count focus_before active_tab
+  local cwd=$1 workspace_label=$2 task_label=$3 session out ids tabs panes shape focus_before active_tab
   FM_BACKEND_HERDR_PROJECTION_SESSION=""
   FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID=""
   FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID=""
@@ -2593,9 +2593,10 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
   }
   # shellcheck disable=SC2034  # caller consumes the response-derived global
   FM_BACKEND_HERDR_PROJECTION_SESSION=$session
-  FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
-  FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
-  FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  ids=$(printf '%s' "$out" | jq -r '[.result.workspace.workspace_id, .result.tab.tab_id, .result.root_pane.pane_id]
+    | map(. // "" | tostring) | join("\u001f")' 2>/dev/null) || ids=
+  IFS=$'\x1f' read -r FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID \
+    FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID <<< "$ids"
   if [ -z "$FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID" ] \
      || [ -z "$FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID" ] \
      || [ -z "$FM_BACKEND_HERDR_PROJECTION_SEEDED_PANE_ID" ]; then
@@ -2620,8 +2621,9 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
     echo "error: herdr presentation task-tab create did not preserve exact active focus; leaving its journal quarantined" >&2
     return 1
   }
-  FM_BACKEND_HERDR_PROJECTION_TAB_ID=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
-  FM_BACKEND_HERDR_PROJECTION_PANE_ID=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  ids=$(printf '%s' "$out" | jq -r '[.result.tab.tab_id, .result.root_pane.pane_id]
+    | map(. // "" | tostring) | join("\u001f")' 2>/dev/null) || ids=
+  IFS=$'\x1f' read -r FM_BACKEND_HERDR_PROJECTION_TAB_ID FM_BACKEND_HERDR_PROJECTION_PANE_ID <<< "$ids"
   if [ -z "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" ] || [ -z "$FM_BACKEND_HERDR_PROJECTION_PANE_ID" ]; then
     echo "error: herdr presentation task-tab create returned incomplete IDs; leaving its journal quarantined" >&2
     return 1
@@ -2656,24 +2658,33 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
     echo "error: could not verify the disposable herdr presentation pane shape" >&2
     return 1
   }
-  if ! printf '%s' "$tabs" | jq -e '(.result.tabs | type) == "array"' >/dev/null 2>&1 \
-     || ! printf '%s' "$panes" | jq -e '(.result.panes | type) == "array"' >/dev/null 2>&1; then
-    echo "error: could not parse the disposable herdr presentation workspace shape" >&2
-    return 1
-  fi
-  tab_count=$(printf '%s' "$tabs" | jq -r '.result.tabs | length' 2>/dev/null)
-  pane_count=$(printf '%s' "$panes" | jq -r '.result.panes | length' 2>/dev/null)
-  if [ "$tab_count" != 1 ] || [ "$pane_count" != 1 ] \
-     || ! printf '%s' "$tabs" | jq -e --arg task "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" \
-       --arg seeded "$FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID" \
-       '.result.tabs[0].tab_id == $task and ([.result.tabs[] | select(.tab_id == $seeded)] | length) == 0' >/dev/null 2>&1 \
-     || ! printf '%s' "$panes" | jq -e --arg pane "$FM_BACKEND_HERDR_PROJECTION_PANE_ID" \
-       --arg tab "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" \
-       '.result.panes[0].pane_id == $pane and .result.panes[0].tab_id == $tab' >/dev/null 2>&1; then
-    echo "error: disposable herdr presentation workspace did not converge to exactly one task pane" >&2
-    return 1
-  fi
-  return 0
+  # One jq reads both lists: unparsed unless each is one JSON document holding
+  # an array, converged only for exactly the task tab and its one pane.
+  shape=$(printf '%s\n%s\n' "$tabs" "$panes" | jq -rs \
+    --arg task "$FM_BACKEND_HERDR_PROJECTION_TAB_ID" \
+    --arg seeded "$FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID" \
+    --arg pane "$FM_BACKEND_HERDR_PROJECTION_PANE_ID" '
+      if length != 2 then "unparsed" else
+        .[0] as $t | .[1] as $p
+        | if (try (($t.result.tabs | type) == "array" and ($p.result.panes | type) == "array") catch false) | not
+          then "unparsed"
+          elif try (($t.result.tabs | length) == 1 and ($p.result.panes | length) == 1
+            and $t.result.tabs[0].tab_id == $task
+            and ([$t.result.tabs[] | select(.tab_id == $seeded)] | length) == 0
+            and $p.result.panes[0].pane_id == $pane and $p.result.panes[0].tab_id == $task) catch false
+          then "converged"
+          else "diverged"
+          end
+      end' 2>/dev/null) || shape=unparsed
+  case "$shape" in
+    converged) return 0 ;;
+    diverged)
+      echo "error: disposable herdr presentation workspace did not converge to exactly one task pane" >&2
+      return 1
+      ;;
+  esac
+  echo "error: could not parse the disposable herdr presentation workspace shape" >&2
+  return 1
 }
 
 # fm_backend_herdr_projection_cleanup_exact: same-process abort cleanup for a
@@ -3037,7 +3048,18 @@ fm_backend_herdr_parse_target() {  # <target>
 
 fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_parse_target "$1" || return 1
+  [ "$FM_BACKEND_HERDR_SESSION" != "${FM_BACKEND_HERDR_PINNED_SESSION-}" ] || return 0
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
+}
+
+# fm_backend_herdr_session_pin: for the rest of this shell, pane calls on
+# <session> go to its running server without ensuring it first. A caller that
+# types several dependent lines into a pane it just created pins that pane's
+# session: Herdr restores pane ids with fresh shells after a server restart,
+# so ensuring mid-sequence would type the rest into a shell that lost the
+# earlier lines, while a pinned call fails with server_not_running instead.
+fm_backend_herdr_session_pin() {  # <session>
+  FM_BACKEND_HERDR_PINNED_SESSION=$1
 }
 
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
@@ -3062,9 +3084,18 @@ fm_backend_herdr_current_path() {  # <target>
 # ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
 # spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types
 # the command and submits it in one call (verified).
+# A failed run replays herdr's stderr and returns 2 when the line cannot have
+# reached the pane (no ready target, or herdr's structured pane_not_found or
+# server_not_running refusal), 1 on any other failure.
 fm_backend_herdr_send_text_line() {  # <target> <text>
-  fm_backend_herdr_target_ready "$1" || return 1
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  local err
+  fm_backend_herdr_target_ready "$1" || return 2
+  err=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" 2>&1 >/dev/null) && return 0
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  case $(printf '%s' "$err" | jq -r '.error.code // empty' 2>/dev/null) in
+    pane_not_found|server_not_running) return 2 ;;
+  esac
+  return 1
 }
 
 # fm_backend_herdr_send_literal: send TEXT as literal, UNSUBMITTED input - the

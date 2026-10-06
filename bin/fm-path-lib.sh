@@ -5,54 +5,55 @@
 # Each assigns <output-variable> exactly what `$(dirname -- <path>)` or
 # `$(basename -- <path>)` would: POSIX component rules, and the command
 # substitution's removal of trailing newlines.
+# The helpers keep their work in positional parameters, not locals, so no
+# output-variable name is shadowed.
 
 fm_dirname_to() {  # <output-variable> <path>
-  local fm_path=$2
-  case "$fm_path" in
-    '') fm_path=. ;;
+  case "$2" in
+    '') set -- "$1" . ;;
     *[!/]*)
-      fm_path=${fm_path%"${fm_path##*[!/]}"}
-      case "$fm_path" in
+      set -- "$1" "${2%"${2##*[!/]}"}"
+      case "$2" in
         */*)
-          fm_path=${fm_path%/*}
-          fm_path=${fm_path%"${fm_path##*[!/]}"}
-          [ -n "$fm_path" ] || fm_path=/
+          set -- "$1" "${2%/*}"
+          set -- "$1" "${2%"${2##*[!/]}"}"
+          [ -n "$2" ] || set -- "$1" /
           ;;
-        *) fm_path=. ;;
+        *) set -- "$1" . ;;
       esac
       ;;
-    *) fm_path=/ ;;
+    *) set -- "$1" / ;;
   esac
-  while [ "${fm_path%$'\n'}" != "$fm_path" ]; do fm_path=${fm_path%$'\n'}; done
-  printf -v "$1" '%s' "$fm_path"
+  while [ "${2%$'\n'}" != "$2" ]; do set -- "$1" "${2%$'\n'}"; done
+  printf -v "$1" '%s' "$2"
 }
 
 fm_basename_to() {  # <output-variable> <path>
-  local fm_path=$2
-  case "$fm_path" in
+  case "$2" in
     '') ;;
-    *[!/]*) fm_path=${fm_path%"${fm_path##*[!/]}"}; fm_path=${fm_path##*/} ;;
-    *) fm_path=/ ;;
+    *[!/]*) set -- "$1" "${2%"${2##*[!/]}"}"; set -- "$1" "${2##*/}" ;;
+    *) set -- "$1" / ;;
   esac
-  while [ "${fm_path%$'\n'}" != "$fm_path" ]; do fm_path=${fm_path%$'\n'}; done
-  printf -v "$1" '%s' "$fm_path"
+  while [ "${2%$'\n'}" != "$2" ]; do set -- "$1" "${2%$'\n'}"; done
+  printf -v "$1" '%s' "$2"
 }
 
 # Assigns <output-variable> what `$(cat <file> 2>/dev/null || true)` would,
 # without forking unless the file holds a NUL byte, which `read` stops at.
 # MSYS bash also drops a trailing CR before each newline it removes.
 fm_file_contents_to() {  # <output-variable> <file>
-  local fm_contents=
-  if { IFS= read -r -d '' fm_contents < "$2"; } 2>/dev/null; then
-    fm_contents=$(cat "$2" 2>/dev/null || true)
-  else
-    while :; do
-      case $OSTYPE:$fm_contents in
-        msys*:*$'\r\n') fm_contents=${fm_contents%$'\r\n'} ;;
-        *:*$'\n') fm_contents=${fm_contents%$'\n'} ;;
-        *) break ;;
-      esac
-    done
+  printf -v "$1" '%s' ''
+  if { IFS= read -r -d '' "$1" < "$2"; } 2>/dev/null; then
+    printf -v "$1" '%s' "$(cat "$2" 2>/dev/null || true)"
+    return 0
   fi
-  printf -v "$1" '%s' "$fm_contents"
+  set -- "$1" "${!1}"
+  while :; do
+    case $OSTYPE:$2 in
+      msys*:*$'\r\n') set -- "$1" "${2%$'\r\n'}" ;;
+      *:*$'\n') set -- "$1" "${2%$'\n'}" ;;
+      *) break ;;
+    esac
+  done
+  printf -v "$1" '%s' "$2"
 }

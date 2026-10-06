@@ -1852,9 +1852,12 @@ fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
 
 shell_quote() {
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-  printf "'"
+  local rest=$1 quoted=
+  while case $rest in *\'*) true ;; *) false ;; esac; do
+    quoted=$quoted${rest%%\'*}"'\\''"
+    rest=${rest#*\'}
+  done
+  printf "'%s'" "$quoted$rest"
 }
 
 resolve_pi_executable() {
@@ -3771,6 +3774,7 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    fm_backend_herdr_session_pin "$HERDR_SES"
     spawn_herdr_presentation_order_lock_release
     ;;
   zellij)
@@ -5347,10 +5351,19 @@ SPAWN_LAUNCH_SENT=1
 if [ "$BACKEND" = herdr ]; then
   # A separate Enter is lost when it reaches a busy pane before the typed line
   # renders (issue #160); `pane run` types and submits in one request.
+  # Cleanup is disarmed before the request and re-armed only when the adapter
+  # proves the line never reached the pane (status 2).
+  HERDR_LAUNCH_REARM=0
   if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
+    HERDR_LAUNCH_REARM=$HERDR_PROJECTION_ABORT_CLEANUP
     HERDR_PROJECTION_ABORT_CLEANUP=0
   fi
-  spawn_send_text_line "$T" ". $(shell_quote "$LAUNCH_FILE")"
+  HERDR_LAUNCH_STATUS=0
+  spawn_send_text_line "$T" ". $(shell_quote "$LAUNCH_FILE")" || HERDR_LAUNCH_STATUS=$?
+  if [ "$HERDR_LAUNCH_STATUS" -ne 0 ]; then
+    [ "$HERDR_LAUNCH_STATUS" -ne 2 ] || HERDR_PROJECTION_ABORT_CLEANUP=$HERDR_LAUNCH_REARM
+    exit 1
+  fi
 else
   spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
   sleep 0.3

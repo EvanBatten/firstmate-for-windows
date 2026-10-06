@@ -73,8 +73,14 @@ herdr() {
 # from FM_PANE_PATH. FM_WIN_PRIVATE_ROOTS spares env.sh in the pane its
 # icacls check.
 _fm_win_herdr_create() {  # <tab|workspace> create <args...>
-  local kind=$1 arg prev='' workspace='' cwd='' label='' focus=false env root out layout session=()
+  local kind=$1 arg prev='' workspace='' cwd='' label='' focus=false paths params out layout session=()
   local rc=${FM_PLATFORM_OVERLAY%/*}/pane-rc.sh vars=(--arg FM_PANE_PATH "$PATH")
+  # The pane's layout root, from the --arg env vars and the positional cwd,
+  # Git Bash and pane-rc.sh.
+  # shellcheck disable=SC2016 # jq expands these.
+  local root='($ARGS.positional as [$cwd, $bash, $rc]
+    | {type: "pane", command: [$bash, "--rcfile", $rc, "-i"], env: $ARGS.named}
+      + if $cwd == "" then {} else {cwd: $cwd} end)'
   [ -r "$rc" ] || { echo "error: no pane-rc.sh at $rc for the pane's Git Bash" >&2; return 1; }
   [ -z "${FM_WIN_PRIVATE_ROOTS:-}" ] || vars+=(--arg FM_WIN_PRIVATE_ROOTS "$FM_WIN_PRIVATE_ROOTS")
   for arg in "${@:3}"; do
@@ -91,16 +97,15 @@ _fm_win_herdr_create() {  # <tab|workspace> create <args...>
     esac
     prev=$arg
   done
-  env=$(MSYS2_ARG_CONV_EXCL='*' jq -nc "${vars[@]}" '$ARGS.named') || return 1
-  root=$(jq -nc --argjson env "$env" --arg cwd "$cwd" --arg bash "$(cygpath -w -- "$BASH")" \
-    --arg rc "$(cygpath -w -- "$rc")" \
-    '{type: "pane", command: [$bash, "--rcfile", $rc, "-i"], env: $env} + if $cwd == "" then {} else {cwd: $cwd} end') || return 1
+  paths=$(cygpath -w -- "$BASH" "$rc") || return 1
 
   if [ "$kind" = tab ]; then
-    layout=$(_fm_win_herdr_api layout.apply "$(jq -nc --argjson root "$root" --argjson focus "$focus" \
-      --arg ws "$workspace" --arg label "$label" \
-      '{root: $root, focus: $focus} + (if $ws == "" then {} else {workspace_id: $ws} end)
-        + if $label == "" then {} else {tab_label: $label} end')" "${session[@]}") || return 1
+    params=$(MSYS2_ARG_CONV_EXCL='*' jq -nc "${vars[@]}" "$root"' as $root
+      | $ARGS.positional[3:] as [$focus, $ws, $label]
+      | {root: $root, focus: ($focus == "true")} + (if $ws == "" then {} else {workspace_id: $ws} end)
+        + if $label == "" then {} else {tab_label: $label} end' \
+      --args "$cwd" "${paths%%$'\n'*}" "${paths#*$'\n'}" "$focus" "$workspace" "$label") || return 1
+    layout=$(_fm_win_herdr_api layout.apply "$params" "${session[@]}") || return 1
     jq -c --arg label "$label" '.result.layout as $l | {id: "cli:tab:create", result: {type: "tab_created",
       tab: {tab_id: $l.tab_id, workspace_id: $l.workspace_id, label: $label},
       root_pane: {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}}}' <<< "$layout"
@@ -108,13 +113,15 @@ _fm_win_herdr_create() {  # <tab|workspace> create <args...>
   fi
 
   out=$(MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" "$@") || { printf '%s\n' "$out"; return 1; }
-  if ! layout=$(_fm_win_herdr_api layout.apply "$(jq -c --argjson root "$root" \
-    '{tab_id: .result.tab.tab_id, focus: false, root: $root}' <<< "$out")" "${session[@]}"); then
+  if ! params=$(MSYS2_ARG_CONV_EXCL='*' jq -c "${vars[@]}" "$root"' as $root
+      | {tab_id: .result.tab.tab_id, focus: false, root: $root}' \
+      --args "$cwd" "${paths%%$'\n'*}" "${paths#*$'\n'}" <<< "$out") ||
+    ! layout=$(_fm_win_herdr_api layout.apply "$params" "${session[@]}"); then
     MSYS2_ARG_CONV_EXCL='*' "$_FM_WIN_HERDR_BIN" workspace close "$(jq -r .result.workspace.workspace_id <<< "$out")" \
       "${session[@]}" >/dev/null 2>&1
     return 1
   fi
-  jq -c --argjson l "$(jq -c .result.layout <<< "$layout")" '.result.tab.tab_id = $l.tab_id
+  jq -c --argjson layout "$layout" '$layout.result.layout as $l | .result.tab.tab_id = $l.tab_id
     | .result.workspace.active_tab_id = $l.tab_id
     | .result.root_pane = {pane_id: $l.root.pane_id, tab_id: $l.tab_id, workspace_id: $l.workspace_id}' <<< "$out"
 }

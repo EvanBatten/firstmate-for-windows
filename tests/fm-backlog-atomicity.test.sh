@@ -1217,13 +1217,13 @@ test_data_directory_with_a_control_byte_is_refused() {
   local dir out rc byte bad
   dir="$TMP_ROOT/data-café"
   mkdir -p "$dir"
-  out=$(. "$ROOT/bin/fm-backlog-transition-lib.sh" && fm_backlog_data_absolute "$dir" 2>&1) \
+  out=$(. "$ROOT/bin/fm-backlog-transition-lib.sh" && fm_backlog_data_absolute_to out "$dir" 2>&1 && printf '%s' "$out") \
     || fail "a data directory named with UTF-8 did not resolve: $out"
   [ "$out" = "$(cd "$dir" && pwd -P)" ] || fail "a UTF-8 data directory resolved to '$out'"
   for byte in 01 09 0a 1f 7f; do
     rc=0
     printf -v bad "%s\\x${byte}x" "$dir"
-    out=$(. "$ROOT/bin/fm-backlog-transition-lib.sh" && fm_backlog_data_absolute "$bad" 2>&1) || rc=$?
+    out=$(. "$ROOT/bin/fm-backlog-transition-lib.sh" && fm_backlog_data_absolute_to out "$bad" 2>&1) || rc=$?
     [ "$rc" -eq 2 ] || fail "a data directory holding byte 0x$byte was not refused (rc=$rc)"
     assert_contains "$out" "invalid control byte" "byte 0x$byte was refused without naming the reason"
   done
