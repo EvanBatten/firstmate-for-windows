@@ -1126,6 +1126,29 @@ describe('herdr server environment', () => {
   });
 });
 
+describe('seeded project', () => {
+  test('a shell script committed to the seeded project checks out with LF on a CRLF host', async () => {
+    const GREET = '#!/bin/sh\necho hello\n';
+    const s =new sessionLib.Session({ trace: { feature: 'seed', steps: [] }, env: process.env });
+    s.scratch = tmp('seed');
+    await s.seedProject('greeter');
+    const git = (...a) => {
+      const r = spawnSync('git', a, { encoding: 'utf8' });
+      assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
+    };
+    const work = join(s.scratch, 'work');
+    git('-c', 'core.autocrlf=true', 'clone', '-q', s.projectOrigin, work);
+    git('-C', work, 'config', 'core.autocrlf', 'true');
+    writeFileSync(join(work, 'greet.sh'), GREET);
+    git('-C', work, 'add', 'greet.sh');
+    git('-C', work, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'add greet');
+    git('-C', work, 'push', '-q', 'origin', 'main');
+    const fresh = join(s.scratch, 'fresh');
+    git('-c', 'core.autocrlf=true', 'clone', '-q', s.projectOrigin, fresh);
+    assert.equal(readFileSync(join(fresh, 'greet.sh'), 'utf8'), GREET);
+  });
+});
+
 describe('cli transport argv mapping', () => {
   test('send_input with enter is pane run; keys alone are send-keys', () => {
     assert.deepEqual(cliArgv('pane.send_input', { pane_id: 'p', text: 'hi', keys: ['enter'] }), ['pane', 'run', 'p', 'hi']);
