@@ -19,46 +19,56 @@ Firstmate cannot start without them, and its own install hints do not cover Wind
    winget install --id Git.Git -e
    ```
 
-2. Install the GitHub CLI.
+2. Install PowerShell 7.
+   Herdr starts its panes in PowerShell 7 when it finds `pwsh` on `PATH`, and in Windows PowerShell 5.1 otherwise.
+   PowerShell 7 ships with the `RemoteSigned` execution policy, so it loads the profile line from [Launch](#launch).
+   Windows PowerShell 5.1 starts with the `Restricted` policy on Windows 11, which refuses to load any profile.
+
+   ```powershell
+   winget install --id Microsoft.PowerShell -e
+   ```
+
+3. Install the GitHub CLI.
 
    ```powershell
    winget install --id GitHub.cli -e
    ```
 
-3. Install Node.js.
+4. Install Node.js.
    The overlay runs `node` to lay out Herdr panes, and firstmate installs its helper tools with `npm`.
 
    ```powershell
    winget install --id OpenJS.NodeJS.LTS -e
    ```
 
-4. Install jq.
+5. Install jq.
 
    ```powershell
    winget install --id jqlang.jq -e
    ```
 
-5. Install Claude Code, then run `claude` once and sign in.
+6. Install Claude Code.
 
    ```powershell
    irm https://claude.ai/install.ps1 | iex
    ```
 
-6. Install Herdr.
+7. Install Herdr.
 
    ```powershell
    irm https://herdr.dev/install.ps1 | iex
    ```
 
-7. Install Treehouse 2.0.1, the version CI pins.
+8. Install Treehouse 2.0.1, the version CI pins.
    Its install script stops on Windows, so download the release and put `treehouse.exe` in `%USERPROFILE%\.local\bin`, the folder that holds `claude.exe`.
 
    ```powershell
-   gh release download v2.0.1 -R kunchenguid/treehouse -p "*windows-amd64.zip" -D $env:TEMP
-   Expand-Archive "$env:TEMP\treehouse-v2.0.1-windows-amd64.zip" "$env:USERPROFILE\.local\bin" -Force
+   Invoke-WebRequest https://github.com/kunchenguid/treehouse/releases/download/v2.0.1/treehouse-v2.0.1-windows-amd64.zip -OutFile "$env:TEMP\treehouse.zip"
+   Expand-Archive "$env:TEMP\treehouse.zip" "$env:USERPROFILE\.local\bin" -Force
    ```
 
 Open a new PowerShell window so that it picks up the new `PATH`.
+In that window, run `claude` once, sign in, and exit it.
 On its first start, firstmate lists any other tool it is missing and asks before it installs one.
 
 ## Clone
