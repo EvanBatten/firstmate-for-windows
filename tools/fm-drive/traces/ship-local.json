@@ -2,11 +2,11 @@
   "feature": "ship-local",
   "project": "greeter",
   "proves": {
-    "fm-spawn": 2,
-    "readme-visible-crew": 2,
-    "fm-merge-local": 3,
-    "fm-teardown": 4,
-    "feature-real-session": 4
+    "fm-spawn": 3,
+    "readme-visible-crew": 3,
+    "fm-merge-local": 4,
+    "fm-teardown": 5,
+    "feature-real-session": 5
   },
   "steps": [
     {
@@ -16,8 +16,13 @@
     },
     {
       "say": "",
+      "until": "backlog.recorded:greeter",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
       "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
-      "budgetSec": 180
+      "budgetSec": 150
     },
     {
       "say": "when the worker is done and its result checks out, land it on main; you have my approval. then clean up and tell me.",

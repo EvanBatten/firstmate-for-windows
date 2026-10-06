@@ -805,7 +805,8 @@ export class Session {
     } else if (kind === 'panes') {
       snap.herdr.panes = {};
       for (const id of paneIds) {
-        snap.herdr.panes[id] = await this.herdr.call('pane.get', { pane_id: id }).then(() => true).catch(() => false);
+        const answers = await this.herdr.call('pane.get', { pane_id: id }).then(() => true, () => false);
+        snap.herdr.panes[id] = answers ? { agent: await this.herdr.call('agent.get', { target: id }).then((r) => r?.agent?.agent || null, () => null) } : null;
       }
     }
   }

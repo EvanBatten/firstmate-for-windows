@@ -1,7 +1,7 @@
 {
   "feature": "pr-land",
   "proves": {
-    "fm-pr-merge": 3
+    "fm-pr-merge": 4
   },
   "steps": [
     {
@@ -11,8 +11,13 @@
     },
     {
       "say": "",
-      "until": "tasks.count>=1 && backlog.inflight>=1",
-      "budgetSec": 180
+      "until": "backlog.recorded:notes",
+      "budgetSec": 90
+    },
+    {
+      "say": "",
+      "until": "tasks.count>=1 && backlog.inflight>=1 && worker.alive",
+      "budgetSec": 150
     },
     {
       "say": "once the pull request is up and looks right, merge it; you have my approval. then clean up and tell me.",

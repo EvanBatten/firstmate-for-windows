@@ -54,6 +54,8 @@ The shipped `register` trace is the smallest real one.
 - The driver refuses `pong`, `bypass permissions on`, and a trace whose only claims are `lock.held` with exit 2 before any Herdr call, because they prove the harness started, not that firstmate did anything.
 - Pane text is never a claim; a captain line that made the primary say the right thing but write nothing fails its step.
 - A worker is dispatched when its record exists **and** its backlog item is In flight (`tasks.count>=1 && backlog.inflight>=1`); a record alone is a spawn still in progress, and relaunching over it lets Claude's exit kill the spawn, whose cleanup then removes the record.
+- Every shipped trace that starts a worker waits for it in two steps, so a red run names who was slow. The first step claims the primary filed the captain's request (`backlog.recorded:NAME`, an item tagged `(repo: NAME)` in any backlog section) within 90 s. The second claims the worker started (`tasks.count>=1 && backlog.inflight>=1 && worker.alive`) within 150 s after that.
+- `worker.alive` holds only when Herdr has detected an agent in every recorded worker pane (`agent get`, any agent Herdr knows). A pane that still holds only the shell `fm-spawn` opened does not count.
 
 Check a trace without starting Herdr or Claude with `node tools/fm-drive/drive.mjs check <trace.json>`.
 `check` clones the root and refuses, with exit 2, a trace whose every `until` already holds on that fresh home; `run` does the same before it starts anything.

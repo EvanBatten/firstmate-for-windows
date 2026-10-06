@@ -5,6 +5,8 @@
 //   backlog.inflight>=N         data/backlog.md lists at least N items under "## In flight"
 //                               (fm-spawn's commit point: a record whose item is not In flight is
 //                               a spawn still in progress, which its abort cleanup may remove)
+//   backlog.recorded:NAME       data/backlog.md holds an item tagged "(repo: NAME)" in any section
+//                               (Queued, In flight or Done): the primary filed the captain's request
 //   tasks.kind:scout|ship       some task record carries kind=<value>
 //   status.verb:VERB            some state/*.status line starts with VERB, optional " [key=value]" tags, then ":"
 //                               (done, needs-decision, blocked, failed, working, paused, resolved, note)
@@ -30,7 +32,9 @@
 //   teardown.refused            some state/<id>.teardown-refused records a cleanup that refused
 //                               because it could not prove the task's work landed
 //   tabs.clean                  no herdr tab labelled fm-<id> for a task this run ever recorded is open
-//   worker.alive                every recorded task's herdr pane still answers
+//   worker.alive                every recorded task's herdr pane still answers and herdr has detected an
+//                               agent in it (any agent herdr knows); a pane holding only the shell
+//                               fm-spawn opened is not a live worker
 //   wake.empty                  state/.wake-queue is missing or has no non-blank line
 //   beacon.fresh                state/.last-watcher-beat was touched within 300 s
 //   file.contains:REL:NEEDLE    <home>/REL exists and contains NEEDLE (REL must stay inside the home)
@@ -73,6 +77,7 @@ const ATOMS = [
   { name: 'projects.registered', re: new RegExp(`^projects\\.registered:(${NAME})$`), args: ['name'] },
   { name: 'tasks.count', re: /^tasks\.count>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
   { name: 'backlog.inflight', re: /^backlog\.inflight>=(\d+)$/, args: ['n'], int: ['n'], min: { n: 1 } },
+  { name: 'backlog.recorded', re: new RegExp(`^backlog\\.recorded:(${NAME})$`), args: ['name'] },
   { name: 'tasks.kind', re: /^tasks\.kind:(scout|ship)$/, args: ['kind'] },
   { name: 'status.verb', re: new RegExp(`^status\\.verb:(${STATUS_VERBS.join('|')})$`), args: ['verb'] },
   { name: 'report.exists', re: /^report\.exists$/, args: [] },
@@ -276,7 +281,7 @@ export function snapshotHome(home, nowMs = Date.now()) {
     wakeQueueLines: wake === null ? 0 : wake.split('\n').filter((l) => l.trim() !== '').length,
     beaconMtimeMs: mtimeMs(join(state, '.last-watcher-beat')),
     deliveries: readDeliveries(home),
-    // Filled by the wait loop when an atom needs it: { tabLabels: string[], panes: { [paneId]: boolean } }.
+    // Filled by the wait loop when an atom needs it: { tabLabels: string[], panes: { [paneId]: PaneFact } }.
     herdr: null,
     // Filled by the wait loop: { [name]: { sha, count } }.
     gitAhead: {},
@@ -293,16 +298,20 @@ export function snapshotHome(home, nowMs = Date.now()) {
   };
 }
 
-export function backlogSectionItems(text, section) {
-  if (!text) return 0;
-  let inside = false;
-  let count = 0;
-  for (const raw of text.split('\n')) {
+/** Every "- [ ]" item line of data/backlog.md with the "## " section it sits under. */
+export function backlogItems(text) {
+  const items = [];
+  let section = null;
+  for (const raw of (text ?? '').split('\n')) {
     const line = raw.replace(/\r$/, '');
-    if (/^##\s/.test(line)) { inside = new RegExp(`^##\\s+${section}\\s*$`, 'i').test(line); continue; }
-    if (inside && /^- \[.\]/.test(line)) count += 1;
+    if (/^##\s/.test(line)) { section = line.replace(/^##\s+/, '').trim(); continue; }
+    if (section !== null && /^- \[.\]/.test(line)) items.push({ section, line });
   }
-  return count;
+  return items;
+}
+
+export function backlogSectionItems(text, section) {
+  return backlogItems(text).filter((i) => i.section.toLowerCase() === section.toLowerCase()).length;
 }
 
 // A lock entry (the lock, its owner directory, a steal or acquire helper) whose lock is not one
@@ -339,6 +348,12 @@ export function mergedPrCount(prs, shasSince) {
   const since = new Set(shasSince);
   return prs.filter((pr) => since.has(pr.mergeCommit?.oid) && pr.mergeCommit.oid !== pr.headRefOid).length;
 }
+
+/**
+ * One recorded task's pane as herdr answered for it: null when the pane is gone, else the agent
+ * herdr has detected in it (its `agent get` label), null while the pane holds no agent.
+ * @typedef {{ agent: string|null }|null} PaneFact
+ */
 
 export function recordedPaneIds(snap) {
   return Object.values(snap.meta).map((m) => m.herdr_pane_id || (m.window || '').replace(/^[^:]*:/, '')).filter(Boolean);
@@ -378,6 +393,11 @@ export function evaluateAtom(atom, snap, ctx) {
     case 'backlog.inflight': {
       const n = backlogSectionItems(snap.backlogMd, 'In flight');
       return { ok: n >= a.n, reason: `${n} item(s) In flight` };
+    }
+    case 'backlog.recorded': {
+      const tag = `(repo: ${a.name})`;
+      const hit = backlogItems(snap.backlogMd).filter((i) => i.line.includes(tag));
+      return { ok: hit.length > 0, reason: hit.length ? hit.map((i) => `${/^- \[.\] (\S+)/.exec(i.line)[1]} ${i.section}`).join(', ') : `no backlog item for ${a.name}` };
     }
     case 'tasks.kind': {
       const hit = snap.taskIds.filter((id) => snap.meta[id].kind === a.kind);
@@ -465,8 +485,11 @@ export function evaluateAtom(atom, snap, ctx) {
       const ids = recordedPaneIds(snap);
       if (ids.length === 0) return { ok: false, reason: 'no task record names a pane' };
       if (!snap.herdr?.panes) return { ok: false, reason: 'pane liveness not fetched', needs: 'panes' };
-      const dead = ids.filter((p) => !snap.herdr.panes[p]);
-      return { ok: dead.length === 0, reason: dead.length ? `pane(s) gone: ${dead.join(' ')}` : `pane(s) answer: ${ids.join(' ')}` };
+      const gone = ids.filter((p) => !snap.herdr.panes[p]);
+      if (gone.length) return { ok: false, reason: `pane(s) gone: ${gone.join(' ')}` };
+      const bare = ids.filter((p) => !snap.herdr.panes[p].agent);
+      if (bare.length) return { ok: false, reason: `no agent started in pane(s): ${bare.join(' ')}` };
+      return { ok: true, reason: `agent(s) running: ${ids.map((p) => `${p}=${snap.herdr.panes[p].agent}`).join(' ')}` };
     }
     case 'wake.empty':
       return { ok: snap.wakeQueueLines === 0, reason: `${snap.wakeQueueLines} queued notification(s)` };
