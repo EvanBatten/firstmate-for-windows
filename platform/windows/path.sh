@@ -56,7 +56,7 @@ pwd() {
         dir=$(builtin pwd -P) || return
       fi
       ;;
-    *) builtin pwd "$@"; return ;;
+    *) builtin pwd "$@"; return $? ;;
   esac
   _fm_win_mount_spelling dir "$dir"
   printf '%s\n' "$dir"

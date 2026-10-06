@@ -425,6 +425,45 @@ fm_fakebin() {
   printf '%s\n' "$fakebin"
 }
 
+# fm_link_tool <fakebin> <tool> links the real <tool> from the current PATH into
+# a fakebin that will stand in for the whole PATH, returning 1 when the host has
+# no such tool. An MSYS or Cygwin executable loads its DLLs from the directory it
+# was started from, so on those hosts the DLLs beside the tool are linked too.
+fm_link_tool() {
+  local fakebin=$1 tool=$2 tool_path dll
+  tool_path=$(command -v "$tool") || return 1
+  ln -s "$tool_path" "$fakebin/$tool"
+  case $(uname -s) in
+    MSYS*|MINGW*|CYGWIN*)
+      for dll in "${tool_path%/*}"/*.dll; do
+        [ -e "$dll" ] && [ ! -e "$fakebin/${dll##*/}" ] && ln -s "$dll" "$fakebin/${dll##*/}"
+      done
+      ;;
+  esac
+  return 0
+}
+
+# fm_make_unreadable <path> and fm_make_readable <path> take away and restore
+# the current user's read access. On Cygwin and MSYS mode bits are not enforced,
+# so an ACL entry denying read stands in for chmod 000.
+fm_make_unreadable() {
+  chmod 000 "$1"
+  case $(uname -s) in
+    MSYS*|MINGW*|CYGWIN*) MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /deny "$USERNAME:(R)" >/dev/null ;;
+  esac
+}
+
+fm_make_readable() {
+  case $(uname -s) in
+    MSYS*|MINGW*|CYGWIN*) MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /remove:d "$USERNAME" >/dev/null ;;
+  esac
+  chmod 600 "$1"
+}
+
+fm_is_unreadable() {
+  ! { : < "$1"; } 2>/dev/null
+}
+
 fm_fake_exit0() {
   local fakebin=$1 tool
   shift

@@ -2096,6 +2096,8 @@ window_to_task() {
           esac
         done < "$meta"
       } 2>/dev/null
+      # MSYS command substitution dropped a CR before the newline it removed.
+      case $OSTYPE in msys*) mw=${mw%$'\r'}; mt=${mt%$'\r'} ;; esac
       [ "$mw" = "$w" ] || [ "$mt" = "$w" ] || continue
       t=${meta##*/}
       t=${t%.meta}
