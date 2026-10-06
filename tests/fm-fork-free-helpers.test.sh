@@ -316,6 +316,34 @@ SH
   pass "fm_file_contents_to reads a file as \$(cat) does and a lock cycle never forks cat"
 }
 
+test_helpers_assign_any_output_variable_name() {
+  local script="$TMP_ROOT/names.sh"
+  printf '42
+' > "$TMP_ROOT/names-pid"
+  cat > "$script" <<'SH'
+. "$1/bin/fm-path-lib.sh"
+for name in fm_path fm_contents got; do
+  unset "$name"
+  fm_dirname_to "$name" /a/b/c
+  [ "${!name-UNSET}" = /a/b ] || printf 'fm_dirname_to into %s left %s
+' "$name" "${!name-UNSET}"
+  unset "$name"
+  fm_basename_to "$name" /a/b/c
+  [ "${!name-UNSET}" = c ] || printf 'fm_basename_to into %s left %s
+' "$name" "${!name-UNSET}"
+  unset "$name"
+  fm_file_contents_to "$name" "$2"
+  [ "${!name-UNSET}" = 42 ] || printf 'fm_file_contents_to into %s left %s
+' "$name" "${!name-UNSET}"
+  fm_file_contents_to "$name" "$2.missing"
+  [ "${!name-UNSET}" = '' ] || printf 'fm_file_contents_to of a missing file into %s left %s
+' "$name" "${!name-UNSET}"
+done
+SH
+  run_everywhere "output variable names" "$script" "$TMP_ROOT/names-pid"
+  pass "path and contents helpers assign any output variable name, their own locals' included"
+}
+
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
 else
@@ -327,4 +355,5 @@ else
   test_classify_stat_helpers_read_the_kernel_name_once
   test_backlog_record_guard_resolves_its_paths_in_one_perl
   test_file_contents_helper_matches_cat_and_lock_cycle_never_forks_it
+  test_helpers_assign_any_output_variable_name
 fi
