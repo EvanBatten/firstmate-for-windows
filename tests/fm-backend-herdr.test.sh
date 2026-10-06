@@ -2068,6 +2068,31 @@ EOF
   pass "herdr presentation create: every create and shape response reads to the same verdict and ids"
 }
 
+# A pinned session's pane calls go straight to its server; any other session,
+# and the same calls before the pin, still check the server first.
+test_session_pin_skips_the_server_check_only_for_its_session() {
+  local dir log fb status_calls
+  dir="$TMP_ROOT/session-pin"; mkdir -p "$dir/responses"
+  log="$dir/log"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$dir/responses" bash -c '
+    . "$0/bin/backends/herdr.sh"
+    fm_backend_herdr_send_text_line fmtest:w1:p1 "echo before" || exit 1
+    fm_backend_herdr_session_pin fmtest || exit 1
+    fm_backend_herdr_send_text_line fmtest:w1:p1 "echo pinned" || exit 1
+    fm_backend_herdr_send_key fmtest:w1:p1 Enter || exit 1
+    fm_backend_herdr_send_text_line other:w1:p1 "echo other" || exit 1
+  ' "$ROOT" || fail "pane calls around a session pin should succeed: $(cat "$log")"
+  status_calls=$(grep -c $'\x1fstatus\x1f--json\x1f--session\x1ffmtest$' "$log")
+  [ "$status_calls" = 1 ] || fail "only the call before the pin should check the fmtest server, saw $status_calls checks"
+  status_calls=$(grep -c $'\x1fstatus\x1f--json\x1f--session\x1fother$' "$log")
+  [ "$status_calls" = 1 ] || fail "an unpinned session should still check its server, saw $status_calls checks"
+  [ "$(grep -c $'\x1fpane\x1frun\x1f' "$log")" = 3 ] || fail "every pane run should still reach herdr: $(cat "$log")"
+  grep -q $'\x1fpane\x1fsend-keys\x1fw1:p1\x1fenter\x1f--session\x1ffmtest$' "$log" \
+    || fail "the pinned key send should still reach herdr: $(cat "$log")"
+  pass "herdr session pin: pinned pane calls skip the server check, other sessions keep it"
+}
+
 test_projection_focus_snapshot_requires_exact_workspace_and_tab() {
   local dir log resp fb out
   dir="$TMP_ROOT/projection-focus-snapshot"; mkdir -p "$dir/responses"
@@ -5906,6 +5931,7 @@ test_projection_journal_v2_binds_and_advances_exact_endpoint
 test_projection_create_uses_exact_response_ids_and_leaves_one_task_pane
 test_projection_create_never_closes_a_concurrent_same_label_tab
 test_projection_create_reads_each_response_shape_exactly
+test_session_pin_skips_the_server_check_only_for_its_session
 test_projection_focus_snapshot_requires_exact_workspace_and_tab
 test_projection_close_restores_exact_prior_focus
 test_projection_close_refuses_active_tab
