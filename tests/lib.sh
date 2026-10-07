@@ -831,4 +831,34 @@ fm_test_base_path_sans() {
   done
   printf '%s\n' "$dir"
 }
+
+# A PreToolUse payload in the shape Claude Code 2.1.292 delivers to a hook.
+fm_claude_pretool_payload() {  # <cwd> <tool-name> <tool-input-json>
+  jq -cn --arg cwd "$1" --arg tool "$2" --argjson input "$3" \
+    --arg transcript 'C:\Users\fm\.claude\projects\C--fm\8f1c2d7e.jsonl' \
+    '{session_id: "8f1c2d7e-0b9a-4e55-9a51-3c7f00a1b2c3", transcript_path: $transcript,
+      cwd: $cwd, permission_mode: "bypassPermissions", hook_event_name: "PreToolUse",
+      tool_name: $tool, tool_input: $input, tool_use_id: "toolu_01ABCDEFGHJKLMNPQRSTUVWX"}'
+}
+
+# Runs the tracked .claude/settings.json PreToolUse command that invokes
+# <script> exactly as Claude Code does: bash -c, payload on stdin.
+fm_run_tracked_pretool() {  # <project-dir> <script> <payload> <out-file> <err-file>
+  local cmd
+  cmd=$(jq -r --arg script "$2" '.hooks.PreToolUse[].hooks[].command | select(contains("/bin/" + $script + " "))' \
+    "$ROOT/.claude/settings.json")
+  [ -n "$cmd" ] || return 125
+  printf '%s' "$3" | (cd "$1" && env -u GROK_AGENT -u GROK_HOOK_EVENT -u FM_HOME -u FM_ROOT_OVERRIDE \
+    -u FM_STATE_OVERRIDE -u FM_ALLOW_SUBAGENT CLAUDE_PROJECT_DIR="$1" bash -c "$cmd") >"$4" 2>"$5"
+}
+
+# Whether Claude Code would start the tracked PreToolUse entry that invokes
+# <script> for <tool>. Claude Code tests a matcher as a JavaScript RegExp.
+fm_tracked_pretool_matches() {  # <script> <tool>
+  local matcher
+  matcher=$(jq -r --arg script "$1" '.hooks.PreToolUse[] | select(any(.hooks[].command; contains("/bin/" + $script + " "))) | .matcher' \
+    "$ROOT/.claude/settings.json")
+  [ -n "$matcher" ] || return 125
+  node -e 'process.exit(new RegExp(process.argv[1]).test(process.argv[2]) ? 0 : 1)' "$matcher" "$2"
+}
 [ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "${FM_PLATFORM_OVERLAY%/*}/test-lib.sh"'

@@ -463,6 +463,45 @@ test_shellcheck_clean() {
   pass "bin/fm-arm-pretool-check.sh is clean under bin/fm-lint.sh"
 }
 
+# --- tracked registration over real Claude Code payloads ---------------------
+
+ARM_DENY='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"[watcher-background] a protected watcher command cannot run in an asynchronous shell list or through nohup/disown"}'
+
+expect_tracked_arm() {  # <expect> <payload>
+  local out="$MATRIX_TMP/tracked.out" err="$MATRIX_TMP/tracked.err" rc=0
+  fm_run_tracked_pretool "$ROOT" fm-arm-pretool-check.sh "$2" "$out" "$err" || rc=$?
+  if [ "$1" = allow ]; then
+    [ "$rc" -eq 0 ] && [ ! -s "$out" ] && [ ! -s "$err" ] \
+      || fail "tracked arm hook must allow silently, got exit $rc out=[$(cat "$out")] err=[$(cat "$err")] for $2"
+    return
+  fi
+  [ "$rc" -eq 2 ] || fail "tracked arm hook must deny with exit 2, got $rc for $2"
+  [ ! -s "$out" ] || fail "tracked arm hook deny wrote stdout: $(cat "$out")"
+  [ "$(cat "$err")" = "$ARM_DENY" ] || fail "tracked arm hook deny bytes changed: $(cat "$err")"
+}
+
+test_tracked_command_real_payloads() {
+  local cmd
+  while IFS='|' read -r expect cmd; do
+    expect_tracked_arm "$expect" "$(fm_claude_pretool_payload "$ROOT" Bash "$(jq -cn --arg c "$cmd" '{command: $c, description: "Run it", run_in_background: false}')")"
+  done <<'ROWS'
+allow|ls projects data 2>&1; sed -n 1,80p AGENTS.md
+allow|bin/fm-watch-arm.sh
+allow|exec bin/fm-watch-arm.sh
+allow|bin/fm-watch-checkpoint.sh --seconds 180
+deny|bin/fm-watch-arm.sh &
+deny|nohup bin/fm-watch-arm.sh
+deny|bin/fm-watch-arm.sh & disown
+ROWS
+  for cmd in $'echo a\nbin/fm-watch-arm.sh &' $'echo a\r\nbin/fm-watch-arm.sh &'; do
+    expect_tracked_arm deny "$(fm_claude_pretool_payload "$ROOT" Bash "$(jq -cn --arg c "$cmd" '{command: $c}')")"
+  done
+  expect_tracked_arm allow "$(fm_claude_pretool_payload "$ROOT" Bash '{"description":"no command"}')"
+  expect_tracked_arm allow '{"tool_name":"Shell","tool_input":{"command":"bin/fm-watch-arm.sh &"},"conversation_id":"c1","hook_event_name":"preToolUse","cursor_version":"2026.08.11-e8db854"}'
+  expect_tracked_arm allow '[]'
+  pass "the tracked registration classifies real Claude Code payloads, and leaves Cursor's duplicate to Cursor"
+}
+
 test_full_acceptance_matrix
 test_direct_policy_contract
 test_command_equals_form
@@ -481,3 +520,4 @@ test_claude_mode_stdout_empty_on_deny
 test_default_mode_stdout_has_grok_json_on_deny
 test_allow_is_silent_both_modes
 test_shellcheck_clean
+test_tracked_command_real_payloads
