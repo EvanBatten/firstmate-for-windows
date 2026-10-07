@@ -11,6 +11,23 @@ fm_test_lock_staleness_provable() {
   return 1
 }
 
+# Git for Windows ships no C compiler, so the fake Cursor is a copy of bash.exe,
+# which MSYS names by its own file. Bash execs the last command of a -c script in
+# place of itself unless an EXIT trap is set, which would drop the Cursor parent,
+# so BASH_ENV sets one in that copy alone.
+fm_test_fake_cursor() {
+  local bin=$1 scratch=$2
+  cp /usr/bin/bash.exe "$bin/cursor-agent.exe" || fail "could not copy bash for the fake Cursor process"
+  {
+    printf '. %q\n' "$BASH_ENV"
+    # shellcheck disable=SC2016 # Expanded by the fake Cursor bash.
+    printf '%s\n' 'case $BASH in */cursor-agent*) trap "exit \$?" EXIT ;; esac'
+  } > "$scratch/fake-cursor.rc"
+  export BASH_ENV=$scratch/fake-cursor.rc
+  # shellcheck disable=SC2034 # Read by the calling suite.
+  FAKE_CURSOR=$bin/cursor-agent
+}
+
 # Git for Windows keeps git in /mingw64/bin, not /usr/bin, so a fixture's
 # minimal PATH needs that directory to reach git at all.
 FM_TEST_BASE_PATH=${FM_TEST_BASE_PATH:-/mingw64/bin:/usr/bin:/bin:/usr/sbin:/sbin}

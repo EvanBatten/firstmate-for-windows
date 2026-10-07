@@ -870,4 +870,44 @@ fm_test_lock_staleness_provable() {
   return 0
 }
 
+# fm_test_fake_cursor <bin-dir> <scratch-dir>: put a real executable whose own
+# canonical basename is cursor-agent in <bin-dir> and set FAKE_CURSOR to it.
+# `$FAKE_CURSOR -c <script>` runs the script in a child bash and stays alive as
+# its parent. A symlink to bash is not enough on Linux: /proc resolves it to
+# bash, so the real Cursor ancestry classifier rejects that process as an
+# impostor.
+fm_test_fake_cursor() {
+  local bin=$1 scratch=$2 cc
+  cc=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null) \
+    || fail "a C compiler is required to build the fake Cursor process"
+  cat > "$scratch/fake-cursor.c" <<'C'
+#include <errno.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+  int status;
+  pid_t child;
+  if (argc != 3 || strcmp(argv[1], "-c") != 0) return 64;
+  child = fork();
+  if (child < 0) return 70;
+  if (child == 0) {
+    execl("/bin/bash", "bash", "-c", argv[2], (char *)0);
+    _exit(127);
+  }
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) return 71;
+  }
+  if (WIFEXITED(status)) return WEXITSTATUS(status);
+  if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+  return 72;
+}
+C
+  "$cc" -o "$bin/cursor-agent" "$scratch/fake-cursor.c" \
+    || fail "could not build the fake Cursor process"
+  # shellcheck disable=SC2034 # Read by the calling suite.
+  FAKE_CURSOR=$bin/cursor-agent
+}
+
 [ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "${FM_PLATFORM_OVERLAY%/*}/test-lib.sh"'
