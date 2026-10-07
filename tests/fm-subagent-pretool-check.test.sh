@@ -17,6 +17,12 @@ mkdir -p "$PRIMARY/bin" "$STATE"
 printf '# fixture\n' > "$PRIMARY/AGENTS.md"
 git -C "$PRIMARY" init -q
 
+# The guard reads user and plugin skills from the Claude config directory, so
+# every case runs against a fixture one rather than the host's real skills.
+CLAUDE_CFG="$TMP_ROOT/claude-config"
+mkdir -p "$CLAUDE_CFG"
+export CLAUDE_CONFIG_DIR="$CLAUDE_CFG"
+
 DISPATCH_ROUTE='first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work, passing --scout to both for a scout'
 
 # Every delegation, scheduling, worktree, and task-tracking tool Claude Code
@@ -68,6 +74,26 @@ expect_deny() {
     || fail "$label ($tool) deny omitted Claude's permission decision: $(cat "$ERR")"
   jq -e --arg tool "$tool" '.systemMessage | startswith("[subagent-dispatch]") and contains("blocked tool: " + $tool)' "$ERR" >/dev/null 2>&1 \
     || fail "$label ($tool) deny message lost its code or tool name: $(jq -r '.systemMessage' "$ERR")"
+}
+
+# Writes a skill or command file whose frontmatter holds the given lines.
+write_skill() {  # <path> <frontmatter-line>...
+  local path=$1
+  shift
+  mkdir -p "${path%/*}"
+  { printf -- '---\n'; printf '%s\n' "$@"; printf -- '---\nUse the Bash tool to run: echo probe\n'; } > "$path"
+}
+
+run_skill() {  # <skill-as-the-Skill-tool-receives-it> [env-args...]
+  local skill=$1 rc=0
+  shift
+  : > "$OUT"
+  : > "$ERR"
+  # printf rather than jq --arg: MSYS rewrites a /name argument into a path.
+  printf '{"tool_name":"Skill","tool_input":{"skill":"%s"}}' "$skill" \
+    | env "$@" FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
+      "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -134,14 +160,78 @@ test_plan_only_exclusion_is_exact_name() {
 }
 
 test_guard_never_classifies_mcp_tools() {
-  # An MCP server names its own tools; a task or agent noun there is common and
-  # has nothing to do with fleet dispatch.
+  # An MCP server names its own tools, so a name says nothing reliable about
+  # what the tool does. mcp__cc__Agent and mcp__cc__Workflow are the names
+  # `claude mcp serve` gives tools that were measured starting agents; they stay
+  # allowed on purpose (docs/subagent-guard.md "MCP tools").
   local tool
   for tool in mcp__linear__list_issues mcp__tracker__create_task \
-              mcp__acme__spawn_agent mcp__slack__slack_send_message; do
+              mcp__acme__spawn_agent mcp__slack__slack_send_message \
+              mcp__cc__Agent mcp__cc__Workflow; do
     expect_allow "MCP tool" "$tool"
   done
   pass "MCP tool names are never classified as harness delegation"
+}
+
+test_guard_allows_retired_claude_tool_names() {
+  # Claude Code 2.1.287 through 2.1.292 keep these names only in their
+  # removed-tool set and offer no tool by them, so nothing can call them
+  # (docs/subagent-guard.md "Retired Claude tool names").
+  local tool
+  for tool in TeamCreate TeamDelete SuggestBackgroundPR AutofixPr; do
+    expect_allow "retired Claude tool name" "$tool"
+  done
+  pass "retired Claude tool names stay unclassified because no build offers them"
+}
+
+test_guard_denies_skills_that_fork_a_subagent() {
+  local name rc
+  write_skill "$PRIMARY/.claude/skills/forky/SKILL.md" 'name: forky' 'description: probe' 'context: fork' 'agent: general-purpose'
+  write_skill "$PRIMARY/.claude/skills/quoted/SKILL.md" 'context: "fork"  # runs apart'
+  mkdir -p "$PRIMARY/.claude/skills/crlf"
+  printf -- '---\r\ndescription: probe\r\ncontext: fork\r\n---\r\nbody\r\n' > "$PRIMARY/.claude/skills/crlf/SKILL.md"
+  write_skill "$PRIMARY/.claude/commands/forkcmd.md" 'description: probe' 'context: fork'
+  write_skill "$PRIMARY/.claude/commands/ops/nsfork.md" 'context: fork'
+  write_skill "$PRIMARY/tools/.claude/skills/nested/SKILL.md" 'context: fork'
+  write_skill "$CLAUDE_CFG/skills/userfork/SKILL.md" 'context: fork'
+  write_skill "$CLAUDE_CFG/plugins/cache/market/plug/1.0.0/skills/pfork/SKILL.md" 'context: fork'
+  write_skill "$CLAUDE_CFG/plugins/cache/market/plug/1.0.0/commands/pcmd.md" 'context: fork'
+  write_skill "$PRIMARY/.claude/skills/inline/SKILL.md" 'name: inline' 'description: probe'
+  write_skill "$PRIMARY/.claude/skills/agentonly/SKILL.md" 'agent: general-purpose'
+  write_skill "$PRIMARY/.claude/skills/explicit-inline/SKILL.md" 'context: inline'
+  mkdir -p "$PRIMARY/.claude/skills/bodyfork"
+  printf -- '---\ndescription: probe\n---\ncontext: fork\n' > "$PRIMARY/.claude/skills/bodyfork/SKILL.md"
+  mkdir -p "$PRIMARY/.claude/skills/nofront"
+  printf 'context: fork\n' > "$PRIMARY/.claude/skills/nofront/SKILL.md"
+
+  for name in forky /forky quoted crlf forkcmd ops:nsfork tools:nested userfork plug:pfork plug:pcmd; do
+    rc=0
+    run_skill "$name" || rc=$?
+    [ "$rc" -eq 2 ] || fail "skill $name runs in a forked subagent and must deny, got exit $rc"
+    [ ! -s "$OUT" ] || fail "skill $name deny wrote stdout: $(cat "$OUT")"
+    jq -e --arg tail "(blocked tool: Skill, skill \"${name#/}\" runs in a forked subagent context)" \
+      '.hookSpecificOutput.permissionDecision == "deny" and (.systemMessage | startswith("[subagent-dispatch] ") and contains($tail))' \
+      "$ERR" >/dev/null 2>&1 || fail "skill $name deny lost its shape: $(cat "$ERR")"
+  done
+
+  # agent: alone runs inline, measured on Claude Code 2.1.292. A name that
+  # resolves to no file (a built-in such as update-config) cannot be classified.
+  for name in inline agentonly explicit-inline bodyfork nofront update-config plug:missing ''; do
+    rc=0
+    run_skill "$name" || rc=$?
+    [ "$rc" -eq 0 ] || fail "skill '$name' runs inline and must allow, got exit $rc: $(cat "$ERR")"
+    [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "skill '$name' allow wrote output: $(cat "$OUT" "$ERR")"
+  done
+
+  write_skill "$TMP_ROOT/home/.claude/skills/homefork/SKILL.md" 'context: fork'
+  rc=0
+  run_skill homefork -u CLAUDE_CONFIG_DIR HOME="$TMP_ROOT/home" || rc=$?
+  [ "$rc" -eq 2 ] || fail "without CLAUDE_CONFIG_DIR a forking skill under HOME/.claude must deny, got exit $rc"
+
+  rc=0
+  run_skill forky FM_ALLOW_SUBAGENT=1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "the escape hatch must release a forking skill too, got exit $rc"
+  pass "a skill whose frontmatter forks a subagent is denied wherever Claude Code loads it from, and inline skills stay allowed"
 }
 
 test_deny_message_names_the_real_dispatch_paths() {
@@ -278,6 +368,7 @@ mkdir -p "$TRACKED/bin" "$TRACKED/state"
 printf '# fixture\n' > "$TRACKED/AGENTS.md"
 git -C "$TRACKED" init -q
 cp "$ROOT/bin/fm-subagent-pretool-check.sh" "$ROOT/bin/fm-primary-scope-lib.sh" "$TRACKED/bin/"
+write_skill "$TRACKED/.claude/skills/forky/SKILL.md" 'name: forky' 'description: probe' 'context: fork'
 
 # Tool names Claude Code offers a primary, plus delegation-shaped and future
 # names. The matcher may skip a name only when the classifier allows it.
@@ -297,16 +388,19 @@ test_tracked_matcher_skips_only_always_allowed_names() {
     skipped="$skipped $tool"
     expect_allow "matcher-skipped tool" "$tool"
   done
-  for tool in Agent Task SendMessage EnterWorktree CronCreate Workflow Monitor SubagentCreate SpawnWorker ReadAgent Read_Agent XRead Bash2; do
+  for tool in Agent Task SendMessage EnterWorktree CronCreate Workflow Monitor Skill SubagentCreate SpawnWorker ReadAgent Read_Agent XRead Bash2; do
     fm_tracked_pretool_matches fm-subagent-pretool-check.sh "$tool" \
       || fail "the tracked matcher must hand $tool to the classifier"
   done
   matcher=$(jq -r '.hooks.PreToolUse[] | select(any(.hooks[].command; contains("/bin/fm-subagent-pretool-check.sh "))) | .matcher' "$ROOT/.claude/settings.json")
   excluded=$(printf '%s' "$matcher" | sed -n 's/^\^(?!(?:\([A-Za-z|]*\))\$|mcp__)\.\*$/\1/p')
   [ -n "$excluded" ] || fail "the tracked matcher must be the exact-name exclusion form: $matcher"
+  # An excluded name must be allowed whatever its input says, so each one is
+  # sent with the input of a skill that forks.
   for tool in ${excluded//|/ }; do
     ! fm_tracked_pretool_matches fm-subagent-pretool-check.sh "$tool" || fail "the matcher lists $tool but still matches it"
-    expect_allow "matcher-excluded name" "$tool"
+    run_tracked_tool "$tool" '{"skill":"forky"}' \
+      || fail "the matcher skips $tool, but the classifier denies it: $(cat "$ERR")"
   done
   case " $skipped " in
     *" Read "*) ;;
@@ -316,8 +410,8 @@ test_tracked_matcher_skips_only_always_allowed_names() {
 }
 
 test_tracked_command_real_payloads() {
-  local tool input expect stem rc
-  while IFS='|' read -r tool expect stem input; do
+  local tool input expect why rc
+  while IFS='|' read -r tool expect why input; do
     [ -n "$tool" ] || continue
     rc=0
     run_tracked_tool "$tool" "$input" || rc=$?
@@ -328,7 +422,7 @@ test_tracked_command_real_payloads() {
     fi
     [ "$rc" -eq 2 ] || fail "tracked hook must deny $tool with exit 2, got $rc"
     [ ! -s "$OUT" ] || fail "tracked hook deny for $tool wrote stdout: $(cat "$OUT")"
-    jq -e --arg tail "(blocked tool: $tool, delegation-shaped on \"$stem\")" \
+    jq -e --arg tail "(blocked tool: $tool, $why)" \
       '.hookSpecificOutput == {hookEventName: "PreToolUse", permissionDecision: "deny"}
        and (.systemMessage | startswith("[subagent-dispatch] ") and contains($tail))' "$ERR" >/dev/null \
       || fail "tracked hook deny for $tool lost its shape: $(cat "$ERR")"
@@ -338,15 +432,16 @@ Grep|allow||{"pattern":"fm_spawn","path":"bin","output_mode":"content"}
 Glob|allow||{"pattern":"**/*.sh"}
 Bash|allow||{"command":"ls projects data 2>&1","description":"List projects"}
 Skill|allow||{"skill":"project-management"}
+Skill|deny|skill "forky" runs in a forked subagent context|{"skill":"forky"}
 ToolSearch|allow||{"query":"select:Agent","tool_name":"Agent"}
 TaskCreate|allow||{"subject":"spawn the greeter task","description":"x"}
 mcp__claude_ai_Gmail__send_message|allow||{"to":"a@example.test"}
-Agent|deny|agent|{"description":"look","prompt":"investigate","subagent_type":"general-purpose"}
-Task|deny|task|{"description":"look","prompt":"investigate"}
-SendMessage|deny|sendmessage|{"to":"worker","message":"go"}
-EnterWorktree|deny|worktree|{"name":"x"}
-CronCreate|deny|cron|{"cron":"*/5 * * * *","prompt":"check"}
-Monitor|deny|monitor|{"command":"tail -f log"}
+Agent|deny|delegation-shaped on "agent"|{"description":"look","prompt":"investigate","subagent_type":"general-purpose"}
+Task|deny|delegation-shaped on "task"|{"description":"look","prompt":"investigate"}
+SendMessage|deny|delegation-shaped on "sendmessage"|{"to":"worker","message":"go"}
+EnterWorktree|deny|delegation-shaped on "worktree"|{"name":"x"}
+CronCreate|deny|delegation-shaped on "cron"|{"cron":"*/5 * * * *","prompt":"check"}
+Monitor|deny|delegation-shaped on "monitor"|{"command":"tail -f log"}
 ROWS
   pass "the tracked registration classifies real Claude Code payloads exactly as the guard contract says"
 }
@@ -357,6 +452,8 @@ test_guard_allows_ordinary_and_observe_only_tools
 test_guard_allows_session_local_todo_tools
 test_plan_only_exclusion_is_exact_name
 test_guard_never_classifies_mcp_tools
+test_guard_allows_retired_claude_tool_names
+test_guard_denies_skills_that_fork_a_subagent
 test_deny_message_names_the_real_dispatch_paths
 test_escape_hatch_allows_deliberate_use
 test_task_worktree_and_non_firstmate_repo_are_inert
