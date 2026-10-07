@@ -294,15 +294,34 @@ test_guard_trims_the_skill_name_like_claude_code() {
 
 test_guard_denies_built_in_skills_that_fork() {
   local name
-  for name in code-review review /code-review Code-Review ' review' claude-test-execute claude-test-draft \
+  for name in code-review review /code-review ' review' claude-test-execute claude-test-draft \
     claude-test:execute claude-test:draft cc-plugin-claude-test:claude-test-execute cc-plugin-claude-test:claude-test-draft; do
     expect_skill deny "$name" "is a Claude Code built-in that forks a subagent"
     [ ! -s "$OUT" ] || fail "built-in skill $name deny wrote stdout: $(cat "$OUT")"
   done
-  for name in update-config init simplify plug:review code-reviewer; do
+  # Claude Code matches a built-in name or alias in exact case only.
+  for name in update-config init simplify plug:review code-reviewer Code-Review Review; do
     expect_skill allow "$name" "is not a forking built-in"
   done
   pass "the built-in skills Claude Code forks are denied by name and other built-ins stay allowed"
+}
+
+# Claude Code's lookup takes a skill whose exact-case name matches before a
+# built-in, so a file skill named review or code-review replaces the built-in.
+test_file_skill_named_like_a_built_in_is_judged_by_its_frontmatter() {
+  local skills="$PRIMARY/.claude/skills"
+  write_skill "$skills/review/SKILL.md" 'name: review' 'context: inline'
+  write_skill "$CLAUDE_CFG/skills/code-review/SKILL.md" 'name: code-review'
+  expect_skill allow review "is a project skill that runs inline in place of the built-in"
+  expect_skill allow code-review "is a user skill that runs inline in place of the built-in"
+  write_skill "$skills/review/SKILL.md" 'name: review' 'context: fork'
+  expect_skill deny review "is a project skill that forks"
+  rm -rf "$skills/review" "$CLAUDE_CFG/skills/code-review"
+  write_skill "$skills/Review/SKILL.md" 'name: Review' 'context: inline'
+  expect_skill deny review "names the built-in alias, because the skill Review differs in case"
+  rm -rf "$skills/Review"
+  expect_skill deny review "has no file skill, so the forking built-in runs"
+  pass "a file skill named like a forking built-in is judged by its own frontmatter, matched in exact case"
 }
 
 # An inline Skill call must not pay for the primary-scope check, whose two git
@@ -555,6 +574,7 @@ test_guard_denies_skills_that_fork_a_subagent
 test_guard_reads_skill_frontmatter_the_way_claude_code_parses_it
 test_guard_trims_the_skill_name_like_claude_code
 test_guard_denies_built_in_skills_that_fork
+test_file_skill_named_like_a_built_in_is_judged_by_its_frontmatter
 test_inline_skill_call_starts_no_git
 test_deny_message_names_the_real_dispatch_paths
 test_escape_hatch_allows_deliberate_use
