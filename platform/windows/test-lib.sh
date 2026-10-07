@@ -10,3 +10,7 @@ fm_test_lock_staleness_provable() {
   printf 'skip: %s: no git lock is provably stale on Windows\n' "$1"
   return 1
 }
+
+# Git for Windows keeps git in /mingw64/bin, not /usr/bin, so a fixture's
+# minimal PATH needs that directory to reach git at all.
+FM_TEST_BASE_PATH=${FM_TEST_BASE_PATH:-/mingw64/bin:/usr/bin:/bin:/usr/sbin:/sbin}
