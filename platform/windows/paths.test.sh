@@ -95,4 +95,46 @@ expect "a script reads FM_HOME spelled through the drive as the /tmp spelling a 
   "[$T/home]" \
   "$(. platform/windows/env.sh; FM_HOME=$DRIVE_T/home bash -c 'printf "[%s]" "$FM_HOME"')"
 
+# git.exe names a work tree in drive spelling, C:/..., whichever spelling the
+# caller used. Builds <home>/projects/notes as a clone one commit behind origin.
+fleet_home() {  # <home>
+  local h=$1
+  mkdir -p "$h/projects" "$h/data"
+  git init -q -b main "$h/work"
+  git -C "$h/work" -c user.email=t@x.invalid -c user.name=t commit -q --allow-empty -m C0
+  git clone -q --bare "$h/work" "$h/notes.git"
+  git clone -q "$h/notes.git" "$h/projects/notes"
+  git -C "$h/work" -c user.email=t@x.invalid -c user.name=t commit -q --allow-empty -m C1
+  git -C "$h/work" push -q "$h/notes.git" main
+  printf -- '- notes [direct-PR] - notes\n' > "$h/data/projects.md"
+}
+fleet_sync() {  # <home>
+  (. platform/windows/env.sh; FM_HOME=$1 FM_ROOT_OVERRIDE=$ROOT bash bin/fm-fleet-sync.sh 2>/dev/null
+    printf '[%s]' "$(git -C "$1/projects/notes" log -1 --format=%s)")
+}
+fleet_home "$T/fleet"
+expect "fleet-sync fast-forwards a clone under /tmp" \
+  "[C1]" \
+  "$(fleet_sync "$T/fleet")"
+fleet_home "$T/fleet-drive"
+expect "fleet-sync fast-forwards a clone in a home spelled through the drive" \
+  "[C1]" \
+  "$(fleet_sync "$DRIVE_T/fleet-drive")"
+C_T=$(mktemp -d "$(cygpath -u -- "$LOCALAPPDATA")/fm-win-paths.XXXXXX")
+trap 'rm -rf "$T" "$C_T"' EXIT
+fleet_home "$C_T/fleet"
+expect "fleet-sync fast-forwards a clone in a home outside every mount, as a live home is" \
+  "[C1]" \
+  "$(fleet_sync "$C_T/fleet")"
+
+mkdir -p "$T/primary-config" "$T/secondmate/config"
+printf 'claude\n' > "$T/primary-config/crew-harness"
+git init -q "$T/secondmate"
+printf '/config/\n' > "$T/secondmate/.gitignore"
+expect "a secondmate home inherits config into its gitignored config dir" \
+  "[claude]" \
+  "$(. platform/windows/env.sh; FM_INHERITABLE_CONFIG=crew-harness bash -c '. bin/fm-config-inherit-lib.sh
+    propagate_inheritable_config "$1/primary-config" "$1/secondmate/config"
+    printf "[%s]" "$(cat "$1/secondmate/config/crew-harness" 2>/dev/null)"' _ "$T" 2>&1)"
+
 [ "$fails" -eq 0 ]
