@@ -43,8 +43,15 @@ function parseArguments(argv) {
   return result;
 }
 
+// NTFS gives a long name an 8.3 alias, FM-WAT~1.SH or past four collisions
+// FM667F~1.SH, and Git Bash runs the script through it. Creation order decides
+// which protected script an alias names, so an alias stays unclassifiable.
+const PROTECTED_SHORT_NAME = String.raw`fm(?:-wat|[0-9a-f]{4})~\d+\.sh`;
+const PROTECTED_ALIAS = new RegExp(`^${PROTECTED_SHORT_NAME}$`, "i");
+const PROTECTED_MENTION = new RegExp(String.raw`(?:^|[/\\\s'"\`(])(?:fm-watch(?:-(?:arm|checkpoint))?\.sh|${PROTECTED_SHORT_NAME})\b`, "i");
+
 function rawMentionsProtected(command) {
-  return /(?:^|[/\\\s'"`(])fm-watch(?:-(?:arm|checkpoint))?\.sh\b/i.test(normalizeLineContinuations(command));
+  return PROTECTED_MENTION.test(normalizeLineContinuations(command));
 }
 
 function rawMentionsBroadKill(command) {
@@ -399,11 +406,14 @@ export class Lexer {
       }
       if (char === "\\") {
         if (this.index + 1 >= this.source.length) break;
-        if (this.source[this.index + 1] === "\n") {
+        const next = this.source[this.index + 1];
+        if (next === "\n") {
           this.index += 2;
           continue;
         }
-        word.value += this.source[this.index + 1];
+        // Inside double quotes bash drops a backslash only before $, `, " or \.
+        if (!'$`"\\'.includes(next)) word.value += "\\";
+        word.value += next;
         this.index += 2;
         continue;
       }
@@ -603,8 +613,9 @@ const PROTECTED_SCRIPTS = [
 
 // Git Bash runs C:\x, C:/x and /c/x as one file, and Git for Windows hands node
 // a /c/... argument as C:/..., so every path is compared in the /c/x spelling.
+// A .. stops at the root of C:/, while /c/.. climbs to the MSYS root.
 function shellSpelling(value) {
-  return value.replaceAll("\\", "/").replace(/^([A-Za-z]):\//, (_, drive) => `/${drive.toLowerCase()}/`);
+  return value.replaceAll("\\", "/").replace(/^([A-Za-z]):(\/.*)$/s, (_, drive, rest) => `/${drive.toLowerCase()}${path.normalize(rest)}`);
 }
 
 // NTFS is case-insensitive, so Git Bash runs BIN/FM-WATCH-ARM.SH as the arm.
@@ -616,9 +627,11 @@ function protectedIdentity(value, root) {
   return "";
 }
 
-function hasUnclassifiableProtectedExpansion(word, root) {
-  if (!word?.unquotedExpansion || protectedIdentity(word.value, root)) return false;
-  return /(?:^|\/)fm-watch/i.test(shellSpelling(word.value));
+function isUnclassifiableProtectedWord(word, root) {
+  if (!word || protectedIdentity(word.value, root)) return false;
+  const spelled = shellSpelling(word.value);
+  if (PROTECTED_ALIAS.test(basename(spelled))) return true;
+  return word.unquotedExpansion && /(?:^|\/)fm-watch/i.test(spelled);
 }
 
 function shellInvocation(position) {
@@ -816,7 +829,7 @@ function analyzeProgram(command, context, depth = 0) {
     for (const script of [shellScript, sourceScript]) {
       if (!script) continue;
       nodeNestedProtected ||= Boolean(protectedIdentity(script.value, context.root)) || wordReferencesAny(script, nodeContext.protectedVariables);
-      unclassifiableProtected ||= hasUnclassifiableProtectedExpansion(script, context.root);
+      unclassifiableProtected ||= isUnclassifiableProtectedWord(script, context.root);
     }
     if (shellPayload && (!shellPayload.literal || shellPayload.subs.length > 0)) {
       if (wordReferencesAny(shellPayload, nodeContext.protectedVariables)) nodeNestedProtected = true;
@@ -838,7 +851,7 @@ function analyzeProgram(command, context, depth = 0) {
 
     const executable = position.command?.value || "";
     const protectedKind = protectedIdentity(executable, context.root);
-    if (hasUnclassifiableProtectedExpansion(position.command, context.root)) unclassifiableProtected = true;
+    if (isUnclassifiableProtectedWord(position.command, context.root)) unclassifiableProtected = true;
     const commandName = basename(executable);
     const args = position.words.slice(position.index + 1);
     if (commandName === "pkill" && args.some((word) => /fm-watch/.test(word.value) || wordReferencesAny(word, nodeContext.watcherPatterns))) broadKill = true;
