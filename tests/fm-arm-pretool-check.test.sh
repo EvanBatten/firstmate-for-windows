@@ -134,6 +134,18 @@ matrix_case D65 deny "bash -s -- -c harmless <<< 'bin/fm-watch.sh'"
 matrix_case D66 deny 'BIN/FM-WATCH-ARM.SH &'
 matrix_case D67 deny "'bin\\fm-watch-arm.sh' &"
 matrix_case D68 deny "'C:\\fm\\home\\bin\\fm-watch-arm.sh' &"
+matrix_case D69 deny '"bin\fm-watch-arm.sh" &'
+matrix_case D70 deny '"C:\fm\home\BIN\FM-WATCH-ARM.SH" &'
+matrix_case D71 deny '"bin\fm-watch.sh"'
+matrix_case D72 deny 'bin/FM-WAT~1.SH &'
+matrix_case D73 deny 'bash bin/fm-wat~2.sh &'
+matrix_case D74 deny "'bin\\FM667F~1.SH' | cat"
+matrix_case D75 deny 'if true; then bin/FM-WAT~1.SH & fi'
+matrix_case R22 allow 'echo "bin\fm-watch-arm.sh &"'
+matrix_case R23 allow '"bin\fm-watch-ar\m.sh" &'
+matrix_case R24 allow '"bin\$x/fm-watch-arm.sh" &'
+matrix_case R25 allow 'git diff HEAD~1 -- bin/fm-watch-arm.sh &'
+matrix_case R26 allow 'cat bin/FM-WAT~1.SH'
 
 matrix_case E01 allow "bin/fm-watch-checkpoint.sh --seconds '180;still-one-arg'"
 matrix_case E02 allow "bin/fm-watch-checkpoint.sh --label 'fm-watch-arm.sh; literal argument'"
@@ -316,6 +328,10 @@ test_drive_spelled_home() {
 allow|/c/fm/home/config/x-mode.env
 deny|/d/fm/home/config/x-mode.env
 deny|/c/fm/other/config/x-mode.env
+allow|/c/fm/../../c/fm/home/config/x-mode.env
+allow|C:/fm/../fm/home/config/x-mode.env
+deny|C:/fm/../../c/fm/home/config/x-mode.env
+deny|C:\..\c\fm\home\config\x-mode.env
 ROWS
   pass "a drive-spelled home blesses its own x-mode file in shell spelling only"
 }
