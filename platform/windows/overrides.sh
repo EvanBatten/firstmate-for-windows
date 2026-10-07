@@ -21,6 +21,16 @@ if declare -F fm_pr_private_file_valid >/dev/null; then
   }
 fi
 
+# lsof cannot see a native git.exe's open files or working directory, so its
+# empty answer proves nothing here, and no cheap Windows query sees a cwd, so
+# every git lock counts as held.
+if declare -F fm_lock_has_live_holder >/dev/null; then
+  fm_lock_has_live_holder() {
+    fm_lock_log "no Windows-aware liveness check for git lock $1: lsof cannot see a native git's open files or working directory, so it is treated as held; remove it by hand once no git is running in ${2:-its repository}"
+    return 0
+  }
+fi
+
 # A test fixture that puts its own fake `ps` first on PATH keeps the upstream
 # bodies, which read that fake as they do on Linux. MSYS's own ps is not a
 # fixture: Git's bin/bash.exe, which Claude runs hooks through, puts /usr/bin

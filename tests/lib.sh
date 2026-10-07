@@ -861,4 +861,13 @@ fm_tracked_pretool_matches() {  # <script> <tool>
   [ -n "$matcher" ] || return 125
   node -e 'process.exit(new RegExp(process.argv[1]).test(process.argv[2]) ? 0 : 1)' "$matcher" "$2"
 }
+
+# fm_test_lock_staleness_provable <label>: a case whose premise is a provably
+# stale git lock calls this first and returns when it fails. A platform overlay
+# whose lsof cannot see every holder never removes a git lock, so the premise
+# cannot hold there and the case prints one skip line instead.
+fm_test_lock_staleness_provable() {
+  return 0
+}
+
 [ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "${FM_PLATFORM_OVERLAY%/*}/test-lib.sh"'
