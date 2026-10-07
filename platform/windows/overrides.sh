@@ -172,13 +172,19 @@ if declare -F pids_with_cwd_under >/dev/null; then
   # through its MSYS pid. A native process started by another native program
   # has no MSYS pid and stays unseen.
   lsof() {
-    local proc cwd self=0
+    local rec pid cwd self=0
     if type -P lsof >/dev/null; then command lsof "$@"; return $?; fi
     [ "$*" = "-a -d cwd -Fpn" ] || { echo "lsof: only -a -d cwd -Fpn is answered on Windows" >&2; return 1; }
-    while IFS=$'\t' read -r proc cwd; do
-      [ "${proc#/proc/}" != "$$" ] || self=1
-      printf 'p%s\nfcwd\nn%s\n' "${proc#/proc/}" "$cwd"
-    done < <(find /proc -mindepth 2 -maxdepth 2 -name cwd -printf '%h\t%l\n' 2>/dev/null)
+    # A directory name can hold a newline or a tab, so records end in NUL and
+    # the name is escaped the way lsof -F escapes it.
+    while IFS= read -r -d '' rec; do
+      pid=${rec%%$'\t'*} cwd=${rec#*$'\t'}
+      pid=${pid#/proc/}
+      case $pid in '' | *[!0-9]*) continue ;; esac
+      [ "$pid" != "$$" ] || self=1
+      cwd=${cwd//\\/\\\\} cwd=${cwd//$'\n'/\\n} cwd=${cwd//$'\t'/\\t}
+      printf 'p%s\nfcwd\nn%s\n' "$pid" "$cwd"
+    done < <(find /proc -mindepth 2 -maxdepth 2 -name cwd -printf '%h\t%l\0' 2>/dev/null)
     # An unreadable /proc scans empty, which must not read as no process left.
     [ "$self" = 1 ]
   }
