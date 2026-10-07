@@ -460,6 +460,11 @@ A `.*` PreToolUse hook and a `SubagentStart` hook logged every payload.
 | `claude mcp serve` loaded as MCP server `cc` | It offered 32 `mcp__cc__*` tools, `mcp__cc__Agent` started an agent, and `mcp__cc__Workflow` launched a background workflow. |
 | Same, with local `{"permissions":{"deny":["mcp__cc"]}}` | It offered 0 `mcp__cc__*` tools. |
 | `ToolSearch` for `select:TeamCreate,TeamDelete,SuggestBackgroundPR,AutofixPr`, with and without `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` | `No matching deferred tools found.` |
+| `Skill` naming `code-review`, guard before the built-in list | `SubagentStart` fired for `general-purpose`, and the subagent ran `git diff` and read files. |
+| `Skill` naming `code-review` or `review`, guard after the built-in list | Each call was denied, and no subagent started. |
+| `Skill` naming `" vplain"` with a leading space, a forking skill, before and after trimming | Before, it forked. After, the call was denied as skill `"vplain"`. |
+| `Skill` naming a forking skill written with `context: >-`, `context: \|-`, `"context": fork`, `context : fork`, `context: !!str fork`, a byte-order mark, or an opening `--- `, before and after the frontmatter rule | Before, each one forked. After, each call was denied, and no subagent started. |
+| An inline skill in the same home after all of these changes | It ran inline, and its `Bash` call carried no `agent_id`. |
 
 ## Automated validation
 
