@@ -1,0 +1,66 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@font-face{font-family:JBM;src:url(node_modules/jetbrains-mono/fonts/webfonts/JetBrainsMono-Regular.woff2)}
+@font-face{font-family:JBM;font-weight:700;src:url(node_modules/jetbrains-mono/fonts/webfonts/JetBrainsMono-Bold.woff2)}
+@font-face{font-family:Inter;font-weight:500;src:url(node_modules/@fontsource/inter/files/inter-latin-500-normal.woff2)}
+@font-face{font-family:Inter;font-weight:600;src:url(node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2)}
+@font-face{font-family:Fraunces;font-weight:900;src:url(node_modules/@fontsource/fraunces/files/fraunces-latin-900-normal.woff2)}
+:root{--term-bg:#0c1220;--term-fg:#d8dee8;--cream:#f6e7c8;--rust:#d2602f;--navy:#0a1428}
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:var(--navy)}
+#bg{position:absolute;inset:0;background:radial-gradient(1300px 800px at 28% 18%,#1d3157 0,#0f1d38 50%,#081022 100%)}
+#world{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
+.win{position:absolute;border-radius:14px;background:var(--term-bg);box-shadow:0 34px 90px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.09);overflow:hidden;display:flex;flex-direction:column;transition:none}
+.bar{height:34px;flex:0 0 34px;display:flex;align-items:center;gap:8px;padding:0 14px;background:#151e30;color:#a9b3c2;font:600 15px/1 Inter,sans-serif}
+.dot{width:12px;height:12px;border-radius:50%}
+.bar .t{margin-left:10px}
+.bar .role{color:var(--cream)}
+.term{flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:8px 12px}
+.term pre{margin:0;font-family:JBM,monospace;line-height:1.22;color:var(--term-fg);white-space:pre}
+#cap{position:absolute;left:50%;bottom:58px;padding:20px 40px;border-radius:999px;background:rgba(8,14,30,.86);box-shadow:0 0 0 1px rgba(246,231,200,.22),0 24px 60px rgba(0,0,0,.55);color:#fff;font:600 46px/1.1 Inter,sans-serif;white-space:nowrap;letter-spacing:-.01em}
+#cap b{color:var(--cream);font-weight:600}
+#chip{position:absolute;right:44px;top:34px;display:flex;gap:10px;align-items:center;padding:10px 18px;border-radius:999px;background:rgba(8,14,30,.78);box-shadow:0 0 0 1px rgba(255,255,255,.1);color:#c9d3e3;font:600 22px/1 Inter,sans-serif;font-variant-numeric:tabular-nums}
+#chip .sp{color:var(--rust)}
+#shade{position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,#081022 0,rgba(8,16,34,.92) 64px,rgba(8,16,34,0) 104px,rgba(8,16,34,0) calc(100% - 170px),rgba(8,16,34,.9) calc(100% - 120px),#081022 100%)}
+#mark{position:absolute;left:44px;top:30px;color:var(--cream);font:900 34px/1 Fraunces,serif;letter-spacing:-.01em}
+#card{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;background:radial-gradient(1100px 700px at 50% 40%,#1d3157 0,#0f1d38 55%,#081022 100%)}
+#card .word{font:900 190px/1 Fraunces,serif;color:var(--cream);letter-spacing:-.02em;text-shadow:0 8px 0 var(--rust),0 30px 60px rgba(0,0,0,.5)}
+#card .tag{font:500 50px/1.2 Inter,sans-serif;color:#dfe6f2}
+#card .tag b{color:var(--cream);font-weight:600}
+</style></head><body>
+<div id="bg"></div><div id="world"></div><div id="shade"></div><div id="mark">firstmate</div><div id="chip"></div><div id="cap"></div>
+<div id="card"><div class="word">firstmate</div><div class="tag"></div></div>
+<script>
+const W = {};
+window.setup = (panes, layout) => {
+  window.panes = panes;
+  const world = document.getElementById('world');
+  for (const [id, r] of Object.entries(layout)) {
+    const el = document.createElement('div'); el.className = 'win';
+    Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+    el.innerHTML = `<div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="t"><span class="role"></span></span></div><div class="term"><pre style="font-size:${r.font}px"></pre></div>`;
+    el.querySelector('.role').textContent = r.title;
+    world.append(el); W[id] = { el, pre: el.querySelector('pre'), shown: -1 };
+  }
+};
+window.seek = (s) => {
+  for (const [id, w] of Object.entries(W)) {
+    const fr = panes[id];
+    let lo = 0; let hi = fr.length - 1; let i = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (fr[m].rel <= s.srcMs) { i = m; lo = m + 1; } else hi = m - 1; }
+    if (i !== w.shown) { w.pre.innerHTML = i < 0 ? '' : fr[i].lines.join('\n'); w.shown = i; }
+    w.el.style.opacity = s.alpha[id] ?? 1;
+    w.el.style.filter = s.dim[id] ? `brightness(${1 - 0.5 * s.dim[id]})` : 'none';
+  }
+  const c = s.cam; const a = s.safe; const k = Math.min(a.w / c.w, a.h / c.h);
+  document.getElementById('world').style.transform = `translate(${a.x + (a.w - c.w * k) / 2 - c.x * k}px,${a.y + (a.h - c.h * k) / 2 - c.y * k}px) scale(${k})`;
+  const cap = document.getElementById('cap');
+  cap.innerHTML = s.caption; cap.style.opacity = s.capAlpha; cap.style.transform = `translateX(-50%) translateY(${(1 - s.capAlpha) * 14}px)`;
+  const chip = document.getElementById('chip');
+  chip.innerHTML = s.chip; chip.style.opacity = s.chip ? s.stageAlpha : 0;
+  document.getElementById('mark').style.opacity = s.stageAlpha;
+  document.getElementById('shade').style.opacity = s.stageAlpha;
+  const card = document.getElementById('card');
+  card.style.opacity = s.cardAlpha; card.querySelector('.tag').innerHTML = s.cardTag;
+  card.querySelector('.word').style.transform = `scale(${s.cardScale})`;
+};
+</script></body></html>

@@ -1,0 +1,13 @@
+{
+  "name": "firstmate-demo",
+  "private": true,
+  "description": "Renders the README demo video from a recorded firstmate session.",
+  "type": "module",
+  "license": "MIT",
+  "devDependencies": {
+    "@fontsource/fraunces": "5.3.0",
+    "@fontsource/inter": "5.3.0",
+    "jetbrains-mono": "1.0.6",
+    "playwright-core": "1.64.0"
+  }
+}
