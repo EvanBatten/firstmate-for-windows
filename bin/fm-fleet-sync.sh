@@ -146,16 +146,10 @@ is_packed_refs_lock_error() {
 
 # Absolute path to $PROJ's packed-refs.lock, or empty when it cannot be resolved.
 packed_refs_lock_path() {
-  local lock abs
-  lock=$(git -C "$PROJ" rev-parse --git-path packed-refs.lock 2>/dev/null) || return 1
+  local lock
+  lock=$(git -C "$PROJ" rev-parse --path-format=absolute --git-path packed-refs.lock 2>/dev/null) || return 1
   [ -n "$lock" ] || return 1
-  case "$lock" in
-    /*) printf '%s\n' "$lock" ;;
-    *)
-      abs=$(cd "$PROJ" && pwd -P) || return 1
-      printf '%s/%s\n' "$abs" "$lock"
-      ;;
-  esac
+  printf '%s\n' "$lock"
 }
 
 # Run `git -C "$PROJ" fetch origin --prune --quiet`, tolerating an orphaned

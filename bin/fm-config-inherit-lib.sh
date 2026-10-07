@@ -179,7 +179,7 @@ copy_inheritable_file() {
 }
 
 destination_allows_inherited_item() {
-  local dest_config=$1 item=$2 dest_parent dest_name dest_parent_abs top dest_path rel_path
+  local dest_config=$1 item=$2 dest_parent dest_name dest_parent_abs
   dest_parent=${dest_config%/*}
   dest_name=${dest_config##*/}
   [ -n "$dest_parent" ] && [ "$dest_parent" != "$dest_config" ] || return 1
@@ -187,15 +187,7 @@ destination_allows_inherited_item() {
   if ! git -C "$dest_parent_abs" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     return 0
   fi
-  top=$(git -C "$dest_parent_abs" rev-parse --show-toplevel 2>/dev/null) || return 1
-  # Git for Windows names the root C:/..., so spell it as dest_parent_abs is spelled.
-  top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
-  dest_path="$dest_parent_abs/$dest_name/$item"
-  case "$dest_path" in
-    "$top"/*) rel_path=${dest_path#"$top"/} ;;
-    *) return 1 ;;
-  esac
-  git -C "$top" check-ignore -q -- "$rel_path" 2>/dev/null
+  git -C "$dest_parent_abs" check-ignore -q -- "$dest_name/$item" 2>/dev/null
 }
 
 # propagate_inheritable_config <src-config-dir> <dest-config-dir>
