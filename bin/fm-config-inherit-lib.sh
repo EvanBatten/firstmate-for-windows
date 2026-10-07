@@ -188,6 +188,8 @@ destination_allows_inherited_item() {
     return 0
   fi
   top=$(git -C "$dest_parent_abs" rev-parse --show-toplevel 2>/dev/null) || return 1
+  # Git for Windows names the root C:/..., so spell it as dest_parent_abs is spelled.
+  top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
   dest_path="$dest_parent_abs/$dest_name/$item"
   case "$dest_path" in
     "$top"/*) rel_path=${dest_path#"$top"/} ;;
