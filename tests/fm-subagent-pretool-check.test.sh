@@ -234,6 +234,100 @@ test_guard_denies_skills_that_fork_a_subagent() {
   pass "a skill whose frontmatter forks a subagent is denied wherever Claude Code loads it from, and inline skills stay allowed"
 }
 
+expect_skill() {  # <deny|allow> <skill-as-the-Skill-tool-receives-it> <why>
+  local want=$1 name=$2 why=$3 rc=0
+  run_skill "$name" || rc=$?
+  if [ "$want" = deny ]; then
+    [ "$rc" -eq 2 ] || fail "skill '$name' $why and must deny, got exit $rc"
+  else
+    [ "$rc" -eq 0 ] || fail "skill '$name' $why and must allow, got exit $rc: $(cat "$ERR")"
+  fi
+}
+
+# Claude Code 2.1.292 strips one BOM, opens frontmatter on a first line of ---
+# and whitespace, closes it at the first --- anywhere, parses it as YAML, and
+# forks only when the parsed context value is exactly the string "fork".
+test_guard_reads_skill_frontmatter_the_way_claude_code_parses_it() {
+  local dir="$PRIMARY/.claude/skills"
+  write_skill "$dir/fm-folded/SKILL.md" 'context: >-' '  fork'
+  write_skill "$dir/fm-literal/SKILL.md" 'context: |-' '  fork'
+  write_skill "$dir/fm-qkey/SKILL.md" '"context": fork'
+  write_skill "$dir/fm-sqkey/SKILL.md" "'context': fork"
+  write_skill "$dir/fm-spcolon/SKILL.md" 'context : fork'
+  write_skill "$dir/fm-tag/SKILL.md" 'context: !!str fork'
+  write_skill "$dir/fm-escaped/SKILL.md" 'context: "f\x6frk"'
+  write_skill "$dir/fm-nextline/SKILL.md" 'context:' '  fork'
+  write_skill "$dir/fm-twice/SKILL.md" 'context: inline' 'context: fork'
+  write_skill "$dir/fm-midclose/SKILL.md" 'context: fork---'
+  mkdir -p "$dir/fm-bom" "$dir/fm-openws"
+  printf '\xef\xbb\xbf---\ncontext: fork\n---\nbody\n' > "$dir/fm-bom/SKILL.md"
+  printf -- '--- \t\ncontext: fork\n---\nbody\n' > "$dir/fm-openws/SKILL.md"
+  for name in fm-folded fm-literal fm-qkey fm-sqkey fm-spcolon fm-tag fm-escaped fm-nextline fm-twice fm-midclose fm-bom fm-openws; do
+    expect_skill deny "$name" "sets a context Claude Code can parse as fork"
+  done
+
+  write_skill "$dir/fm-dq-inline/SKILL.md" 'context: "inline"'
+  write_skill "$dir/fm-sq-inline/SKILL.md" "context: 'inline' # stays here"
+  write_skill "$dir/fm-plain-other/SKILL.md" 'context: Fork'
+  write_skill "$dir/fm-hash/SKILL.md" 'context: fork#not-a-comment'
+  write_skill "$dir/fm-earlyclose/SKILL.md" 'description: a --- b' 'context: fork'
+  mkdir -p "$dir/fm-leadblank" "$dir/fm-dashes"
+  printf '\n---\ncontext: fork\n---\nbody\n' > "$dir/fm-leadblank/SKILL.md"
+  printf -- '----\ncontext: fork\n---\nbody\n' > "$dir/fm-dashes/SKILL.md"
+  for name in fm-dq-inline fm-sq-inline fm-plain-other fm-hash fm-earlyclose fm-leadblank fm-dashes; do
+    expect_skill allow "$name" "has no context Claude Code parses as fork"
+  done
+  pass "the guard denies every frontmatter form Claude Code parses as fork and allows the plain inline values"
+}
+
+test_guard_trims_the_skill_name_like_claude_code() {
+  local name
+  write_skill "$PRIMARY/.claude/skills/forky/SKILL.md" 'name: forky' 'context: fork'
+  for name in ' forky' 'forky ' '  /forky' '\tforky'; do
+    expect_skill deny "$name" "trims to the forking skill forky"
+    jq -e '.systemMessage | contains("(blocked tool: Skill, skill \"forky\" runs in a forked subagent context)")' "$ERR" >/dev/null 2>&1 \
+      || fail "skill '$name' deny must name the trimmed skill: $(cat "$ERR")"
+  done
+  expect_skill allow '/ forky' "keeps the space after the slash, so it names no skill"
+  pass "the guard trims the skill name before stripping one slash, as Claude Code does"
+}
+
+test_guard_denies_built_in_skills_that_fork() {
+  local name
+  for name in code-review review /code-review Code-Review ' review' claude-test-execute claude-test-draft \
+    claude-test:execute claude-test:draft cc-plugin-claude-test:claude-test-execute cc-plugin-claude-test:claude-test-draft; do
+    expect_skill deny "$name" "is a Claude Code built-in that forks a subagent"
+    [ ! -s "$OUT" ] || fail "built-in skill $name deny wrote stdout: $(cat "$OUT")"
+  done
+  for name in update-config init simplify plug:review code-reviewer; do
+    expect_skill allow "$name" "is not a forking built-in"
+  done
+  pass "the built-in skills Claude Code forks are denied by name and other built-ins stay allowed"
+}
+
+# An inline Skill call must not pay for the primary-scope check, whose two git
+# processes dominated the hook's cost; the scope only matters once a call would
+# be denied.
+test_inline_skill_call_starts_no_git() {
+  local fakebin="$TMP_ROOT/gitlog-bin" log="$TMP_ROOT/git.log" real_git rc
+  real_git=$(command -v git)
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\necho "$*" >> %q\nexec %q "$@"\n' "$log" "$real_git" > "$fakebin/git"
+  chmod +x "$fakebin/git"
+  write_skill "$PRIMARY/.claude/skills/inline/SKILL.md" 'name: inline' 'description: probe'
+  write_skill "$PRIMARY/.claude/skills/forky/SKILL.md" 'name: forky' 'context: fork'
+  : > "$log"
+  rc=0
+  run_skill inline PATH="$fakebin:$PATH" || rc=$?
+  [ "$rc" -eq 0 ] || fail "inline skill must allow, got exit $rc"
+  [ ! -s "$log" ] || fail "an inline Skill call must not start git, it ran: $(cat "$log")"
+  rc=0
+  run_skill forky PATH="$fakebin:$PATH" || rc=$?
+  [ "$rc" -eq 2 ] || fail "forking skill must deny, got exit $rc"
+  [ -s "$log" ] || fail "a forking Skill call must still confirm the primary scope through git"
+  pass "an inline Skill call decides before the primary-scope check and starts no git"
+}
+
 test_deny_message_names_the_real_dispatch_paths() {
   local actual
   # Firstmate ships no bin/fm-scout.sh, so a stray file of that name must not
@@ -351,6 +445,10 @@ test_missing_jq_stdin_transport_fails_open() {
   mkdir -p "$fakebin"
   ln -sf "$bash_bin" "$fakebin/bash"
   ln -sf "$cat_bin" "$fakebin/cat"
+  # Git Bash makes ln -s a copy, and a copied MSYS binary loads its DLLs from its own directory.
+  for dll in "${bash_bin%/*}"/msys-*.dll; do
+    [ ! -e "$dll" ] || ln -sf "$dll" "$fakebin/"
+  done
   : > "$OUT"; : > "$ERR"
   printf '%s' '{"tool_name":"Agent"}' \
     | env PATH="$fakebin" FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
@@ -454,6 +552,10 @@ test_plan_only_exclusion_is_exact_name
 test_guard_never_classifies_mcp_tools
 test_guard_allows_retired_claude_tool_names
 test_guard_denies_skills_that_fork_a_subagent
+test_guard_reads_skill_frontmatter_the_way_claude_code_parses_it
+test_guard_trims_the_skill_name_like_claude_code
+test_guard_denies_built_in_skills_that_fork
+test_inline_skill_call_starts_no_git
 test_deny_message_names_the_real_dispatch_paths
 test_escape_hatch_allows_deliberate_use
 test_task_worktree_and_non_firstmate_repo_are_inert
