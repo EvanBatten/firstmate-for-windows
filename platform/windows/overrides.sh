@@ -23,10 +23,20 @@ fi
 
 # lsof cannot see a native git.exe's open files or working directory, so its
 # empty answer proves nothing here, and no cheap Windows query sees a cwd, so
-# every git lock counts as held.
+# every git lock counts as held. The captain clears it by hand, often from
+# PowerShell, so the paths are spelled the Windows way.
 if declare -F fm_lock_has_live_holder >/dev/null; then
   fm_lock_has_live_holder() {
-    fm_lock_log "no Windows-aware liveness check for git lock $1: lsof cannot see a native git's open files or working directory, so it is treated as held; remove it by hand once no git is running in ${2:-its repository}"
+    local lock dir="its repository" retry
+    lock=$(cygpath -w -- "$1")
+    [ -z "${2:-}" ] || dir=$(cygpath -w -- "$2")
+    case ${FM_LOCK_LOG_PREFIX:-} in
+      teardown) retry="The next teardown of this task retries the cleanup." ;;
+      fleet-sync) retry="The next session start retries the sync." ;;
+      *) retry="Then run the command again." ;;
+    esac
+    FM_LOCK_HELD_REASON="kept git lock $lock because Windows cannot tell whether a git process still holds it. To clear it, close every git command, editor and terminal working in $dir, then delete $lock. $retry"
+    fm_lock_log "$FM_LOCK_HELD_REASON"
     return 0
   }
 fi

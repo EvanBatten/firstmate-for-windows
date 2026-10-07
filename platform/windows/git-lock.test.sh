@@ -40,6 +40,7 @@ remove_if_stale() {
     PATH=$T/blind:$PATH
     # shellcheck source=bin/fm-lock-lib.sh
     . bin/fm-lock-lib.sh
+    FM_LOCK_LOG_PREFIX=teardown
     if fm_lock_is_provably_stale "$1" "$2" 30; then
       rm -f "$1"
       echo removed
@@ -63,10 +64,15 @@ if [ -e "$LOCK" ] && kill -0 "$GIT_PID" 2>/dev/null; then
 else
   not_ok "an aged index.lock held by a live git survives an lsof that sees no holder (got: $out)"
 fi
-case $out in
-  *"no Windows-aware liveness check"*) ok "the refusal says why the lock was kept" ;;
-  *) not_ok "the refusal says why the lock was kept (got: $out)" ;;
-esac
+WIN_LOCK=$(cygpath -w "$LOCK")
+WIN_WT=$(cygpath -w "$T/wt")
+want="teardown: kept git lock $WIN_LOCK because Windows cannot tell whether a git process still holds it. To clear it, close every git command, editor and terminal working in $WIN_WT, then delete $WIN_LOCK. The next teardown of this task retries the cleanup.
+kept"
+if [ "$out" = "$want" ]; then
+  ok "the refusal names the lock and worktree in Windows spelling and says how to clear it"
+else
+  not_ok "the refusal names the lock and worktree in Windows spelling and says how to clear it (got: $out)"
+fi
 
 rm -f "$T/hold"
 wait "$GIT_PID" 2>/dev/null
@@ -79,6 +85,33 @@ if [ -e "$LOCK" ]; then
   ok "an aged index.lock with no holder is kept, because no holder cannot be proven"
 else
   not_ok "an aged index.lock with no holder is kept, because no holder cannot be proven (got: $out)"
+fi
+
+rm -f "$LOCK"
+
+# Session start relays only fleet-sync's stdout, so the skip line itself has to
+# say why the clone was not synced and how to clear the lock.
+H=$T/home
+mkdir -p "$H/projects"
+git init -q --bare -b main "$T/origin.git"
+git -C "$T/repo" push -q "$T/origin.git" main main:refs/heads/gone
+git clone -q "file://$(cygpath -m "$T/origin.git")" "$H/projects/proj"
+git -C "$H/projects/proj" pack-refs --all
+git -C "$T/origin.git" branch -q -D gone
+PACKED_LOCK=$H/projects/proj/.git/packed-refs.lock
+: > "$PACKED_LOCK"
+out=$(
+  # shellcheck source=platform/windows/env.sh
+  . platform/windows/env.sh
+  FM_HOME=$H FM_ROOT_OVERRIDE=$ROOT FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=0 \
+    bin/fm-fleet-sync.sh proj 2>/dev/null
+)
+WIN_PACKED_LOCK=$(cygpath -w "$PACKED_LOCK")
+want="proj: skipped: fetch failed: kept git lock $WIN_PACKED_LOCK because Windows cannot tell whether a git process still holds it. To clear it, close every git command, editor and terminal working in $(cygpath -w "$H/projects/proj"), then delete $WIN_PACKED_LOCK. The next session start retries the sync."
+if [ "$out" = "$want" ] && [ -e "$PACKED_LOCK" ]; then
+  ok "a fleet-sync skip on a held lock says how to clear it on the line session start relays"
+else
+  not_ok "a fleet-sync skip on a held lock says how to clear it on the line session start relays (got: $out)"
 fi
 
 [ "$fails" -eq 0 ]
