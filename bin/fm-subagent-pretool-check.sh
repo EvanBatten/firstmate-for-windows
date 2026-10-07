@@ -98,11 +98,7 @@ tool_effect() {
 # project directory or a commands subdirectory, so every file the name could
 # resolve to is read and any one that forks decides.
 skill_forks() {
-  local name=$1 leaf prefix config=${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude} file
-  case "$SKILL_LOWER" in
-    code-review|review|claude-test-execute|claude-test-draft|claude-test:execute|claude-test:draft|\
-    cc-plugin-claude-test:claude-test-execute|cc-plugin-claude-test:claude-test-draft) return 0 ;;
-  esac
+  local name=$1 leaf prefix config=${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude} file shadowed=0
   leaf=${name##*:}
   if [ "$leaf" = "$name" ]; then
     set -- "$FM_ROOT/.claude/skills/$leaf/SKILL.md" "$FM_ROOT/.claude/commands/$leaf.md" \
@@ -115,7 +111,26 @@ skill_forks() {
       "$config"/plugins/cache/*/"$prefix"/*/commands/"$leaf".md
   fi
   for file in "$@"; do
-    [ -f "$file" ] && frontmatter_forks "$file" && return 0
+    [ -f "$file" ] || continue
+    frontmatter_forks "$file" && return 0
+    name_case_matches "${file%/SKILL.md}" && shadowed=1
+  done
+  # Claude Code's lookup takes a skill whose name matches exactly, case
+  # included, before a built-in, so a file skill by that name replaces it.
+  [ "$shadowed" -eq 0 ] || return 1
+  case "$name" in
+    code-review|review|claude-test-execute|claude-test-draft|claude-test:execute|claude-test:draft|\
+    cc-plugin-claude-test:claude-test-execute|cc-plugin-claude-test:claude-test-draft) return 0 ;;
+  esac
+  return 1
+}
+
+# Whether a path's last component exists with exactly that case. A test of the
+# path alone cannot tell on a case-insensitive filesystem.
+name_case_matches() {  # <path>
+  local entry
+  for entry in "${1%/*}"/*; do
+    [ "${entry##*/}" != "${1##*/}" ] || return 0
   done
   return 1
 }
@@ -167,7 +182,6 @@ context_line_forks() {  # <line>
 
 TOOL=""
 SKILL=""
-SKILL_LOWER=""
 TOOL_SET=0
 CLAUDE_MODE=0
 
@@ -228,14 +242,11 @@ if [ "$TOOL_SET" -eq 0 ]; then
   command -v jq >/dev/null 2>&1 || exit 0
   # Claude Code trims the skill name, then strips one leading slash.
   FIELDS=$(printf '%s' "$PAYLOAD" | jq -r '(.tool_input.skill? // .toolInput.skill? // "" | tostring | gsub("^[\\s\\x{FEFF}]+|[\\s\\x{FEFF}]+$"; "")) as $skill
-    | [(.tool_name // .toolName // "" | tostring), $skill, ($skill | ascii_downcase)] | @tsv' 2>/dev/null) || exit 0
+    | [(.tool_name // .toolName // "" | tostring), $skill] | @tsv' 2>/dev/null) || exit 0
   FIELDS=${FIELDS%$'\r'}
   TOOL=${FIELDS%%$'\t'*}
   SKILL=${FIELDS#*$'\t'}
-  SKILL_LOWER=${SKILL#*$'\t'}
-  SKILL=${SKILL%%$'\t'*}
   SKILL=${SKILL#/}
-  SKILL_LOWER=${SKILL_LOWER#/}
 fi
 
 [ -n "$TOOL" ] || exit 0
