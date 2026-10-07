@@ -104,7 +104,7 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
   "wallMs": 0, "pass": true, "readyMs": 0, "operableMs": 0, "predicateMs": 0,
   "health": { "until": "home.clean && tabs.clean && wake.empty && state.settled", "ok": true, "reason": "holds", "restMs": 0, "ms": 0 },
   "fidelity": { "claudeConfig": "clean", "hooks": "repo", "captainMd": "untouched", "model": "opus" },
-  "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched" },
+  "fidelityAtClose": { "hooks": "repo", "captainMd": "untouched", "claudeConfig": "clean" },
   "steps": [ { "say": "...", "until": "...", "ms": 0, "ok": true, "reason": "...", "sayMs": 0 } ],
   "spawns": [ { "id": "greeter-cli-g1", "heldAt": "<iso>", "ms": 0 } ],
   "overhead": { "transport": "socket", "herdrCalls": 0, "spawns": 0, "herdrSpawns": 0, "gitSpawns": 0, "setupSpawns": 0, "cleanupSpawns": 0, "setupMs": 0, "operableMs": 0, "closeMs": 0 },
@@ -112,11 +112,13 @@ Exit codes: 0 every step held, 1 a step did not hold, 2 the trace was refused, 3
 ```
 
 The driver measures `fidelity` on the prepared home, before Herdr or Claude starts.
-`claudeConfig` is `clean` when the throwaway `CLAUDE_CONFIG_DIR` holds only what the driver wrote: the onboarding, trust and login keys in `.claude.json`, the theme and PATH in `settings.json`, and the inherited credentials file. Anything else reads `carries <entry>, <file>:<key>`.
+`claudeConfig` is `clean` when the throwaway `CLAUDE_CONFIG_DIR` holds only what the driver wrote: the onboarding, trust and login keys in `.claude.json`, the theme, PATH and `claudeMdExcludes` in `settings.json`, and the inherited credentials file. Anything else reads `carries <entry>, <file>:<key>`.
+Claude Code also loads `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` and `.claude/rules/` from every ancestor of a session's directory, so `claudeMdExcludes` lists those files for every ancestor of the scratch directory and of the user profile, and one that exists without its exclusion reads `reaches <path>`.
 `hooks` is `repo` when the home's `.claude/settings.json` is byte for byte the clone's committed one, else `modified`.
 `captainMd` is `untouched` when no `data/captain.md` exists, `written-after-say` when its mtime is at or after the first typed say, and `present` otherwise.
 Any other value fails the run with exit 3 before Claude launches, and `error` names the field.
-The driver measures `hooks` and `captainMd` again at close as `fidelityAtClose`, before it archives the home.
+The driver measures `hooks` and `captainMd` again at close as `fidelityAtClose`, before it archives the home, and adds `claudeConfig` read from the transcripts of every Claude session that used the throwaway config.
+There `claudeConfig` is `clean` when no session loaded an instruction file from outside its own directory or a skill from the host's `~/.claude/skills`; otherwise it reads `loaded <path>, skill <name>` and fails the run with exit 3, and it reads `unobserved` when a launched primary left no transcript.
 There `hooks` must still be `repo`, and `captainMd` may be `untouched` or `written-after-say`, because firstmate records captain preferences in that file itself. A `captain.md` that appeared before the captain said anything is `present`, and it fails the run with exit 3, as a changed hook does.
 `pass` is true only when the last `until` held.
 `readyMs` is the first launch plus the wait for an operable home (`state/.lock` or `state/.session-start-complete`), and `operableMs` reports that wait alone.

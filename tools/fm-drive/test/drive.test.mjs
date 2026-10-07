@@ -904,7 +904,7 @@ describe('fake-herdr end to end', () => {
         captainMdExists: false,
         configBesideHome: true,
         fidelity: { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched', model: 'opus' },
-        fidelityAtClose: { hooks: 'repo', captainMd: 'untouched' },
+        fidelityAtClose: { hooks: 'repo', captainMd: 'untouched', claudeConfig: 'clean' },
       },
       r.stderr,
     );
@@ -1015,7 +1015,7 @@ describe('fake-herdr end to end', () => {
     const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
     assert.deepEqual(
       { exit: r.status, pass: r.json?.pass, fidelityAtClose: r.json?.fidelityAtClose },
-      { exit: 0, pass: true, fidelityAtClose: { hooks: 'repo', captainMd: 'written-after-say' } },
+      { exit: 0, pass: true, fidelityAtClose: { hooks: 'repo', captainMd: 'written-after-say', claudeConfig: 'clean' } },
       r.stderr,
     );
   });

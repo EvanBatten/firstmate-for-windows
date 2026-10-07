@@ -11,7 +11,7 @@ import { record, HEALTH } from './lib/ledger.mjs';
 
 const T0 = Date.now();
 const CAPTAIN_PATH = { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched' };
-const CAPTAIN_PATH_AT_CLOSE = { hooks: ['repo'], captainMd: ['untouched', 'written-after-say'] };
+const CAPTAIN_PATH_AT_CLOSE = { hooks: ['repo'], captainMd: ['untouched', 'written-after-say'], claudeConfig: ['clean', 'not launched'] };
 const log = (line) => { if (process.env.FM_DRIVE_QUIET !== '1') process.stderr.write(`fm-drive: ${line}\n`); };
 
 function usage(code) {
@@ -258,7 +258,7 @@ async function run(trace, traceName) {
   } finally {
     if (recheckAtClose) {
       const { hooks, captainMd } = await session.fidelity();
-      result.fidelityAtClose = { hooks, captainMd };
+      result.fidelityAtClose = { hooks, captainMd, claudeConfig: session.loadedContext() };
       const changed = Object.entries(CAPTAIN_PATH_AT_CLOSE).filter(([field, allowed]) => !allowed.includes(result.fidelityAtClose[field]));
       if (changed.length) {
         const why = `the home left the captain path during the run: ${changed.map(([field]) => `fidelityAtClose.${field} is ${result.fidelityAtClose[field]}`).join(', ')}`;
