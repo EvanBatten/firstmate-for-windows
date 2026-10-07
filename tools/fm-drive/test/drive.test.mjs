@@ -904,7 +904,7 @@ describe('fake-herdr end to end', () => {
         captainMdExists: false,
         configBesideHome: true,
         fidelity: { claudeConfig: 'clean', hooks: 'repo', captainMd: 'untouched', model: 'opus' },
-        fidelityAtClose: { hooks: 'repo', captainMd: 'untouched' },
+        fidelityAtClose: { hooks: 'repo', captainMd: 'untouched', claudeConfig: 'clean' },
       },
       r.stderr,
     );
@@ -979,6 +979,25 @@ describe('fake-herdr end to end', () => {
     assert.ok(launchesOf(dir) >= 1);
   });
 
+  test('operator instructions or skills that reached the primary fail the run at close', () => {
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const operatorMd = join(env.HOME, '.claude', 'CLAUDE.md');
+    mkdirSync(dirname(operatorMd), { recursive: true });
+    writeFileSync(operatorMd, '# operator instructions\n');
+    for (const name of ['operator-skill', 'security-review']) {
+      mkdirSync(join(env.HOME, '.claude', 'skills', name), { recursive: true });
+      writeFileSync(join(env.HOME, '.claude', 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: The operator's own ${name} helper.\n---\n`);
+    }
+    env.FAKE_CLAUDE_LOADS = JSON.stringify([operatorMd]);
+    env.FAKE_CLAUDE_SKILLS = JSON.stringify(["- operator-skill: The operator's own operator-skill helper.", '- afk: Enter the away posture.', '- security-review']);
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-operator-context'))], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, atClose: r.json?.fidelityAtClose?.claudeConfig, named: /claudeConfig/.test(r.json?.error ?? '') },
+      { exit: 3, pass: false, atClose: `loaded ${operatorMd}, skill operator-skill`, named: true },
+      r.stderr,
+    );
+  });
+
   test('hooks rewritten during the run fail it at close', () => {
     const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
     const trace = { feature: 'e2e-hooks-late', steps: [{ say: 'rewrite the hooks for greeter', until: 'projects.registered:greeter', budgetSec: 10 }] };
@@ -996,7 +1015,7 @@ describe('fake-herdr end to end', () => {
     const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
     assert.deepEqual(
       { exit: r.status, pass: r.json?.pass, fidelityAtClose: r.json?.fidelityAtClose },
-      { exit: 0, pass: true, fidelityAtClose: { hooks: 'repo', captainMd: 'written-after-say' } },
+      { exit: 0, pass: true, fidelityAtClose: { hooks: 'repo', captainMd: 'written-after-say', claudeConfig: 'clean' } },
       r.stderr,
     );
   });
@@ -1628,6 +1647,26 @@ describe('grafted onboarding config and shell prompts', () => {
     writeFileSync(join(s.claudeConfigDir, 'settings.json'), JSON.stringify({ ...settings, hooks: { Stop: [] } }));
     const leaked = (await s.fidelity()).claudeConfig;
     assert.deepEqual({ clean, leaked }, { clean: 'clean', leaked: 'carries CLAUDE.md, settings.json:hooks' });
+  });
+
+  test('fidelity names a CLAUDE.md above the home that the throwaway config does not keep from Claude', async () => {
+    const userHome = tmp('user-home');
+    const operatorMd = join(userHome, '.claude', 'CLAUDE.md');
+    mkdirSync(dirname(operatorMd), { recursive: true });
+    writeFileSync(operatorMd, '# operator instructions\n');
+    const home = join(userHome, 'scratch', 'firstmate');
+    mkdirSync(home, { recursive: true });
+    const env = { ...process.env, HOME: userHome, USERPROFILE: userHome, CLAUDE_CONFIG_DIR: '' };
+    const s = new sessionLib.Session({ trace: { feature: 'cfg-ancestor', steps: [] }, env });
+    s.home = home;
+    s.claudeConfigDir = prepareClaudeConfig(join(userHome, 'scratch', 'claude-config'), home, env);
+    const prepared = (await s.fidelity()).claudeConfig;
+    const settingsPath = join(s.claudeConfigDir, 'settings.json');
+    const { claudeMdExcludes, ...rest } = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    writeFileSync(settingsPath, JSON.stringify(rest));
+    const unguarded = (await s.fidelity()).claudeConfig;
+    const reached = unguarded.startsWith('reaches ') ? unguarded.slice('reaches '.length).split(', ') : [];
+    assert.deepEqual({ prepared, reachesOperatorMd: reached.includes(operatorMd) }, { prepared: 'clean', reachesOperatorMd: true }, unguarded);
   });
 
   test('a shell prompt read before a launch does not mark the launched primary dead', async () => {

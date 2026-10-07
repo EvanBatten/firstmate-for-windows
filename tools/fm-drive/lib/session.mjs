@@ -73,6 +73,7 @@ export function prepareClaudeConfig(config, home, env = process.env) {
         PATH: pathValue,
         FM_PANE_PATH: pathValue,
       },
+      claudeMdExcludes: outsideInstructionExcludes(home, env),
     })}\n`,
     { mode: 0o600 },
   );
@@ -80,10 +81,49 @@ export function prepareClaudeConfig(config, home, env = process.env) {
   return config;
 }
 
-const DRIVER_CLAUDE_JSON_KEYS = ['hasCompletedOnboarding', 'bypassPermissionsModeAccepted', 'projects'];
-const DRIVER_SETTINGS = { theme: null, env: ['PATH', 'FM_PANE_PATH'] };
+// Claude Code reads these from every ancestor of a session's cwd, so a home or worktree under the operator's
+// profile would load the operator's ~/.claude/CLAUDE.md as project instructions.
+const INSTRUCTION_FILES = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md', '.claude/rules/**'];
 
-export function measureClaudeConfig(config) {
+function ancestorsOf(path) {
+  const out = [];
+  for (let dir = resolve(path); ; dir = dirname(dir)) {
+    out.push(dir);
+    if (dirname(dir) === dir) return out;
+  }
+}
+
+function outsideDirs(home, env) {
+  return [...new Set([...ancestorsOf(dirname(home)), ...ancestorsOf(userHome(env))])];
+}
+
+// claudeMdExcludes are picomatch globs over forward-slash paths; a single-character wildcard stands in for
+// the drive letter (its case varies) and for any glob syntax a directory name happens to contain.
+function excludePattern(dir, file) {
+  const literal = dir.replace(/\\/g, '/').replace(/\/$/, '').replace(/^[A-Za-z]:/, '?:').replace(/[*?[\]{}()!+@,]/g, '?');
+  return `${literal}/${file}`;
+}
+
+export function outsideInstructionExcludes(home, env = process.env) {
+  return outsideDirs(home, env).flatMap((dir) => INSTRUCTION_FILES.map((file) => excludePattern(dir, file)));
+}
+
+function unexcludedInstructions(config, home, env) {
+  const excluded = new Set(readJsonQuiet(join(config, 'settings.json'))?.claudeMdExcludes ?? []);
+  const reached = [];
+  for (const dir of outsideDirs(home, env)) {
+    for (const file of INSTRUCTION_FILES) {
+      const path = join(dir, file.replace(/\/\*\*$/, ''));
+      if (!excluded.has(excludePattern(dir, file)) && existsSync(path)) reached.push(path);
+    }
+  }
+  return reached;
+}
+
+const DRIVER_CLAUDE_JSON_KEYS = ['hasCompletedOnboarding', 'bypassPermissionsModeAccepted', 'projects'];
+const DRIVER_SETTINGS = { theme: null, env: ['PATH', 'FM_PANE_PATH'], claudeMdExcludes: null };
+
+export function measureClaudeConfig(config, home, env = process.env) {
   const extra = [];
   for (const name of readdirSync(config).sort()) {
     if (isCredentialFileName(name)) continue;
@@ -104,7 +144,69 @@ export function measureClaudeConfig(config) {
       extra.push(name);
     }
   }
-  return extra.length ? `carries ${extra.join(', ')}` : 'clean';
+  if (extra.length) return `carries ${extra.join(', ')}`;
+  const reached = unexcludedInstructions(config, home, env);
+  return reached.length ? `reaches ${reached.join(', ')}` : 'clean';
+}
+
+// A listing line names a skill and opens with its description; the description tells an operator skill
+// apart from a built-in command of the same name.
+function hostSkillListingLines(env) {
+  const dirs = [join(userHome(env), '.claude', 'skills')];
+  if (env.CLAUDE_CONFIG_DIR) dirs.push(join(env.CLAUDE_CONFIG_DIR, 'skills'));
+  const lines = [];
+  for (const dir of dirs) {
+    let names = [];
+    try { names = readdirSync(dir); } catch {}
+    for (const name of names) {
+      let description;
+      try { description = readFileSync(join(dir, name, 'SKILL.md'), 'utf8').match(/^description:\s*["']?(.+?)["']?\s*$/m)?.[1]; } catch {}
+      if (description) lines.push(`- ${name}: ${description.slice(0, 40)}`);
+    }
+  }
+  return lines;
+}
+
+function isWithin(path, dir) {
+  const norm = (p) => {
+    const s = resolve(p).replace(/\\/g, '/');
+    return process.platform === 'win32' ? s.toLowerCase() : s;
+  };
+  const d = norm(dir);
+  const p = norm(path);
+  return p === d || p.startsWith(d.endsWith('/') ? d : `${d}/`);
+}
+
+// What reached each Claude session that used the throwaway config, read from its own transcripts: an
+// instruction file outside the session's cwd (other than its auto-memory) or a skill from the host's
+// user skills is operator context a captain's fresh install would not have.
+export function measureLoadedContext(config, env = process.env) {
+  const projects = join(config, 'projects');
+  let transcripts = [];
+  try {
+    transcripts = readdirSync(projects).flatMap((slug) => {
+      try { return readdirSync(join(projects, slug)).filter((f) => f.endsWith('.jsonl')).map((f) => join(projects, slug, f)); } catch { return []; }
+    });
+  } catch {}
+  if (!transcripts.length) return 'unobserved';
+  const operatorSkills = hostSkillListingLines(env);
+  const loaded = new Set();
+  for (const transcript of transcripts) {
+    for (const line of readFileSync(transcript, 'utf8').split('\n')) {
+      if (!line.includes('"attachment"')) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      const att = entry.attachment;
+      if (att?.type === 'instructions') {
+        for (const { path } of att.files ?? []) {
+          if (!(entry.cwd && isWithin(path, entry.cwd)) && !isWithin(path, projects)) loaded.add(path);
+        }
+      } else if (att?.type === 'skill_listing') {
+        for (const skill of operatorSkills) if ((att.content ?? '').includes(skill)) loaded.add(`skill ${skill.slice(2, skill.indexOf(':'))}`);
+      }
+    }
+  }
+  return loaded.size ? `loaded ${[...loaded].join(', ')}` : 'clean';
 }
 
 function userHome(env) {
@@ -504,6 +606,10 @@ export class Session {
     return `export PATH="$FM_PANE_PATH"; export CLAUDE_CONFIG_DIR='${cfg.replace(/'/g, "'\\''")}'; cd '${home.replace(/'/g, "'\\''")}' && claude ${flags}${mark}`;
   }
 
+  loadedContext() {
+    return this.launches ? measureLoadedContext(this.claudeConfigDir, this.env) : 'not launched';
+  }
+
   async fidelity() {
     if (this.committedHooks === undefined) {
       this.committedHooks = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
@@ -517,7 +623,7 @@ export class Session {
       captainMd = this.firstSaidAt !== undefined && mtimeMs >= this.firstSaidAt ? 'written-after-say' : 'present';
     } catch {}
     return {
-      claudeConfig: measureClaudeConfig(this.claudeConfigDir),
+      claudeConfig: measureClaudeConfig(this.claudeConfigDir, this.home, this.env),
       hooks: same ? 'repo' : 'modified',
       captainMd,
       model: this.model,
