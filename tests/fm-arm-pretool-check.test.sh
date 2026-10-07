@@ -131,6 +131,9 @@ matrix_case D62 deny "bash -xs sentinel <<< 'bin/fm-watch.sh'"
 matrix_case D63 deny "sh -s sentinel <<< 'bin/fm-watch.sh'"
 matrix_case D64 deny 'bash -s bin/fm-watch.sh'
 matrix_case D65 deny "bash -s -- -c harmless <<< 'bin/fm-watch.sh'"
+matrix_case D66 deny 'BIN/FM-WATCH-ARM.SH &'
+matrix_case D67 deny "'bin\\fm-watch-arm.sh' &"
+matrix_case D68 deny "'C:\\fm\\home\\bin\\fm-watch-arm.sh' &"
 
 matrix_case E01 allow "bin/fm-watch-checkpoint.sh --seconds '180;still-one-arg'"
 matrix_case E02 allow "bin/fm-watch-checkpoint.sh --label 'fm-watch-arm.sh; literal argument'"
@@ -282,6 +285,23 @@ EOF
   done
   [ -e "$dir/loaded" ] || fail "the win32 node:path loader never reached the policy"
   pass "the policy classifies the whole matrix the same under a win32 node:path"
+  local expected root command
+  while IFS='|' read -r expected root command; do
+    output=$(cd "$dir" && node --import ./register.mjs "$POLICY" --root "$root" --home "$root" --command "$command") \
+      || fail "policy under a win32 node:path failed for $command"
+    [ "${output%%$'\t'*}" = "$expected" ] || fail "$command with home $root under a win32 node:path must $expected, got: $output"
+  done <<'ROWS'
+deny|/c/fm/home|'C:\fm\home\bin\fm-watch-arm.sh' &
+deny|/c/fm/home|C:\\fm\\home\\bin\\fm-watch-arm.sh &
+deny|/c/fm/home|'bin\fm-watch-arm.sh' &
+deny|/c/fm/home|BIN/FM-WATCH-ARM.SH &
+deny|/c/fm/home|'C:\fm\home\BIN\FM-WATCH.SH'
+allow|/c/fm/home|source C:/fm/home/config/x-mode.env; bin/fm-watch-checkpoint.sh --seconds 180
+allow|C:\fm\home|source 'C:\fm\home\config\x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180
+allow|C:\fm\home|source /c/fm/home/config/x-mode.env; bin/fm-watch-checkpoint.sh --seconds 180
+deny|C:/fm/home|source D:/fm/home/config/x-mode.env; bin/fm-watch-checkpoint.sh --seconds 180
+ROWS
+  pass "Git Bash's backslash, drive and upper-case spellings of a protected script classify as the script"
 }
 
 # Git for Windows hands node a /c/... argument as C:/..., while the command
