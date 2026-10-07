@@ -424,6 +424,24 @@ test_propagate_lib() {
   pass "B1 propagate_inheritable_config: copy, idempotence, convergence, absence-mirror, exclusion, no-op, skip diagnostics"
 }
 
+test_propagate_into_destination_with_trailing_slash() {
+  local d src repo stderr
+  d="$TMP_ROOT/prop-trailing-slash"
+  src="$d/src"
+  repo="$d/home"
+  mkdir -p "$src"
+  git init -q -b main "$repo"
+  printf 'config/\n' > "$repo/.gitignore"
+  mkdir -p "$repo/config"
+  printf 'codex\n' > "$src/crew-harness"
+  stderr="$d/propagate.err"
+  FM_INHERITABLE_CONFIG=crew-harness propagate_inheritable_config "$src" "$repo/config/" 2>"$stderr" \
+    || fail "propagation into a trailing-slash destination failed: $(cat "$stderr")"
+  [ "$(cat "$repo/config/crew-harness" 2>/dev/null)" = codex ] \
+    || fail "a gitignored destination spelled with a trailing slash did not inherit crew-harness: $(cat "$stderr")"
+  pass "a gitignored destination spelled with a trailing slash inherits config"
+}
+
 # ===========================================================================
 # B/A integration: a secondmate spawn resolves the secondmate harness and
 # propagates the crew harness into the home's config.
@@ -2696,6 +2714,7 @@ test_secondmate_model_effort_tokens
 test_pi_signed_detection_and_session_lock_identity
 test_dash_leading_process_names_are_basename_operands
 test_propagate_lib
+test_propagate_into_destination_with_trailing_slash
 test_spawn_split_and_inherit
 test_spawn_backward_compat_crew_fallback
 test_spawn_bare_backward_compat
