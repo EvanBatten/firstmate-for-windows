@@ -15,6 +15,19 @@ A concrete crew value such as `codex` carries that runtime into the secondmate h
 Unset or `default` carries no concrete value, so its workers use that home's own or detected harness rather than the primary's effective crew harness.
 The inherited dispatch file applies the same best-fit profiles there.
 
+## Non-blocking dispatch
+
+A spawn can take more than a minute, so a foreground batch blocks the primary's turn, and with it the captain, for several minutes.
+Launch the one `../../../bin/fm-spawn.sh` call through the primary harness's background tool where one is verified:
+
+- Claude: the Bash tool with `run_in_background: true` and an explicit `timeout: 7200000`, because the default 30-minute limit can stop a large batch before its later tasks run; Claude re-invokes the session with the job's output when it exits.
+
+Never background it with shell `&`, which gives no completion notice.
+Every other harness has no verified background launch, so run the spawn in the foreground.
+Backgrounding keeps the primary responsive; it does not arm supervision, which starts at the first turn end after a worker's record is published.
+Hold any further dispatch until the result arrives, because the task-set lock refuses a concurrent spawn into the same home and names the holder's pid.
+When the result arrives, check every requested id against it: a `spawned <id>` line confirms that worker, a `batch: FAILED to spawn` or `error:` line is a failed dispatch to handle like any other spawn refusal, and an id with neither line did not run.
+
 ## Owners
 
 `../../../bin/fm-spawn.sh` owns launch, autonomy, concrete flags, task-kind compatibility, and worker turn-end wiring.

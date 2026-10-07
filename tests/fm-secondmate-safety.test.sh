@@ -2761,6 +2761,40 @@ EOF
   pass "a fresh spawn refuses to publish while a forced teardown owns the task set"
 }
 
+# The lock record carries only the holder's pid, so the refusal cannot know
+# whether a sibling spawn or a forced teardown holds the set. Concurrent spawns
+# in one home are the common case, and a message blaming only a teardown sends
+# the reader after a teardown that never ran.
+test_fresh_spawn_refusal_names_a_sibling_spawn_as_a_possible_holder() {
+  local home subhome err rec held holder lock lock_pid
+  rec=$(seed_task_set_lock_home taskset-sibling)
+  IFS='|' read -r home subhome <<EOF
+$rec
+EOF
+  err="$TMP_ROOT/taskset-sibling.err"
+  # Stand in for a sibling spawn that is publishing its own task in this home.
+  held=$(hold_task_set_lock "$subhome/state") \
+    || fail "could not stage a held task-set lock"
+  holder=${held%% *}
+  lock=${held#* }
+  lock_pid=$(cat "$lock/pid" 2>/dev/null || true)
+  [ -n "$lock_pid" ] || fail "the staged task-set lock records no holder pid"
+  if FM_HOME="$subhome" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" sibling "$subhome/projects/alpha" --scout >/dev/null 2>"$err"; then
+    kill "$holder" 2>/dev/null || true
+    fail "a fresh spawn published a task while a sibling spawn owned the set"
+  fi
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  grep -F "another spawn publishing its task" "$err" >/dev/null \
+    || fail "the spawn refusal did not name a sibling spawn as a possible holder: $(cat "$err")"
+  grep -F "forced teardown" "$err" >/dev/null \
+    || fail "the spawn refusal dropped the forced-teardown possibility: $(cat "$err")"
+  grep -F "pid $lock_pid" "$err" >/dev/null \
+    || fail "the spawn refusal did not name the holder pid $lock_pid: $(cat "$err")"
+  pass "a fresh spawn refusal names a sibling spawn or a forced teardown as the holder, with its pid"
+}
+
 test_fresh_remote_secondmate_spawn_refuses_while_task_set_is_owned() {
   local home err held holder lock
   home="$TMP_ROOT/taskset-remote-spawn-home"
@@ -3179,6 +3213,7 @@ test_force_teardown_refuses_symlinked_descendant_state
 test_force_teardown_locks_descendant_with_absent_state
 test_force_teardown_refuses_while_a_task_is_being_published
 test_fresh_spawn_refuses_while_a_forced_teardown_owns_the_task_set
+test_fresh_spawn_refusal_names_a_sibling_spawn_as_a_possible_holder
 test_fresh_remote_secondmate_spawn_refuses_while_task_set_is_owned
 test_secondmate_force_teardown_refuses_child_active_home_descendant
 test_secondmate_force_teardown_refuses_child_repo_descendant
