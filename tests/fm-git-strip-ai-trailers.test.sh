@@ -128,11 +128,7 @@ test_previous_commit_msg_hook_still_runs() {
   local repo orig hooks
   repo="$TMP_ROOT/chain-hook"
   make_repo "$repo"
-  orig=$(git -C "$repo" rev-parse --git-path hooks)
-  case "$orig" in
-  /*) ;;
-  *) orig="$repo/$orig" ;;
-  esac
+  orig=$(git -C "$repo" rev-parse --path-format=absolute --git-path hooks)
   mkdir -p "$orig"
   cat >"$orig/commit-msg" <<'SH'
 #!/usr/bin/env bash

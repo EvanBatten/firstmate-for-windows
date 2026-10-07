@@ -1734,17 +1734,11 @@ treehouse_return_is_index_lock_error() {
 # Absolute path to the git index lock for a worktree/repo dir, or empty when it
 # cannot be resolved (dir missing or not a git worktree at all).
 worktree_git_lock_path() {
-  local dir=$1 lock abs_dir
+  local dir=$1 lock
   [ -n "$dir" ] && [ -d "$dir" ] || return 1
-  lock=$(git -C "$dir" rev-parse --git-path index.lock 2>/dev/null) || return 1
+  lock=$(git -C "$dir" rev-parse --path-format=absolute --git-path index.lock 2>/dev/null) || return 1
   [ -n "$lock" ] || return 1
-  case "$lock" in
-    /*) printf '%s\n' "$lock" ;;
-    *)
-      abs_dir=$(canonical_existing_dir "$dir") || return 1
-      printf '%s/%s\n' "$abs_dir" "$lock"
-      ;;
-  esac
+  printf '%s\n' "$lock"
 }
 
 # The lock-staleness proof (lsof holder check, mtime age, fail-safe defaults)

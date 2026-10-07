@@ -136,5 +136,12 @@ expect "a secondmate home inherits config into its gitignored config dir" \
   "$(. platform/windows/env.sh; FM_INHERITABLE_CONFIG=crew-harness bash -c '. bin/fm-config-inherit-lib.sh
     propagate_inheritable_config "$1/primary-config" "$1/secondmate/config"
     printf "[%s]" "$(cat "$1/secondmate/config/crew-harness" 2>/dev/null)"' _ "$T" 2>&1)"
+rm -f "$T/secondmate/config/crew-harness"
+# NTFS ignores letter case, so a destination typed in other case is the same directory.
+expect "a secondmate home spelled in other letter case inherits config into its gitignored config dir" \
+  "[claude]" \
+  "$(. platform/windows/env.sh; FM_INHERITABLE_CONFIG=crew-harness bash -c '. bin/fm-config-inherit-lib.sh
+    propagate_inheritable_config "$1/primary-config" "$2/config"
+    printf "[%s]" "$(cat "$1/secondmate/config/crew-harness" 2>/dev/null)"' _ "$T" "$T/SECONDMATE" 2>&1)"
 
 [ "$fails" -eq 0 ]

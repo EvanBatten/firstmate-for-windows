@@ -562,6 +562,33 @@ test_orphaned_stale_packed_refs_lock_recovers() {
   pass "orphaned provably-stale packed-refs.lock is cleared and the clone syncs"
 }
 
+test_stale_packed_refs_lock_in_separate_git_dir_recovers() {
+  local home fakebin clone gitdir out err
+  home=$(new_home)
+  fakebin="$home/fb-lockgitfile"; rm -rf "$fakebin"; mkdir -p "$fakebin"
+  clone=$(build_packed_prunable "$home" lockgitfile)
+  gitdir="$home/gitdirs/lockgitfile.git"
+  mkdir -p "$home/gitdirs"
+  git init -q --separate-git-dir "$gitdir" "$clone"
+  [ -f "$clone/.git" ] || fail "separate git dir: fixture clone must hold a .git file"
+  : > "$gitdir/packed-refs.lock"
+  lsof_no_holder "$fakebin"
+  out="$home/out-lockgitfile"; err="$home/err-lockgitfile"
+
+  set +e
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES=2 \
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=0 \
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS=0 \
+    run_sync_guarded "$home" "$fakebin" "$out" "$err" lockgitfile
+  set -e
+
+  assert_grep "removed provably-stale packed-refs lock" "$err" \
+    "separate git dir: guard did not find and remove the stale lock in the clone's git dir"
+  assert_contains "$(cat "$out")" "lockgitfile: synced" "separate git dir: clone did not sync after recovery"
+  assert_absent "$gitdir/packed-refs.lock" "separate git dir: lock should be gone after removal"
+  pass "a stale packed-refs.lock in a clone's separate git dir is cleared and the clone syncs"
+}
+
 test_live_packed_refs_lock_is_never_removed() {
   local home fakebin clone out err before
   home=$(new_home)
@@ -734,6 +761,7 @@ test_single_project_unresolvable_name_still_skips
 test_whole_fleet_form
 test_bootstrap_relays_recovered_and_stuck
 test_orphaned_stale_packed_refs_lock_recovers
+test_stale_packed_refs_lock_in_separate_git_dir_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
 test_transient_packed_refs_lock_self_clears

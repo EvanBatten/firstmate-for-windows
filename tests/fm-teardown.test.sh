@@ -429,11 +429,7 @@ if [ "${1:-}" = return ]; then
       *) wt=$a ;;
     esac
   done
-  lock=$(git -C "$wt" rev-parse --git-path index.lock 2>/dev/null || true)
-  case "$lock" in
-    /*|'') ;;
-    *) lock="$wt/$lock" ;;
-  esac
+  lock=$(git -C "$wt" rev-parse --path-format=absolute --git-path index.lock 2>/dev/null || true)
   if [ -n "$lock" ] && [ -e "$lock" ]; then
     echo "fatal: Unable to create '$lock': File exists." >&2
     exit 128
@@ -463,11 +459,7 @@ if [ "${1:-}" = return ]; then
       *) wt=$a ;;
     esac
   done
-  lock=$(git -C "$wt" rev-parse --git-path index.lock 2>/dev/null || true)
-  case "$lock" in
-    /*|'') ;;
-    *) lock="$wt/$lock" ;;
-  esac
+  lock=$(git -C "$wt" rev-parse --path-format=absolute --git-path index.lock 2>/dev/null || true)
   count_file="${TREEHOUSE_ATTEMPT_FILE:?}"
   count=0
   if [ -f "$count_file" ]; then
@@ -508,11 +500,7 @@ if [ "${1:-}" = return ]; then
       *) wt=$a ;;
     esac
   done
-  lock=$(git -C "$wt" rev-parse --git-path index.lock 2>/dev/null || true)
-  case "$lock" in
-    /*|'') ;;
-    *) lock="$wt/$lock" ;;
-  esac
+  lock=$(git -C "$wt" rev-parse --path-format=absolute --git-path index.lock 2>/dev/null || true)
   if [ -z "$lock" ]; then
     lock="index.lock"
   fi
@@ -525,15 +513,7 @@ SH
 }
 
 git_index_lock_path() {
-  local dir=$1 lock abs_dir
-  lock=$(git -C "$dir" rev-parse --git-path index.lock)
-  case "$lock" in
-    /*) printf '%s\n' "$lock" ;;
-    *)
-      abs_dir=$(cd "$dir" && pwd -P)
-      printf '%s/%s\n' "$abs_dir" "$lock"
-      ;;
-  esac
+  git -C "$1" rev-parse --path-format=absolute --git-path index.lock
 }
 
 # fakebin/lsof stub: no process ever holds anything open (lsof's not-found exit
@@ -603,11 +583,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -n "$dir" ] && [ "${args[2]:-}" = status ] && [ "${args[3]:-}" = --porcelain ]; then
-  lock=$("$real" -C "$dir" rev-parse --git-path index.lock 2>/dev/null || true)
-  case "$lock" in
-    /*|'') ;;
-    *) lock="$dir/$lock" ;;
-  esac
+  lock=$("$real" -C "$dir" rev-parse --path-format=absolute --git-path index.lock 2>/dev/null || true)
   if [ -n "$lock" ] && [ -e "$lock" ]; then
     echo "fatal: Unable to create '$lock': File exists." >&2
     exit 128
