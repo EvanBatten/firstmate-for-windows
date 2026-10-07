@@ -152,18 +152,16 @@ export function measureClaudeConfig(config, home, env = process.env) {
   return reached.length ? `reaches ${reached.join(', ')}` : 'clean';
 }
 
-// The scalar shapes a SKILL.md frontmatter uses: plain (with indented continuation lines), single- or
-// double-quoted, and folded or literal blocks.
 function frontmatter(raw) {
   const lines = raw.split(/\r?\n/);
   const fields = {};
   if (lines[0] !== '---') return fields;
   const indented = (i) => i < lines.length && (lines[i] === '' || /^\s/.test(lines[i]));
   for (let i = 1; i < lines.length && lines[i] !== '---'; i++) {
-    const m = /^([\w-]+):\s*(.*?)\s*$/.exec(lines[i]);
+    const m = lines[i].match(/^([\w-]+):\s*(.*?)\s*$/);
     if (!m) continue;
     const [, key, rest] = m;
-    const block = /^([>|])[-+]?$/.exec(rest);
+    const block = rest.match(/^([>|])[-+]?$/);
     const body = [];
     if (block || !/^["']/.test(rest)) while (indented(i + 1)) body.push(lines[++i].trim());
     if (block) fields[key] = block[1] === '|' ? body.join('\n').trim() : body.filter(Boolean).join(' ');
