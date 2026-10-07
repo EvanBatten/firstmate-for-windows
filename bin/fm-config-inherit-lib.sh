@@ -180,6 +180,7 @@ copy_inheritable_file() {
 
 destination_allows_inherited_item() {
   local dest_config=$1 item=$2 dest_parent dest_name dest_parent_abs
+  dest_config=${dest_config%"${dest_config##*[!/]}"}
   dest_parent=${dest_config%/*}
   dest_name=${dest_config##*/}
   [ -n "$dest_parent" ] && [ "$dest_parent" != "$dest_config" ] || return 1

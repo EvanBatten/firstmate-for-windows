@@ -1622,6 +1622,7 @@ test_legacy_record_never_accepts_a_corrupt_spawn_gen() {
 
 test_stale_index_lock_cleared_and_teardown_succeeds() {
   local case_dir rc lock
+  fm_test_lock_staleness_provable test_stale_index_lock_cleared_and_teardown_succeeds || return 0
   case_dir=$(make_case stale-index-lock)
   write_meta "$case_dir" no-mistakes ship
   wt_commit "$case_dir" "shippable work"
@@ -1714,6 +1715,7 @@ test_lsof_error_never_clears_index_lock() {
 
 test_stale_index_lock_cleanup_rechecks_dirty_worktree() {
   local case_dir rc lock
+  fm_test_lock_staleness_provable test_stale_index_lock_cleanup_rechecks_dirty_worktree || return 0
   case_dir=$(make_case stale-lock-dirty-recheck)
   write_meta "$case_dir" no-mistakes ship
   wt_commit_file "$case_dir" feature.txt landed "landed work"
@@ -1748,6 +1750,7 @@ test_stale_index_lock_cleanup_rechecks_dirty_worktree() {
 
 test_non_linked_index_lock_path_is_checked_from_worktree() {
   local case_dir rc lock
+  fm_test_lock_staleness_provable test_non_linked_index_lock_path_is_checked_from_worktree || return 0
   case_dir=$(make_case non-linked-index-lock)
   git -C "$case_dir/project" worktree remove --force "$case_dir/wt"
   git clone -q "$case_dir/origin.git" "$case_dir/wt"
@@ -1780,6 +1783,7 @@ test_non_linked_index_lock_path_is_checked_from_worktree() {
 
 test_index_lock_mtime_read_failure_refuses() {
   local case_dir rc lock
+  fm_test_lock_staleness_provable test_index_lock_mtime_read_failure_refuses || return 0
   # The mtime fault is injected by a fake stat on PATH; on Darwin the lock
   # helper now calls /usr/bin/stat directly, so the fake can never fire there.
   # Skip the Darwin run of this case.

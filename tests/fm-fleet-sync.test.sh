@@ -535,6 +535,7 @@ test_bootstrap_relays_recovered_and_stuck() {
 
 test_orphaned_stale_packed_refs_lock_recovers() {
   local home fakebin clone out err
+  fm_test_lock_staleness_provable test_orphaned_stale_packed_refs_lock_recovers || return 0
   home=$(new_home)
   fakebin="$home/fb-lockstale"; rm -rf "$fakebin"; mkdir -p "$fakebin"
   clone=$(build_packed_prunable "$home" lockstale)
@@ -564,6 +565,7 @@ test_orphaned_stale_packed_refs_lock_recovers() {
 
 test_stale_packed_refs_lock_in_separate_git_dir_recovers() {
   local home fakebin clone gitdir out err
+  fm_test_lock_staleness_provable test_stale_packed_refs_lock_in_separate_git_dir_recovers || return 0
   home=$(new_home)
   fakebin="$home/fb-lockgitfile"; rm -rf "$fakebin"; mkdir -p "$fakebin"
   clone=$(build_packed_prunable "$home" lockgitfile)

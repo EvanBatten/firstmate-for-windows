@@ -102,3 +102,5 @@ fm_lock_is_provably_stale() {
   fi
   [ "$age" -ge "$min_age" ]
 }
+
+[ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'
