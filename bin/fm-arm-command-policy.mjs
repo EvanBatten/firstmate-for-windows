@@ -13,7 +13,7 @@
 // procedure below stays private to this file. The CLI entry point at the bottom
 // runs only when this module is invoked directly, never on import.
 
-import path from "node:path";
+import { posix as path } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -44,7 +44,7 @@ function parseArguments(argv) {
 }
 
 function rawMentionsProtected(command) {
-  return /(?:^|[/\s'"`(])fm-watch(?:-(?:arm|checkpoint))?\.sh\b/.test(normalizeLineContinuations(command));
+  return /(?:^|[/\\\s'"`(])fm-watch(?:-(?:arm|checkpoint))?\.sh\b/i.test(normalizeLineContinuations(command));
 }
 
 function rawMentionsBroadKill(command) {
@@ -601,17 +601,24 @@ const PROTECTED_SCRIPTS = [
   { relative: "bin/fm-watch.sh", kind: "watch" },
 ];
 
+// Git Bash runs C:\x, C:/x and /c/x as one file, and Git for Windows hands node
+// a /c/... argument as C:/..., so every path is compared in the /c/x spelling.
+function shellSpelling(value) {
+  return value.replaceAll("\\", "/").replace(/^([A-Za-z]):\//, (_, drive) => `/${drive.toLowerCase()}/`);
+}
+
+// NTFS is case-insensitive, so Git Bash runs BIN/FM-WATCH-ARM.SH as the arm.
 function protectedIdentity(value, root) {
-  const normalized = path.normalize(value);
+  const normalized = path.normalize(shellSpelling(value)).toLowerCase();
   for (const { relative, kind } of PROTECTED_SCRIPTS) {
-    if (normalized === relative || normalized === path.join(root, relative) || normalized.endsWith(`/${relative}`)) return kind;
+    if (normalized === relative || normalized === path.join(root, relative).toLowerCase() || normalized.endsWith(`/${relative}`)) return kind;
   }
   return "";
 }
 
 function hasUnclassifiableProtectedExpansion(word, root) {
   if (!word?.unquotedExpansion || protectedIdentity(word.value, root)) return false;
-  return /(?:^|\/)fm-watch/.test(word.value);
+  return /(?:^|\/)fm-watch/i.test(shellSpelling(word.value));
 }
 
 function shellInvocation(position) {
@@ -869,8 +876,9 @@ function analyzeProgram(command, context, depth = 0) {
 
 function xModePathAllowed(value, home) {
   if (value === "config/x-mode.env" || value === "./config/x-mode.env") return true;
-  if (!path.isAbsolute(value)) return false;
-  return path.normalize(value) === path.join(path.normalize(home), "config/x-mode.env");
+  const spelled = shellSpelling(value);
+  if (!path.isAbsolute(spelled)) return false;
+  return path.normalize(spelled) === path.join(home, "config/x-mode.env");
 }
 
 function ordinaryWordsOnly(tokens) {
@@ -913,7 +921,7 @@ function blessedProgram(analysis, context) {
 }
 
 function decision(command, root, home) {
-  const context = { root: path.normalize(root), home: path.normalize(home), protectedVariables: new Set(), watcherPatterns: new Set(), watcherPids: new Set() };
+  const context = { root: path.normalize(shellSpelling(root)), home: path.normalize(shellSpelling(home)), protectedVariables: new Set(), watcherPatterns: new Set(), watcherPids: new Set() };
   const analysis = analyzeProgram(command, context);
   if (analysis.broadKill) return deny("broad-watcher-kill");
   if (analysis.error && analysis.protectedFound) return deny("unclassifiable-protected-command");

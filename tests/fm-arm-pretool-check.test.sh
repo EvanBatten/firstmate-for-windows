@@ -131,6 +131,9 @@ matrix_case D62 deny "bash -xs sentinel <<< 'bin/fm-watch.sh'"
 matrix_case D63 deny "sh -s sentinel <<< 'bin/fm-watch.sh'"
 matrix_case D64 deny 'bash -s bin/fm-watch.sh'
 matrix_case D65 deny "bash -s -- -c harmless <<< 'bin/fm-watch.sh'"
+matrix_case D66 deny 'BIN/FM-WATCH-ARM.SH &'
+matrix_case D67 deny "'bin\\fm-watch-arm.sh' &"
+matrix_case D68 deny "'C:\\fm\\home\\bin\\fm-watch-arm.sh' &"
 
 matrix_case E01 allow "bin/fm-watch-checkpoint.sh --seconds '180;still-one-arg'"
 matrix_case E02 allow "bin/fm-watch-checkpoint.sh --label 'fm-watch-arm.sh; literal argument'"
@@ -246,6 +249,75 @@ test_direct_policy_contract() {
   heredoc_watcher=$'bin/fm-watch-arm.sh <<\'EOF\'\ndata only\nEOF'
   assert_policy direct-heredoc-data allow "$heredoc_data"
   assert_policy direct-heredoc-watcher $'deny\twatcher-redirection' "$heredoc_watcher"
+}
+
+# Command text is POSIX shell on every host, so a Windows node, whose default
+# node:path is win32, must classify the matrix exactly as a Linux node does.
+# The loader hands the policy a node:path whose top-level functions are win32.
+test_matrix_under_win32_node_path() {
+  local dir="$MATRIX_TMP/win32-path" i output verdict
+  mkdir -p "$dir"
+  cat >"$dir/hooks.mjs" <<'EOF'
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === "node:path" && context.parentURL?.endsWith("/fm-arm-command-policy.mjs")) {
+    return { url: new URL("./win32-path.mjs", import.meta.url).href, shortCircuit: true };
+  }
+  return nextResolve(specifier, context);
+}
+EOF
+  cat >"$dir/win32-path.mjs" <<'EOF'
+import path from "node:path";
+import { writeFileSync } from "node:fs";
+writeFileSync(new URL("./loaded", import.meta.url), "");
+export const { posix, win32 } = path;
+export default { ...path.win32, posix: path.posix, win32: path.win32 };
+EOF
+  cat >"$dir/register.mjs" <<'EOF'
+import { register } from "node:module";
+register("./hooks.mjs", import.meta.url);
+EOF
+  for ((i = 0; i < ${#MATRIX_IDS[@]}; i++)); do
+    output=$(cd "$dir" && node --import ./register.mjs "$POLICY" --root "$ROOT" --home "$ROOT" --command "${MATRIX_COMMANDS[$i]}") \
+      || fail "${MATRIX_IDS[$i]} policy under a win32 node:path failed"
+    verdict=${output%%$'\t'*}
+    [ "$verdict" = "${MATRIX_EXPECTED[$i]}" ] \
+      || fail "${MATRIX_IDS[$i]} under a win32 node:path must ${MATRIX_EXPECTED[$i]}, got: $output"
+  done
+  [ -e "$dir/loaded" ] || fail "the win32 node:path loader never reached the policy"
+  pass "the policy classifies the whole matrix the same under a win32 node:path"
+  local expected root command
+  while IFS='|' read -r expected root command; do
+    output=$(cd "$dir" && node --import ./register.mjs "$POLICY" --root "$root" --home "$root" --command "$command") \
+      || fail "policy under a win32 node:path failed for $command"
+    [ "${output%%$'\t'*}" = "$expected" ] || fail "$command with home $root under a win32 node:path must $expected, got: $output"
+  done <<'ROWS'
+deny|/c/fm/home|'C:\fm\home\bin\fm-watch-arm.sh' &
+deny|/c/fm/home|C:\\fm\\home\\bin\\fm-watch-arm.sh &
+deny|/c/fm/home|'bin\fm-watch-arm.sh' &
+deny|/c/fm/home|BIN/FM-WATCH-ARM.SH &
+deny|/c/fm/home|'C:\fm\home\BIN\FM-WATCH.SH'
+allow|/c/fm/home|source C:/fm/home/config/x-mode.env; bin/fm-watch-checkpoint.sh --seconds 180
+allow|C:\fm\home|source 'C:\fm\home\config\x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180
+allow|C:\fm\home|source /c/fm/home/config/x-mode.env; bin/fm-watch-checkpoint.sh --seconds 180
+deny|C:/fm/home|source D:/fm/home/config/x-mode.env; bin/fm-watch-checkpoint.sh --seconds 180
+ROWS
+  pass "Git Bash's backslash, drive and upper-case spellings of a protected script classify as the script"
+}
+
+# Git for Windows hands node a /c/... argument as C:/..., while the command
+# text keeps the shell's /c/... spelling of the same home.
+test_drive_spelled_home() {
+  local output
+  while IFS='|' read -r expected source; do
+    output=$(node "$POLICY" --root 'C:/fm/home' --home 'C:/fm/home' --command "source '$source'; bin/fm-watch-checkpoint.sh --seconds 180") \
+      || fail "drive-spelled home policy invocation failed for $source"
+    [ "${output%%$'\t'*}" = "$expected" ] || fail "sourcing $source with home C:/fm/home must $expected, got: $output"
+  done <<'ROWS'
+allow|/c/fm/home/config/x-mode.env
+deny|/d/fm/home/config/x-mode.env
+deny|/c/fm/other/config/x-mode.env
+ROWS
+  pass "a drive-spelled home blesses its own x-mode file in shell spelling only"
 }
 
 # --- CLI parsing -------------------------------------------------------------
@@ -504,6 +576,8 @@ ROWS
 
 test_full_acceptance_matrix
 test_direct_policy_contract
+test_matrix_under_win32_node_path
+test_drive_spelled_home
 test_command_equals_form
 test_background_flag_accepted_and_non_gating
 test_unknown_flag_errors
