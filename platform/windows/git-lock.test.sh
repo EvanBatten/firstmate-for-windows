@@ -21,6 +21,7 @@ not_ok() { printf 'not ok - %s\n' "$1"; fails=$((fails + 1)); }
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@x.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@x.invalid
 git init -q -b main "$T/repo"
+git -C "$T/repo" config core.autocrlf false
 echo a > "$T/repo/f"
 git -C "$T/repo" add f
 git -C "$T/repo" commit -qm start
