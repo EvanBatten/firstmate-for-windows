@@ -277,10 +277,7 @@ test_enabled_records_and_injects_identical_carrier_before_launch() {
   expect_code 0 "$status" "enabled trace-context spawn should succeed"
   assert_contains "$out" "spawned $CASE_ID" "enabled spawn should report success"
   meta="$HOME_DIR/state/$CASE_ID.meta"
-  jq -e --arg id "$CASE_ID" '
-    .schema == "fm-secondmate-home-summary.v1"
-    and any(.endpoints[]; .id == $id)
-  ' "$HOME_DIR/state/home-summary.json" >/dev/null \
+  fm_test_wait_home_summary_task "$HOME_DIR" "$CASE_ID" \
     || fail "successful task spawn did not publish the task in the home summary ledger"
 
   mtp=$(meta_traceparent "$meta")
@@ -315,6 +312,39 @@ test_disabled_writes_and_injects_neither() {
   ! grep -q '^export TRACEPARENT=' "$LAUNCH_LOG" || fail "default-off spawn must not inject a TRACEPARENT export"
   grep -q '^export GOTMPDIR=' "$LAUNCH_LOG" || fail "the spawn should still run (GOTMPDIR is always injected)"
   pass "disabled: neither traceparent= in meta nor a TRACEPARENT export is produced"
+}
+
+hold_lock_until() {  # <lockdir> <ready-file> <release-file>
+  . "$ROOT/bin/fm-wake-lib.sh"
+  fm_lock_try_acquire "$1" || exit 1
+  : > "$2"
+  until [ -e "$3" ]; do sleep 0.1; done
+  fm_lock_release "$1"
+}
+
+test_spawn_returns_without_waiting_for_the_home_summary_refresh() {
+  local rec out status lock holder
+  rec=$(make_spawn_case hs-detached)
+  read_case_record "$rec"
+  lock="$HOME_DIR/state/.home-summary-refresh.lock"
+  hold_lock_until "$lock" "$HOME_DIR/hold-ready" "$HOME_DIR/hold-release" &
+  holder=$!
+  until [ -e "$HOME_DIR/hold-ready" ]; do
+    kill -0 "$holder" 2>/dev/null || fail "the test could not hold the home-summary refresh lock"
+    sleep 0.1
+  done
+
+  export FM_HOME_SUMMARY_TIMEOUT=240
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$CASE_ID" "$PROJ_DIR")
+  status=$?
+  unset FM_HOME_SUMMARY_TIMEOUT
+  : > "$HOME_DIR/hold-release"
+  wait "$holder"
+  expect_code 0 "$status" "spawn should succeed while another home-summary refresh holds the lock"$'\n'"$out"
+  assert_contains "$out" "spawned $CASE_ID" "spawn should report success"
+  fm_test_wait_home_summary_task "$HOME_DIR" "$CASE_ID" 120 \
+    || fail "spawn's home-summary refresh never published the task once the lock freed: spawn waited on it until it timed out"
+  pass "spawn returns while its home-summary refresh waits, and the refresh still publishes the task"
 }
 
 test_failed_delivery_omits_metadata_and_still_launches() {
@@ -603,6 +633,7 @@ test_secondmate_carrier_and_snapshot_share_one_decision() {
 
 test_enabled_records_and_injects_identical_carrier_before_launch
 test_disabled_writes_and_injects_neither
+test_spawn_returns_without_waiting_for_the_home_summary_refresh
 test_failed_delivery_omits_metadata_and_still_launches
 test_unsafe_delivery_refuses_to_append_launch
 test_failed_metadata_append_unsets_carrier_and_still_launches

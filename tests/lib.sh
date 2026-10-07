@@ -231,6 +231,20 @@ fm_test_remove_tree() {
   rm -rf "$dir"
 }
 
+# fm_test_wait_home_summary_task <home> <id> [seconds]: whether <home>'s
+# published state/home-summary.json names endpoint <id> within the bound
+# (default 120 s). A spawn publishes its summary from a detached refresh, so
+# a caller asserting on the ledger waits for that publication.
+fm_test_wait_home_summary_task() {
+  local home=$1 id=$2 deadline=$((SECONDS + ${3:-120}))
+  until jq -e --arg id "$id" '
+      .schema == "fm-secondmate-home-summary.v1" and any(.endpoints[]; .id == $id)
+    ' "$home/state/home-summary.json" >/dev/null 2>&1; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.2
+  done
+}
+
 fm_test_cleanup() {
   local d
   fm_test_reap_watchers
