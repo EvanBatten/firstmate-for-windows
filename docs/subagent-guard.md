@@ -37,36 +37,84 @@ It says nothing about whether the resulting brief, project, or delivery mode is 
 ## Shipped mechanism
 
 `bin/fm-subagent-pretool-check.sh` is the shipped layer.
-It classifies the tool NAME by shape rather than against a fixed list.
+It classifies a tool it knows by what that tool does, and any other tool by the shape of its name rather than against a fixed list.
 The tracked Claude PreToolUse matcher is a negative lookahead over an exact-name list of everyday tools the script always allows, plus `mcp__` names, which it never classifies; every other Claude tool name reaches the script, and the script is the single owner of classification.
-The exclusion exists because each hook run costs a process start on every tool call, and `tests/fm-subagent-pretool-check.test.sh` proves the classifier allows every excluded name.
+The exclusion exists because each hook run costs a process start on every tool call, and `tests/fm-subagent-pretool-check.test.sh` proves the classifier allows every excluded name even when its input names a skill that forks.
+A name may join that list only when the script allows it whatever its input says, which is why `Skill` is not on it.
 A stem-enumerating matcher would reintroduce the fail-open-by-enumeration problem this guard exists to solve, because any future tool name outside the matcher would be silently missed before the script could inspect it.
-A tool is delegation-shaped when its normalized lowercase name contains one of these stems:
+
+### Known tools, classified by effect
+
+The script's `tool_effect` table maps an exact normalized name to what the tool does, and a name in the table is classified by that effect alone.
+
+| Effect | Names | Decision |
+| --- | --- | --- |
+| `observe-only` | `taskoutput`, `taskstop`, `taskget`, `tasklist`, `cronlist`, `bashoutput`, `killshell` | allow |
+| `plan-only` | `taskcreate`, `taskupdate` | allow |
+| `skill` | `skill` | deny when the named skill forks a subagent, otherwise allow |
+
+Every row matches the whole normalized name, never a substring, so no row can widen by accident: `TaskCreateAgent` and `RemoteTaskCreate` stay denied by shape.
+
+- `observe-only` tools observe or stop work that already exists rather than creating it, and denying them at this layer could strand already-running work with no way to inspect or end it.
+  A Claude primary's optional local deny list may still remove them from the schema.
+  The shipped guard stays narrower on purpose so it can never be the reason a runaway task cannot be stopped.
+- `plan-only` tools write, which is why they are a separate effect rather than more `observe-only` rows, but what they write is the harness's session-local todo list.
+  That list has no executor: it spawns no agent, allocates no worktree, registers no schedule, and starts nothing that could outlive the session or escape a firstmate guard.
+  So it is not the "work, agent, schedule, or isolated workspace that firstmate would not know about" the guard exists to stop, and the stem match on `task` is a false positive rather than a policy.
+  The cost of the false positive was concrete: the primary could not track its own plan, and the deny text told it to run `bin/fm-brief.sh` and `bin/fm-spawn.sh` to create a todo entry.
+- `skill` is described in "Skills" below.
+
+Folding `observe-only` and `plan-only` together would be the drift risk, because the observe-or-stop rationale is not true of a tool that writes.
+
+### Delegation shape, for every other name
+
+A name outside the table is delegation-shaped when its normalized lowercase name contains one of these stems:
 
 ```text
 agent  subagent  task  workflow  cron  schedul  worktree
 delegate  spawn  dispatch  handoff  remote  sendmessage  monitor
 ```
 
-Three exclusions keep the shape test from producing false positives.
-
-- A name beginning `mcp__` is never classified.
-  An MCP server chooses its own tool names, a task or agent noun there is common, and it has no bearing on fleet dispatch.
-- `OBSERVE_ONLY_TOOLS`: the exact names `taskoutput`, `taskstop`, `taskget`, `tasklist`, `cronlist`, `bashoutput`, and `killshell` are allowed.
-  These observe or stop work that already exists rather than creating it, and denying them at this layer could strand already-running work with no way to inspect or end it.
-  A Claude primary's optional local deny list may still remove them from the schema.
-  The shipped guard stays narrower on purpose so it can never be the reason a runaway task cannot be stopped.
-- `PLAN_ONLY_TOOLS`: the exact names `taskcreate` and `taskupdate` are allowed.
-  These write, which is why they are a separate list rather than more entries in the observe-or-stop one, but what they write is the harness's session-local todo list.
-  That list has no executor: it spawns no agent, allocates no worktree, registers no schedule, and starts nothing that could outlive the session or escape a firstmate guard.
-  So it is not the "work, agent, schedule, or isolated workspace that firstmate would not know about" the guard exists to stop, and the stem match on `task` is a false positive rather than a policy.
-  The cost of the false positive was concrete: the primary could not track its own plan, and the deny text told it to run `bin/fm-brief.sh` and `bin/fm-spawn.sh` to create a todo entry.
-
-Both exclusion lists match the whole normalized name, never a substring, so neither can widen by accident: `TaskCreateAgent` and `RemoteTaskCreate` stay denied.
-Folding the two lists together would be the drift risk, because the observe-or-stop rationale is not true of a tool that writes.
-
 The shipped guard fires on every delegation-shaped name that reaches it, including future names that no deny list knows about yet.
-That future-name behavior is the reason the tracked matcher may exclude only exact names the script already allows, never match by stem.
+That future-name behavior is the reason the tracked matcher may exclude only exact names the script always allows, never match by stem.
+
+### Skills
+
+A Claude Code skill or command whose frontmatter sets `context: fork` runs as a subagent of the calling session, so a primary that invokes one through the `Skill` tool delegates exactly as an `Agent` call would.
+The guard therefore reads the skill the call names and denies the call when that skill's frontmatter sets `context: fork`.
+An inline skill, including one that sets only `agent:` without `context: fork`, expands into the primary's own conversation and stays allowed.
+
+The `Skill` payload carries only the name, such as `{"skill":"forky"}`, so the guard reads every file Claude Code could load under that name, and any one that forks decides:
+
+- A plain name is read from `.claude/skills/<name>/SKILL.md` and `.claude/commands/<name>.md` in the home, and from `skills/<name>/SKILL.md` and `commands/<name>.md` in the Claude config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
+- A `<prefix>:<name>` is read from `<prefix>/.claude/skills/<name>/SKILL.md` in the home (a nested project directory), from `.claude/commands/<prefix>/<name>.md` in the home and the config directory, and from the installed plugin `<prefix>` under `plugins/cache/*/<prefix>/*/` in the config directory.
+
+A name that matches no file is allowed, because the guard has nothing to classify.
+That covers Claude Code's built-in skills, which live inside the binary.
+In Claude Code 2.1.292 the only built-in skills registered with `context: fork` are `execute` and `draft`, and a primary-shaped session was offered neither.
+A `SubagentStart` hook cannot close that remaining gap, because Claude Code ignores both exit 2 and a block decision from it and starts the subagent anyway.
+
+`--tool` mode carries no skill name, so `--tool Skill` is allowed.
+
+### MCP tools
+
+A name beginning `mcp__` is never classified, so every MCP tool is allowed.
+
+The reason is not that MCP tools cannot start agents, because some do.
+`claude mcp serve` exposes `mcp__<server>__Agent` and `mcp__<server>__Workflow`, and both started agents when a primary-shaped session called them.
+The reason is that an MCP server chooses its own tool names, so a name says nothing reliable about what the tool does.
+A task or agent noun in an MCP tool name is common and usually harmless, and an MCP tool that runs an agent need not carry any such noun.
+Which MCP servers a primary loads is the captain's per-home configuration choice.
+
+To remove a server from a Claude primary, add `mcp__<server>` to the untracked local `permissions.deny` list described below.
+That entry removes every tool the server offers from the model's schema.
+
+### Retired Claude tool names
+
+Claude Code 2.1.287 through 2.1.292 carry the names `TeamCreate`, `TeamDelete`, `SuggestBackgroundPR`, and `AutofixPr` only in their removed-tool set.
+They use that set to report a settings rule or `--tools` entry that names a tool no longer offered.
+No tool by those names is offered to a session, with or without `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, so the guard does not classify them.
+If a later build offers a tool by one of those names again, add it to `tool_effect` by what it does.
 
 ## Recommended Local Claude Deny List
 
@@ -353,10 +401,28 @@ A Claude deny is honored only when the hook's stdout is empty.
 `tests/fm-subagent-pretool-check.test.sh` asserts stdout is empty on every `--claude` deny and that default mode still emits the Grok object on stdout.
 The live consequence is confirmed by the shipped-guard result above: Claude honored the deny and reported the reason text.
 
+### Skill, MCP, and retired-name routes, 2026-10-07
+
+Claude Code 2.1.292 ran each case in a scratch primary-shaped home: a plain git repository with `AGENTS.md`, `state/`, and a copy of `bin/`.
+The launch was `claude -p "$PROMPT" --model haiku --dangerously-skip-permissions --setting-sources project --output-format stream-json --verbose`.
+A `.*` PreToolUse hook and a `SubagentStart` hook logged every payload.
+
+| Case | Result |
+| --- | --- |
+| `Skill` naming a project skill with `context: fork`, guard before this change | `SubagentStart` fired for `general-purpose`, the subagent's `Bash` call ran, and the guard never ran. |
+| Same, with a `SubagentStart` hook that exits 2 and prints a block decision | The subagent started and ran anyway. |
+| `Skill` naming a skill with `agent: general-purpose` and no `context` | It ran inline, and its `Bash` call carried no `agent_id`. |
+| `Skill` naming `.claude/commands/forkcmd.md` with `context: fork` | It forked. |
+| A forking command at `.claude/commands/ops/nsfork.md` | Claude Code listed it as `ops:nsfork`. |
+| `Skill` naming the forking skill, guard after this change | The call was denied with `(blocked tool: Skill, skill "forky" runs in a forked subagent context)`, no subagent started, and an inline skill in the same session still ran. |
+| `claude mcp serve` loaded as MCP server `cc` | It offered 32 `mcp__cc__*` tools, `mcp__cc__Agent` started an agent, and `mcp__cc__Workflow` launched a background workflow. |
+| Same, with local `{"permissions":{"deny":["mcp__cc"]}}` | It offered 0 `mcp__cc__*` tools. |
+| `ToolSearch` for `select:TeamCreate,TeamDelete,SuggestBackgroundPR,AutofixPr`, with and without `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` | `No matching deferred tools found.` |
+
 ## Automated validation
 
 `tests/fm-subagent-pretool-check.test.sh` owns the acceptance matrix and is registered in the `pure-contract-unit` family in `bin/fm-test-run.sh`.
-It covers the tracked Claude settings boundary that forbids a `permissions` key; the match-all Claude hook registration; denial of every work-creating delegation tool by shape; denial of twelve hypothetical future tool names that appear on no list; the observe-or-stop, plan-only, and MCP exclusions; the exactness of the plan-only exclusion against six near-miss names a substring or shorter-stem widening would release; the scout-present and scout-absent message variants; the escape hatch including its fail-closed values; inertness in a linked task worktree and in a non-firstmate repo; in-scope enforcement for a marked secondmate home; both stdin transports; the empty-stdout requirement; fail-open transport behavior; and the preserved `Bash` seatbelts and `Stop` guard.
+It covers the tracked Claude settings boundary that forbids a `permissions` key; the match-all Claude hook registration; denial of every work-creating delegation tool by shape; denial of twelve hypothetical future tool names that appear on no list; the observe-or-stop, plan-only, and MCP exclusions, including MCP tools measured starting agents; the retired Claude tool names; denial of a forking skill from each place Claude Code loads one and allowance of inline and unresolvable skills; a matcher that hands `Skill` to the classifier and skips only names the classifier allows whatever their input; the exactness of the plan-only exclusion against six near-miss names a substring or shorter-stem widening would release; the scout-present and scout-absent message variants; the escape hatch including its fail-closed values; inertness in a linked task worktree and in a non-firstmate repo; in-scope enforcement for a marked secondmate home; both stdin transports; the empty-stdout requirement; fail-open transport behavior; and the preserved `Bash` seatbelts and `Stop` guard.
 
 Run:
 

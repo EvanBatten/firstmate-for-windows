@@ -89,7 +89,8 @@ run_skill() {  # <skill-as-the-Skill-tool-receives-it> [env-args...]
   shift
   : > "$OUT"
   : > "$ERR"
-  jq -cn --arg skill "$skill" '{tool_name: "Skill", tool_input: {skill: $skill}}' \
+  # printf rather than jq --arg: MSYS rewrites a /name argument into a path.
+  printf '{"tool_name":"Skill","tool_input":{"skill":"%s"}}' "$skill" \
     | env "$@" FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
       "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
   return "$rc"
