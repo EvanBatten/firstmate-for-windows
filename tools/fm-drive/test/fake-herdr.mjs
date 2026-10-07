@@ -63,6 +63,7 @@ function startPrimary(s, launchLine) {
   s.launches += 1;
   s.lockSeq += 1;
   s.launchLine = launchLine;
+  writeTranscript(s);
   s.startingCalls = Number.parseInt(process.env.FAKE_HERDR_CLAUDE_START_CALLS || '0', 10);
   if (s.startingCalls > 0) return;
   const delay = Number.parseInt(process.env.FAKE_HERDR_LOCK_DELAY_MS || '0', 10);
@@ -70,6 +71,23 @@ function startPrimary(s, launchLine) {
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--lock-later', JSON.stringify({ home: s.home, lockSeq: s.lockSeq, delay })], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true });
     child.unref();
   } else writeLock(s);
+}
+
+// Shaped like Claude Code's own transcript: the instruction files and skills a session loaded ride in as
+// attachments. FAKE_CLAUDE_LOADS (paths) and FAKE_CLAUDE_SKILLS (listing lines) are JSON arrays of what it loads.
+function writeTranscript(s) {
+  if (!s.claudeConfigDir || !s.home) return;
+  const dir = join(s.claudeConfigDir, 'projects', s.home.replace(/[^A-Za-z0-9]/g, '-'));
+  mkdirSync(dir, { recursive: true });
+  const own = existsSync(join(s.home, 'CLAUDE.md')) ? [join(s.home, 'CLAUDE.md')] : [];
+  const files = [...own, ...JSON.parse(process.env.FAKE_CLAUDE_LOADS || '[]')].map((path) => ({ path, type: 'Project', content: '' }));
+  const listing = JSON.parse(process.env.FAKE_CLAUDE_SKILLS || '[]');
+  const names = listing.map((line) => line.replace(/^- /, '').split(':')[0]);
+  const lines = [
+    { type: 'attachment', cwd: s.home, attachment: { type: 'instructions', files } },
+    { type: 'attachment', cwd: s.home, attachment: { type: 'skill_listing', content: listing.join('\n'), skillCount: names.length, isInitial: true, names } },
+  ];
+  writeFileSync(join(dir, `fake-session-${s.launches}.jsonl`), lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
 }
 
 function killPrimary(s) {
