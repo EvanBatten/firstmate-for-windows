@@ -153,7 +153,7 @@ case "$CMD" in
   *"\$'"*|*'$"'*) ;;
   *)
     case "$PREFILTER" in
-      *fm-watch*) ;;
+      *[Ff][Mm]-[Ww][Aa][Tt][Cc][Hh]*) ;;
       *) exit 0 ;;
     esac
     ;;
