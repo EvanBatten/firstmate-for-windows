@@ -1724,6 +1724,29 @@ describe('grafted onboarding config and shell prompts', () => {
     );
   });
 
+  test('a user profile reached through a link keeps its real operator CLAUDE.md from Claude', () => {
+    const realProfile = tmp('real-profile');
+    mkdirSync(join(realProfile, '.claude'));
+    writeFileSync(join(realProfile, '.claude', 'CLAUDE.md'), '# operator instructions\n');
+    const userHome = join(tmp('links'), 'profile');
+    symlinkSync(realProfile, userHome, 'junction');
+    const home = join(tmp('scratch'), 'firstmate');
+    mkdirSync(home);
+    const env = { ...process.env, HOME: userHome, USERPROFILE: userHome, CLAUDE_CONFIG_DIR: '' };
+    const config = prepareClaudeConfig(join(tmp('scratch'), 'claude-config'), home, env);
+    const prepared = sessionLib.measureClaudeConfig(config, home, env);
+    const settingsPath = join(config, 'settings.json');
+    const { claudeMdExcludes, ...rest } = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    writeFileSync(settingsPath, JSON.stringify(rest));
+    const unguarded = sessionLib.measureClaudeConfig(config, home, env);
+    const realMd = join(realpathSync(realProfile), '.claude', 'CLAUDE.md');
+    assert.deepEqual(
+      { prepared, reachesRealMd: unguarded.startsWith('reaches ') && unguarded.slice('reaches '.length).split(', ').includes(realMd) },
+      { prepared: 'clean', reachesRealMd: true },
+      unguarded,
+    );
+  });
+
   test('operator skills are named in the close check whatever shape their frontmatter takes', () => {
     const userHome = tmp('user-home');
     const skills = {
