@@ -81,18 +81,60 @@ That future-name behavior is the reason the tracked matcher may exclude only exa
 ### Skills
 
 A Claude Code skill or command whose frontmatter sets `context: fork` runs as a subagent of the calling session, so a primary that invokes one through the `Skill` tool delegates exactly as an `Agent` call would.
-The guard therefore reads the skill the call names and denies the call when that skill's frontmatter sets `context: fork`.
+The guard therefore denies a `Skill` call whose skill forks, whether the skill is a file or built into Claude Code.
 An inline skill, including one that sets only `agent:` without `context: fork`, expands into the primary's own conversation and stays allowed.
 
-The `Skill` payload carries only the name, such as `{"skill":"forky"}`, so the guard reads every file Claude Code could load under that name, and any one that forks decides:
+The `Skill` payload carries only the name, such as `{"skill":"forky"}`.
+Claude Code trims surrounding whitespace from that name and then strips one leading `/`, and the guard normalizes it the same way, so `" forky"` and `"/forky"` both name `forky`.
+
+#### Built-in skills
+
+A built-in skill lives inside the Claude Code binary, so no file names it, and the guard denies the built-ins that fork by name.
+In Claude Code 2.1.292 those are `code-review` and its alias `review`, plus the bundled `claude-test-execute` and `claude-test-draft`.
+`code-review` returns `fork` from a `getContext` hook unless the session is in a mode that runs it inline, and the bundled pair registers `context: "fork"`.
+The guard also lists the bundled pair under its plugin and short spellings, `cc-plugin-claude-test:claude-test-execute` and `claude-test:execute`, with the same two spellings for `draft`.
+It compares these names case-insensitively, and it denies `code-review` even in the modes where it would run inline, because the guard cannot see the mode.
+A primary-shaped session was offered `code-review`, and a live call forked a `general-purpose` subagent that read files and ran `git` under its own `agent_id`.
+A file skill or plugin skill that reuses one of these names is denied too.
+
+This list comes from searching the 2.1.292 binary for `context:"fork"` and for `getContext(`, which found only these registrations.
+A later build can add a forking built-in under a new name, so repeat that search when Claude Code updates and add any new name to `skill_forks`.
+A `SubagentStart` hook cannot catch a built-in the list misses, because Claude Code ignores both exit 2 and a block decision from it and starts the subagent anyway.
+
+#### Skill and command files
+
+For any other name the guard reads every file Claude Code could load under that name, and any one that forks decides:
 
 - A plain name is read from `.claude/skills/<name>/SKILL.md` and `.claude/commands/<name>.md` in the home, and from `skills/<name>/SKILL.md` and `commands/<name>.md` in the Claude config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
 - A `<prefix>:<name>` is read from `<prefix>/.claude/skills/<name>/SKILL.md` in the home (a nested project directory), from `.claude/commands/<prefix>/<name>.md` in the home and the config directory, and from the installed plugin `<prefix>` under `plugins/cache/*/<prefix>/*/` in the config directory.
 
-A name that matches no file is allowed, because the guard has nothing to classify.
-That covers Claude Code's built-in skills, which live inside the binary.
-In Claude Code 2.1.292 the only built-in skills registered with `context: fork` are `execute` and `draft`, and a primary-shaped session was offered neither.
-A `SubagentStart` hook cannot close that remaining gap, because Claude Code ignores both exit 2 and a block decision from it and starts the subagent anyway.
+A name that matches no file and no forking built-in is allowed, because the guard has nothing to classify.
+
+Claude Code 2.1.292 reads frontmatter in four steps:
+
+1. It strips one byte-order mark.
+2. It opens the frontmatter only on a first line of `---` followed by nothing but whitespace.
+3. It ends the frontmatter at the first `---` after that, even mid-line.
+4. It parses the frontmatter as YAML and forks only when `context` is exactly the string `fork`.
+
+The guard follows the same delimiters but does not parse YAML.
+It treats a line that sets a `context` key, bare or quoted and at any indentation, as forking unless the value on that line is plainly something else.
+A plain or quoted scalar other than `fork`, such as `inline` or `"inline"`, is plainly something else.
+Every other value counts as forking: a folded or literal block scalar such as `>-`, a tag such as `!!str`, an anchor or alias, a double-quoted value with an escape, an unclosed quote, or an empty value.
+YAML can resolve each of those to `fork`, and live sessions forked on `>-`, `|-`, `"context": fork`, `context : fork`, `!!str fork`, a byte-order mark, and an opening `--- `.
+The cost is a rare false deny, such as an empty `context:` that YAML reads as null, or a nested key named `context`.
+
+#### What the guard does not read
+
+Claude Code also loads skills from directories passed with `--add-dir` and plugins passed with `--plugin-dir`.
+The guard reads neither, so it allows a forking skill that only one of those flags loads.
+Firstmate launches no primary with either flag.
+`bin/fm-supervision-engine-lib.sh` passes `--add-dir` only to a supervision session limited to the `Bash` and `Read` tools, which has no `Skill` tool to call.
+
+#### Decision order
+
+For a `Skill` call the guard decides whether the skill forks before it confirms the primary scope.
+The scope check starts two `git` processes, and a skill that does not fork is allowed in any scope, so an inline `Skill` call exits before it starts them.
 
 `--tool` mode carries no skill name, so `--tool Skill` is allowed.
 
@@ -422,7 +464,7 @@ A `.*` PreToolUse hook and a `SubagentStart` hook logged every payload.
 ## Automated validation
 
 `tests/fm-subagent-pretool-check.test.sh` owns the acceptance matrix and is registered in the `pure-contract-unit` family in `bin/fm-test-run.sh`.
-It covers the tracked Claude settings boundary that forbids a `permissions` key; the match-all Claude hook registration; denial of every work-creating delegation tool by shape; denial of twelve hypothetical future tool names that appear on no list; the observe-or-stop, plan-only, and MCP exclusions, including MCP tools measured starting agents; the retired Claude tool names; denial of a forking skill from each place Claude Code loads one and allowance of inline and unresolvable skills; a matcher that hands `Skill` to the classifier and skips only names the classifier allows whatever their input; the exactness of the plan-only exclusion against six near-miss names a substring or shorter-stem widening would release; the scout-present and scout-absent message variants; the escape hatch including its fail-closed values; inertness in a linked task worktree and in a non-firstmate repo; in-scope enforcement for a marked secondmate home; both stdin transports; the empty-stdout requirement; fail-open transport behavior; and the preserved `Bash` seatbelts and `Stop` guard.
+It covers the tracked Claude settings boundary that forbids a `permissions` key; the match-all Claude hook registration; denial of every work-creating delegation tool by shape; denial of twelve hypothetical future tool names that appear on no list; the observe-or-stop, plan-only, and MCP exclusions, including MCP tools measured starting agents; the retired Claude tool names; denial of a forking skill from each place Claude Code loads one and allowance of inline and unresolvable skills; every frontmatter form Claude Code reads as `fork`, and the plain inline values it does not; a skill name trimmed and slash-stripped the way Claude Code does it; the forking built-in skills by name; an inline `Skill` call that starts no `git`; a matcher that hands `Skill` to the classifier and skips only names the classifier allows whatever their input; the exactness of the plan-only exclusion against six near-miss names a substring or shorter-stem widening would release; the scout-present and scout-absent message variants; the escape hatch including its fail-closed values; inertness in a linked task worktree and in a non-firstmate repo; in-scope enforcement for a marked secondmate home; both stdin transports; the empty-stdout requirement; fail-open transport behavior; and the preserved `Bash` seatbelts and `Stop` guard.
 
 Run:
 

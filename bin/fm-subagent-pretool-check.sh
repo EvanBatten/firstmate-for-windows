@@ -90,14 +90,19 @@ tool_effect() {
   esac
 }
 
-# Whether the skill a Skill call names runs in a forked subagent. Claude Code
-# loads a plain name from the project's and the user's skills and commands, a
-# <plugin>:<name> from that plugin, and a <dir>:<name> from a nested project
-# directory or a commands subdirectory, so every file the name could resolve to
-# is read and any one that forks decides. A name no file matches, such as a
-# built-in skill, cannot be classified here (docs/subagent-guard.md "Skills").
+# Whether the skill a Skill call names runs in a forked subagent. A built-in
+# skill lives inside the Claude Code binary, so the ones that fork are listed by
+# name (docs/subagent-guard.md "Skills" says how the list was taken). Claude Code
+# loads any other plain name from the project's and the user's skills and
+# commands, a <plugin>:<name> from that plugin, and a <dir>:<name> from a nested
+# project directory or a commands subdirectory, so every file the name could
+# resolve to is read and any one that forks decides.
 skill_forks() {
   local name=$1 leaf prefix config=${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude} file
+  case "$SKILL_LOWER" in
+    code-review|review|claude-test-execute|claude-test-draft|claude-test:execute|claude-test:draft|\
+    cc-plugin-claude-test:claude-test-execute|cc-plugin-claude-test:claude-test-draft) return 0 ;;
+  esac
   leaf=${name##*:}
   if [ "$leaf" = "$name" ]; then
     set -- "$FM_ROOT/.claude/skills/$leaf/SKILL.md" "$FM_ROOT/.claude/commands/$leaf.md" \
@@ -115,28 +120,54 @@ skill_forks() {
   return 1
 }
 
+# Claude Code 2.1.292 strips one BOM, opens frontmatter on a first line of ---
+# and whitespace, ends it at the first --- anywhere, parses it as YAML, and forks
+# only when the context value is exactly the string "fork". YAML is not parsed
+# here, so a context key forks unless its value is plainly something else.
 frontmatter_forks() {  # <skill-or-command-file>
-  local line value
+  local line last=0 LC_ALL=C
   {
-    IFS= read -r line && [ "${line%$'\r'}" = --- ] || return 1
-    while IFS= read -r line; do
-      line=${line%$'\r'}
-      [ "$line" != --- ] || return 1
+    IFS= read -r line || return 1
+    line=${line#$'\xef\xbb\xbf'}
+    case "$line" in
+      ---*) line=${line#---} ;;
+      *) return 1 ;;
+    esac
+    case "$line" in
+      *[[:graph:]]*) return 1 ;;
+    esac
+    while [ "$last" -eq 0 ] && { IFS= read -r line || [ -n "$line" ]; }; do
       case "$line" in
-        context:*)
-          value=${line#context:}
-          value=${value%%#*}
-          value=${value//[[:space:]\"\']/}
-          [ "$value" != fork ] || return 0
-          ;;
+        *---*) line=${line%%---*}; last=1 ;;
       esac
+      context_line_forks "$line" && return 0
     done
     return 1
   } < "$1"
 }
 
+# Whether one frontmatter line sets a context key that YAML could read as
+# "fork". Only a same-line plain or quoted scalar can be read here; a block
+# scalar, tag, anchor, escape, empty value, or unclosed quote counts as fork.
+context_line_forks() {  # <line>
+  local key_re='^[[:space:]]*(context|"context"|'\''context'\'')[[:space:]]*:(.*)$' value
+  [[ $1 =~ $key_re ]] || return 1
+  value=${BASH_REMATCH[2]}
+  value=${value#"${value%%[![:space:]]*}"}
+  case "$value" in
+    \"*\\*) return 0 ;;
+    \"*\"*) value=${value#\"}; [ "${value%%\"*}" = fork ]; return ;;
+    \'*\'*) value=${value#\'}; [ "${value%%\'*}" = fork ]; return ;;
+    ''|[\"\'\#\>\|\!\&\*\[\{\?%\@\`]*) return 0 ;;
+  esac
+  value=${value%%[[:space:]]#*}
+  value=${value%"${value##*[![:space:]]}"}
+  [ "$value" = fork ]
+}
+
 TOOL=""
 SKILL=""
+SKILL_LOWER=""
 TOOL_SET=0
 CLAUDE_MODE=0
 
@@ -195,11 +226,16 @@ if [ "$TOOL_SET" -eq 0 ]; then
   PAYLOAD=$(cat 2>/dev/null || true)
   [ -n "$PAYLOAD" ] || exit 0
   command -v jq >/dev/null 2>&1 || exit 0
-  FIELDS=$(printf '%s' "$PAYLOAD" | jq -r '[(.tool_name // .toolName // ""), (.tool_input.skill? // .toolInput.skill? // "")] | map(tostring) | @tsv' 2>/dev/null) || exit 0
+  # Claude Code trims the skill name, then strips one leading slash.
+  FIELDS=$(printf '%s' "$PAYLOAD" | jq -r '(.tool_input.skill? // .toolInput.skill? // "" | tostring | gsub("^[\\s\\x{FEFF}]+|[\\s\\x{FEFF}]+$"; "")) as $skill
+    | [(.tool_name // .toolName // "" | tostring), $skill, ($skill | ascii_downcase)] | @tsv' 2>/dev/null) || exit 0
   FIELDS=${FIELDS%$'\r'}
   TOOL=${FIELDS%%$'\t'*}
   SKILL=${FIELDS#*$'\t'}
+  SKILL_LOWER=${SKILL#*$'\t'}
+  SKILL=${SKILL%%$'\t'*}
   SKILL=${SKILL#/}
+  SKILL_LOWER=${SKILL_LOWER#/}
 fi
 
 [ -n "$TOOL" ] || exit 0
@@ -244,6 +280,10 @@ FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pw
 FM_HOME=${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}
 STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 
+# Deciding the skill first spares an inline Skill call the scope check's git
+# processes; only a call that would be denied needs its scope confirmed.
+[ "$EFFECT" != skill ] || skill_forks "$SKILL" || exit 0
+
 # Scope to a genuine primary home, exactly as the session-start nudge and the
 # turn-end guard do. fm_primary_scope_matches accepts a plain checkout or a
 # marked secondmate home - both operate a fleet and must dispatch through it -
@@ -254,8 +294,6 @@ STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
-
-[ "$EFFECT" != skill ] || skill_forks "$SKILL" || exit 0
 
 REASON="[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work, passing --scout to both for a scout (blocked tool: $TOOL, $WHY). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception."
 
