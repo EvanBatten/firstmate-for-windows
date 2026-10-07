@@ -38,7 +38,8 @@ It says nothing about whether the resulting brief, project, or delivery mode is 
 
 `bin/fm-subagent-pretool-check.sh` is the shipped layer.
 It classifies the tool NAME by shape rather than against a fixed list.
-The tracked Claude PreToolUse matcher is `.*`, so every Claude tool name reaches the script and the script is the single owner of classification.
+The tracked Claude PreToolUse matcher is a negative lookahead over an exact-name list of everyday tools the script always allows, plus `mcp__` names, which it never classifies; every other Claude tool name reaches the script, and the script is the single owner of classification.
+The exclusion exists because each hook run costs a process start on every tool call, and `tests/fm-subagent-pretool-check.test.sh` proves the classifier allows every excluded name.
 A stem-enumerating matcher would reintroduce the fail-open-by-enumeration problem this guard exists to solve, because any future tool name outside the matcher would be silently missed before the script could inspect it.
 A tool is delegation-shaped when its normalized lowercase name contains one of these stems:
 
@@ -65,7 +66,7 @@ Both exclusion lists match the whole normalized name, never a substring, so neit
 Folding the two lists together would be the drift risk, because the observe-or-stop rationale is not true of a tool that writes.
 
 The shipped guard fires on every delegation-shaped name that reaches it, including future names that no deny list knows about yet.
-That future-name behavior is the reason the tracked matcher must match all tools and let the script filter.
+That future-name behavior is the reason the tracked matcher may exclude only exact names the script already allows, never match by stem.
 
 ## Recommended Local Claude Deny List
 
@@ -263,7 +264,8 @@ claude -p "$PROMPT" --dangerously-skip-permissions --output-format text
 The tool name delivered to PreToolUse hooks was established before any matcher was written, using a throwaway project whose only hook appended `.tool_name` to a log for matcher `.*`.
 It logged `Agent` and `Bash`.
 A second project using matcher `^(Task|Agent)$` logged `Agent` only, confirming both the live tool name and that Claude Code honors regex anchors in a PreToolUse matcher.
-The tracked matcher is now `.*`, matching the throwaway-project evidence above so any future tool name reaches the script classifier.
+Any future tool name still reaches the script classifier, because the tracked matcher only excludes exact names.
+On 2026-10-07, Claude Code 2.1.292 honored the negative-lookahead form: a throwaway project with matcher `^(?!(Read|Glob|Grep)$).*` and a `.*` control logged the lookahead entry for `Bash` and `Write` only, while the control logged `Read`, `Glob`, `Bash` and `Write`.
 
 ### Deny-key A/B, with control
 

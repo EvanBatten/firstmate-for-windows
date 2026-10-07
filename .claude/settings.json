@@ -26,7 +26,7 @@
         ]
       },
       {
-        "matcher": ".*",
+        "matcher": "^(?!(?:Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob|LS|Bash|PowerShell|BashOutput|WebFetch|WebSearch|TodoWrite|TaskCreate|TaskUpdate|TaskOutput|TaskGet|TaskList|Skill|ToolSearch)$|mcp__).*",
         "hooks": [
           {
             "type": "command",

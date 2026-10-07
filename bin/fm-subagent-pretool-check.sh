@@ -17,10 +17,12 @@
 # That deny list must not be tracked: it is Claude-only rather than
 # harness-agnostic, and tracked project settings propagate into linked
 # worktrees where they disarm legitimate crewmates.
-# The tracked Claude matcher is deliberately `.*`: a stem-enumerating matcher
-# would reintroduce the fail-open-by-enumeration problem this guard exists to
-# solve, because any future tool name outside the matcher would never reach this
-# script.
+# The tracked Claude matcher hands every tool name to this script except an
+# exact-name list of everyday tools this script always allows and MCP tools,
+# which it never classifies, so a hook process starts for none of them. It never
+# enumerates delegation stems: that would reintroduce the fail-open-by-
+# enumeration problem this guard exists to solve, because any future tool name
+# outside the matcher would never reach this script.
 # This script is therefore the single owner of classification.
 # It matches a delegation-SHAPED tool name rather than a fixed list, so a future
 # tool that ships before anyone updates a local deny list is still refused.
