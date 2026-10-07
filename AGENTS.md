@@ -204,7 +204,8 @@ Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in sec
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
 When the configured tasks-axi backlog gate applies, the spawn itself moves the work item to In flight and refuses rather than dispatching work this home has no item for, so recording the dispatch is never a separate step to remember; a manual-backend home retains the hand-editing contract in `docs/configuration.md`.
 Send a dispatch out as one `bin/fm-spawn.sh` call, with `id=repo` pairs when several tasks go together, never as concurrent spawns into one home, whose task-set lock refuses the second.
-Where `harness-adapters` names a non-blocking launch for your harness, use it and end the turn so supervision arms while the spawn runs; tell the captain a worker is running only after the spawn's result shows its `spawned <id>` line.
+Where `harness-adapters` names a non-blocking launch for your harness, use it so you stay responsive to the captain during the dispatch; supervision arms at the first turn end after a worker is published, at the latest the turn the spawn's result arrives.
+Hold any further dispatch until that result arrives, and tell the captain a worker is running only after the result shows its `spawned <id>` line.
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
