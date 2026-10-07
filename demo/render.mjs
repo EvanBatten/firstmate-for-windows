@@ -150,7 +150,7 @@ const seq = ['-framerate', String(fps), '-i', join(frameDir, 'f%05d.jpg')];
 const mp4 = join(out, 'firstmate-demo.mp4');
 ff([...seq, '-c:v', 'libx264', '-preset', 'slow', '-crf', '27', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', mp4]);
 const webp = join(out, 'demo.webp');
-ff(['-i', mp4, '-vf', 'fps=10,scale=1280:-2:flags=lanczos', '-c:v', 'libwebp_anim', '-quality', '55', '-compression_level', '2', '-loop', '0', '-an', webp]);
+ff(['-i', mp4, '-vf', 'fps=10,scale=1120:-2:flags=lanczos', '-c:v', 'libwebp_anim', '-quality', '68', '-compression_level', '2', '-loop', '0', '-an', webp]);
 ff(['-i', mp4, '-vf', 'fps=1,scale=960:-2', join(checkDir, 's%03d.jpg')]);
 const sizes = Object.fromEntries([mp4, webp].map((p) => [p, Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=size', '-of', 'csv=p=0', p]).toString().trim())]));
 const summary = { seconds: total, frames: n, renderMs, anchorsSec: Object.fromEntries(Object.entries(A).map(([k, v]) => [k, Array.isArray(v) ? v.map(s) : s(v)])), steered: title(steered), sizes };
