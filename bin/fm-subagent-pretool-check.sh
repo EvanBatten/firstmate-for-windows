@@ -17,10 +17,12 @@
 # That deny list must not be tracked: it is Claude-only rather than
 # harness-agnostic, and tracked project settings propagate into linked
 # worktrees where they disarm legitimate crewmates.
-# The tracked Claude matcher is deliberately `.*`: a stem-enumerating matcher
-# would reintroduce the fail-open-by-enumeration problem this guard exists to
-# solve, because any future tool name outside the matcher would never reach this
-# script.
+# The tracked Claude matcher hands every tool name to this script except an
+# exact-name list of everyday tools this script always allows and MCP tools,
+# which it never classifies, so a hook process starts for none of them. It never
+# enumerates delegation stems: that would reintroduce the fail-open-by-
+# enumeration problem this guard exists to solve, because any future tool name
+# outside the matcher would never reach this script.
 # This script is therefore the single owner of classification.
 # It matches a delegation-SHAPED tool name rather than a fixed list, so a future
 # tool that ships before anyone updates a local deny list is still refused.
@@ -186,16 +188,7 @@ STATE=${FM_STATE_OVERRIDE:-$FM_HOME/state}
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
-# Name the dedicated scout entry point only when this home carries it; degrade
-# to the two-step brief-then-spawn path when it does not, rather than naming a
-# script that is not there.
-if [ -f "$FM_ROOT/bin/fm-scout.sh" ]; then
-  ROUTE='first classify the work under the AGENTS.md intake contract: work already classified as a scout goes to bin/fm-scout.sh "<question>" [project], while authorized ship work and its bounded research go to bin/fm-brief.sh then bin/fm-spawn.sh'
-else
-  ROUTE='first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work'
-fi
-
-REASON="[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, $ROUTE (blocked tool: $TOOL, delegation-shaped on \"$MATCHED\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception."
+REASON="[subagent-dispatch] the firstmate primary dispatches through the fleet, not the harness's own delegation tools: work started that way has no durable fleet record, leaves every firstmate guard inert, and dies with this session. Instead, first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work, passing --scout to both for a scout (blocked tool: $TOOL, delegation-shaped on \"$MATCHED\"). Launch the session with FM_ALLOW_SUBAGENT=1 for a deliberate exception."
 
 json_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' '

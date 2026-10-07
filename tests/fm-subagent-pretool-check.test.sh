@@ -17,8 +17,7 @@ mkdir -p "$PRIMARY/bin" "$STATE"
 printf '# fixture\n' > "$PRIMARY/AGENTS.md"
 git -C "$PRIMARY" init -q
 
-BRIEF_ONLY_ROUTE='first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work'
-SCOUT_ROUTE='first classify the work under the AGENTS.md intake contract: work already classified as a scout goes to bin/fm-scout.sh "<question>" [project], while authorized ship work and its bounded research go to bin/fm-brief.sh then bin/fm-spawn.sh'
+DISPATCH_ROUTE='first classify the work under the AGENTS.md intake contract, then use bin/fm-brief.sh followed by bin/fm-spawn.sh for dispatched work, passing --scout to both for a scout'
 
 # Every delegation, scheduling, worktree, and task-tracking tool Claude Code
 # 2.1.217 offered a primary session in the observed baseline.
@@ -145,26 +144,22 @@ test_guard_never_classifies_mcp_tools() {
   pass "MCP tool names are never classified as harness delegation"
 }
 
-test_deny_message_defers_to_intake_classification() {
+test_deny_message_names_the_real_dispatch_paths() {
   local actual
+  # Firstmate ships no bin/fm-scout.sh, so a stray file of that name must not
+  # turn the deny into a route to it.
   printf '#!/usr/bin/env bash\n' > "$PRIMARY/bin/fm-scout.sh"
-  run_tool Agent && fail "scout-present case must still deny"
-  actual=$(jq -r '.systemMessage' "$ERR")
-  case "$actual" in
-    *"$SCOUT_ROUTE"*) ;;
-    *) fail "deny must reserve bin/fm-scout.sh for classified scout work: $actual" ;;
-  esac
-  case "$actual" in
-    *'investigation or diagnosis goes to bin/fm-scout.sh'*) fail "deny must not classify all investigation or diagnosis as scout work: $actual" ;;
-  esac
+  run_tool Agent && fail "Agent must still deny"
   rm -f "$PRIMARY/bin/fm-scout.sh"
-  run_tool Agent && fail "scout-absent case must still deny"
   actual=$(jq -r '.systemMessage' "$ERR")
   case "$actual" in
-    *"$BRIEF_ONLY_ROUTE"*) ;;
-    *) fail "deny must degrade to brief-then-spawn when fm-scout.sh is absent: $actual" ;;
+    *"$DISPATCH_ROUTE"*) ;;
+    *) fail "deny must route dispatch through brief then spawn, with --scout to both for a scout: $actual" ;;
   esac
-  pass "deny defers to intake classification and degrades gracefully without fm-scout.sh"
+  case "$actual" in
+    *fm-scout.sh*) fail "deny must not name bin/fm-scout.sh, which firstmate does not ship: $actual" ;;
+  esac
+  pass "deny defers to intake classification and names the dispatch path ships and scouts really use"
 }
 
 test_escape_hatch_allows_deliberate_use() {
@@ -276,16 +271,98 @@ test_missing_jq_stdin_transport_fails_open() {
   pass "missing jq for stdin transport fails open rather than denying every tool call"
 }
 
+# A plain primary checkout holding the real guard, reached the way Claude Code
+# reaches it: through the tracked settings command and CLAUDE_PROJECT_DIR.
+TRACKED="$TMP_ROOT/tracked"
+mkdir -p "$TRACKED/bin" "$TRACKED/state"
+printf '# fixture\n' > "$TRACKED/AGENTS.md"
+git -C "$TRACKED" init -q
+cp "$ROOT/bin/fm-subagent-pretool-check.sh" "$ROOT/bin/fm-primary-scope-lib.sh" "$TRACKED/bin/"
+
+# Tool names Claude Code offers a primary, plus delegation-shaped and future
+# names. The matcher may skip a name only when the classifier allows it.
+MATCHER_PROBE_TOOLS="$PRESERVED_TOOLS $DELEGATION_TOOLS Glob Grep LS MultiEdit PowerShell TodoWrite BashOutput KillShell ExitPlanMode AskUserQuestion mcp__linear__list_issues mcp__acme__spawn_agent SubagentCreate SpawnWorker Read_Agent ReadAgent Bash2 XRead"
+
+run_tracked_tool() {  # <tool> <tool-input-json>
+  local payload rc=0
+  payload=$(fm_claude_pretool_payload "$TRACKED" "$1" "$2")
+  fm_run_tracked_pretool "$TRACKED" fm-subagent-pretool-check.sh "$payload" "$OUT" "$ERR" || rc=$?
+  return "$rc"
+}
+
+test_tracked_matcher_skips_only_always_allowed_names() {
+  local tool skipped="" excluded matcher
+  for tool in $MATCHER_PROBE_TOOLS; do
+    fm_tracked_pretool_matches fm-subagent-pretool-check.sh "$tool" && continue
+    skipped="$skipped $tool"
+    expect_allow "matcher-skipped tool" "$tool"
+  done
+  for tool in Agent Task SendMessage EnterWorktree CronCreate Workflow Monitor SubagentCreate SpawnWorker ReadAgent Read_Agent XRead Bash2; do
+    fm_tracked_pretool_matches fm-subagent-pretool-check.sh "$tool" \
+      || fail "the tracked matcher must hand $tool to the classifier"
+  done
+  matcher=$(jq -r '.hooks.PreToolUse[] | select(any(.hooks[].command; contains("/bin/fm-subagent-pretool-check.sh "))) | .matcher' "$ROOT/.claude/settings.json")
+  excluded=$(printf '%s' "$matcher" | sed -n 's/^\^(?!(?:\([A-Za-z|]*\))\$|mcp__)\.\*$/\1/p')
+  [ -n "$excluded" ] || fail "the tracked matcher must be the exact-name exclusion form: $matcher"
+  for tool in ${excluded//|/ }; do
+    ! fm_tracked_pretool_matches fm-subagent-pretool-check.sh "$tool" || fail "the matcher lists $tool but still matches it"
+    expect_allow "matcher-excluded name" "$tool"
+  done
+  case " $skipped " in
+    *" Read "*) ;;
+    *) fail "the tracked matcher must skip Read, the commonest tool call: skipped [$skipped]" ;;
+  esac
+  pass "the tracked matcher skips only names the classifier allows and hands every other name to it"
+}
+
+test_tracked_command_real_payloads() {
+  local tool input expect stem rc
+  while IFS='|' read -r tool expect stem input; do
+    [ -n "$tool" ] || continue
+    rc=0
+    run_tracked_tool "$tool" "$input" || rc=$?
+    if [ "$expect" = allow ]; then
+      [ "$rc" -eq 0 ] || fail "tracked hook must allow $tool, got exit $rc: $(cat "$ERR")"
+      [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "tracked hook allow for $tool wrote output: $(cat "$OUT" "$ERR")"
+      continue
+    fi
+    [ "$rc" -eq 2 ] || fail "tracked hook must deny $tool with exit 2, got $rc"
+    [ ! -s "$OUT" ] || fail "tracked hook deny for $tool wrote stdout: $(cat "$OUT")"
+    jq -e --arg tail "(blocked tool: $tool, delegation-shaped on \"$stem\")" \
+      '.hookSpecificOutput == {hookEventName: "PreToolUse", permissionDecision: "deny"}
+       and (.systemMessage | startswith("[subagent-dispatch] ") and contains($tail))' "$ERR" >/dev/null \
+      || fail "tracked hook deny for $tool lost its shape: $(cat "$ERR")"
+  done <<'ROWS'
+Read|allow||{"file_path":"/c/fm/AGENTS.md"}
+Grep|allow||{"pattern":"fm_spawn","path":"bin","output_mode":"content"}
+Glob|allow||{"pattern":"**/*.sh"}
+Bash|allow||{"command":"ls projects data 2>&1","description":"List projects"}
+Skill|allow||{"skill":"project-management"}
+ToolSearch|allow||{"query":"select:Agent","tool_name":"Agent"}
+TaskCreate|allow||{"subject":"spawn the greeter task","description":"x"}
+mcp__claude_ai_Gmail__send_message|allow||{"to":"a@example.test"}
+Agent|deny|agent|{"description":"look","prompt":"investigate","subagent_type":"general-purpose"}
+Task|deny|task|{"description":"look","prompt":"investigate"}
+SendMessage|deny|sendmessage|{"to":"worker","message":"go"}
+EnterWorktree|deny|worktree|{"name":"x"}
+CronCreate|deny|cron|{"cron":"*/5 * * * *","prompt":"check"}
+Monitor|deny|monitor|{"command":"tail -f log"}
+ROWS
+  pass "the tracked registration classifies real Claude Code payloads exactly as the guard contract says"
+}
+
 test_guard_denies_every_currently_known_delegation_tool
 test_guard_denies_hypothetical_future_tools
 test_guard_allows_ordinary_and_observe_only_tools
 test_guard_allows_session_local_todo_tools
 test_plan_only_exclusion_is_exact_name
 test_guard_never_classifies_mcp_tools
-test_deny_message_defers_to_intake_classification
+test_deny_message_names_the_real_dispatch_paths
 test_escape_hatch_allows_deliberate_use
 test_task_worktree_and_non_firstmate_repo_are_inert
 test_secondmate_home_is_in_scope
 test_stdin_transports_and_output_shapes
 test_malformed_transport_fails_open
 test_missing_jq_stdin_transport_fails_open
+test_tracked_matcher_skips_only_always_allowed_names
+test_tracked_command_real_payloads

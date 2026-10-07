@@ -382,6 +382,46 @@ test_scripts_are_shellcheck_clean() {
   pass "bin/fm-cd-pretool-check.sh is clean under bin/fm-lint.sh"
 }
 
+# --- tracked registration over real Claude Code payloads ---------------------
+
+CD_DENY='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"[persistent-cd] a persistent top-level directory change in the primary firstmate checkout is blocked; it would move the shell out of the home so a later firstmate-owned command runs inside a project clone. Reach the target without moving the shell - use git -C <dir> or an absolute path on the command itself - or scope the cd to a subshell like (cd <dir> && ...)."}'
+
+expect_tracked_cd() {  # <expect> <payload>
+  local out="$TMP_ROOT/tracked.out" err="$TMP_ROOT/tracked.err" rc=0
+  fm_run_tracked_pretool "$PRIMARY" fm-cd-pretool-check.sh "$2" "$out" "$err" || rc=$?
+  if [ "$1" = allow ]; then
+    [ "$rc" -eq 0 ] && [ ! -s "$out" ] && [ ! -s "$err" ] \
+      || fail "tracked cd hook must allow silently, got exit $rc out=[$(cat "$out")] err=[$(cat "$err")] for $2"
+    return
+  fi
+  [ "$rc" -eq 2 ] || fail "tracked cd hook must deny with exit 2, got $rc for $2"
+  [ ! -s "$out" ] || fail "tracked cd hook deny wrote stdout: $(cat "$out")"
+  [ "$(cat "$err")" = "$CD_DENY" ] || fail "tracked cd hook deny bytes changed: $(cat "$err")"
+}
+
+test_tracked_command_real_payloads() {
+  local cmd
+  while IFS='|' read -r expect cmd; do
+    expect_tracked_cd "$expect" "$(fm_claude_pretool_payload "$PRIMARY" Bash "$(jq -cn --arg c "$cmd" '{command: $c, description: "Run it"}')")"
+  done <<'ROWS'
+allow|ls projects data 2>&1; sed -n 1,80p AGENTS.md
+allow|F=/c/fm/firstmate; (cd $F && bin/fm-tasks-axi.sh list 2>&1 | head)
+allow|git -C projects/foo status --short
+allow|rg -n 'abcd' docs
+deny|cd projects/foo
+deny|X=1 cd projects/foo
+deny|pushd projects/foo
+deny|echo before; cd "projects/foo"
+ROWS
+  for cmd in $'echo a\ncd projects/foo' $'echo a\r\ncd projects/foo'; do
+    expect_tracked_cd deny "$(fm_claude_pretool_payload "$PRIMARY" Bash "$(jq -cn --arg c "$cmd" '{command: $c}')")"
+  done
+  expect_tracked_cd allow "$(fm_claude_pretool_payload "$PRIMARY" Bash '{"description":"no command"}')"
+  expect_tracked_cd allow '{"tool_name":"Shell","tool_input":{"command":"cd projects/foo"},"conversation_id":"c1","hook_event_name":"preToolUse","cursor_version":"2026.08.11-e8db854"}'
+  expect_tracked_cd allow '[]'
+  pass "the tracked registration classifies real Claude Code payloads, and leaves Cursor's duplicate to Cursor"
+}
+
 test_full_acceptance_matrix
 test_fires_in_secondmate_home
 test_inert_in_child_worktree
@@ -395,3 +435,4 @@ test_fail_open_missing_jq_on_stdin
 test_prefilter_skips_node_without_cd_substring
 test_policy_cli_direct
 test_scripts_are_shellcheck_clean
+test_tracked_command_real_payloads

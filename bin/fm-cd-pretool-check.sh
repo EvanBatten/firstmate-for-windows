@@ -95,19 +95,20 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+case ${BASH_SOURCE[0]} in
+  */*) SCRIPT_DIR=${BASH_SOURCE[0]%/*} ;;
+  *) SCRIPT_DIR=. ;;
+esac
+
 if [ "$CMD_SET" -eq 0 ]; then
-  PAYLOAD=$(cat 2>/dev/null || true)
-  [ -n "$PAYLOAD" ] || exit 0
-  command -v jq >/dev/null 2>&1 || exit 0
+  command -v jq >/dev/null 2>&1 || { cat >/dev/null 2>&1; exit 0; }
   # shellcheck source=bin/fm-hook-host-lib.sh
-  . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/fm-hook-host-lib.sh"
+  . "$SCRIPT_DIR/fm-hook-host-lib.sh"
   # Cursor's own registration passes --cursor. Without it a Cursor-delivered
   # payload is the Claude-settings duplicate Cursor also loads, already
   # evaluated by that registration, so this copy allows without re-classifying.
-  if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
-    exit 0
-  fi
-  CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
+  fm_hook_pretool_command "$CURSOR_MODE" || exit 0
+  CMD=$FM_HOOK_COMMAND
 fi
 
 [ -n "$CMD" ] || exit 0
@@ -140,8 +141,7 @@ case "$CMD" in
     ;;
 esac
 
-SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
-FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)} || exit 0
+FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -P -- "$SCRIPT_DIR" 2>/dev/null && cd .. && pwd -P)} || exit 0
 
 # Scope to a plain, non-worktree firstmate checkout, where git-dir equals
 # git-common-dir. A crewmate/scout task worktree - the shape bin/fm-spawn.sh
@@ -155,9 +155,8 @@ FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pw
 [ -f "$FM_ROOT/AGENTS.md" ] || exit 0
 [ -d "$FM_ROOT/bin" ] || exit 0
 command -v git >/dev/null 2>&1 || exit 0
-GIT_DIR=$(git -C "$FM_ROOT" rev-parse --git-dir 2>/dev/null) || exit 0
-GIT_COMMON_DIR=$(git -C "$FM_ROOT" rev-parse --git-common-dir 2>/dev/null) || exit 0
-[ "$GIT_DIR" = "$GIT_COMMON_DIR" ] || exit 0
+GIT_DIRS=$(git -C "$FM_ROOT" rev-parse --git-dir --git-common-dir 2>/dev/null) || exit 0
+[ "${GIT_DIRS%%$'\n'*}" = "${GIT_DIRS#*$'\n'}" ] || exit 0
 
 POLICY="$FM_ROOT/bin/fm-cd-command-policy.mjs"
 command -v node >/dev/null 2>&1 || exit 0
