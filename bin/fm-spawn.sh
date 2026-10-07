@@ -1615,13 +1615,15 @@ if [ "$RELAUNCH" -eq 0 ]; then
   # tests.
   #
   # Refusing rather than waiting is the fail-closed direction: the home may be
-  # moments from removal, so there is nothing worth waiting for.
+  # moments from removal, so there is nothing worth waiting for. A sibling spawn
+  # holds the same lock while it publishes, and the lock records only the
+  # holder's pid, so the refusal names both possible holders.
   SPAWN_TASK_SET_LOCK=$(fm_task_set_lock_path "$STATE") || {
     echo "error: could not resolve the task-set lock for $STATE" >&2
     exit 1
   }
   if ! fm_lock_try_acquire "$SPAWN_TASK_SET_LOCK"; then
-    echo "error: this home's task set is locked by another operation (a forced teardown is enumerating or removing its tasks); refusing to create task $ID rather than racing it" >&2
+    echo "error: this home's task set is locked by pid ${FM_LOCK_HELD_PID:-unknown}, either another spawn publishing its task or a forced teardown enumerating or removing this home's tasks; refusing to create task $ID rather than racing it" >&2
     exit 1
   fi
   SPAWN_TASK_SET_LOCK_HELD=1
