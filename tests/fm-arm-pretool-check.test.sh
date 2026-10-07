@@ -467,14 +467,11 @@ test_failopen_garbage_stdin() {
 }
 
 test_failopen_missing_jq() {
-  local dir fakebin rc real
+  local dir fakebin rc tool
   dir=$(fm_test_tmproot fm-arm-pretool-check)
-  fakebin="$dir/fakebin"
-  mkdir -p "$fakebin"
-  local tool
+  fakebin=$(fm_fakebin "$dir")
   for tool in bash grep sed tr; do
-    real=$(command -v "$tool")
-    ln -sf "$real" "$fakebin/$tool"
+    fm_link_tool "$fakebin" "$tool" || fail "host has no $tool"
   done
   PATH="$fakebin" bash -c "printf '%s' '{\"tool_input\":{\"command\":\"bin/fm-watch-arm.sh &\"}}' | '$CHECK'" >/dev/null 2>&1
   rc=$?
@@ -483,13 +480,11 @@ test_failopen_missing_jq() {
 }
 
 test_failopen_missing_node() {
-  local dir fakebin rc real tool
+  local dir fakebin rc tool
   dir=$(fm_test_tmproot fm-arm-pretool-node)
-  fakebin="$dir/fakebin"
-  mkdir -p "$fakebin"
+  fakebin=$(fm_fakebin "$dir")
   for tool in bash dirname; do
-    real=$(command -v "$tool")
-    ln -sf "$real" "$fakebin/$tool"
+    fm_link_tool "$fakebin" "$tool" || fail "host has no $tool"
   done
   PATH="$fakebin" "$CHECK" --command 'bin/fm-watch-arm.sh &' >/dev/null 2>&1
   rc=$?
