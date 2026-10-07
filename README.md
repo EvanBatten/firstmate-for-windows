@@ -21,6 +21,12 @@
 <h3 align="center">Talk to one agent. Ship with a crew.</h3>
 
 <p align="center">
+  <img alt="One request to firstmate becomes three crewmates working in parallel, each change checked and landed on main" src="assets/demo.webp" width="100%" />
+  <br />
+  <sub>A real firstmate session with three crewmates, sped up.</sub>
+</p>
+
+<p align="center">
   <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
 </p>
 
