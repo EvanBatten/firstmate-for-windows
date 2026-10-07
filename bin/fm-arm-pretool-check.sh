@@ -44,7 +44,6 @@ set -u
 
 CMD=""
 CMD_SET=0
-BACKGROUND=""
 CLAUDE_MODE=0
 CURSOR_MODE=0
 
@@ -78,11 +77,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --background)
       [ "$#" -gt 1 ] || { echo "error: --background requires a value" >&2; exit 2; }
-      BACKGROUND=$2
       shift 2
       ;;
     --background=*)
-      BACKGROUND=${1#--background=}
       shift
       ;;
     --claude)
@@ -105,23 +102,20 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+case ${BASH_SOURCE[0]} in
+  */*) SCRIPT_DIR=${BASH_SOURCE[0]%/*} ;;
+  *) SCRIPT_DIR=. ;;
+esac
+
 if [ "$CMD_SET" -eq 0 ]; then
-  PAYLOAD=$(cat 2>/dev/null || true)
-  [ -n "$PAYLOAD" ] || exit 0
-  command -v jq >/dev/null 2>&1 || exit 0
+  command -v jq >/dev/null 2>&1 || { cat >/dev/null 2>&1; exit 0; }
   # shellcheck source=bin/fm-hook-host-lib.sh
-  . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/fm-hook-host-lib.sh"
+  . "$SCRIPT_DIR/fm-hook-host-lib.sh"
   # Cursor's own registration passes --cursor. Without it a Cursor-delivered
   # payload is the Claude-settings duplicate Cursor also loads, already
   # evaluated by that registration, so this copy allows without re-classifying.
-  if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
-    exit 0
-  fi
-  CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
-  [ -n "$CMD" ] || exit 0
-  # Kept for transport parity only.
-  # shellcheck disable=SC2034
-  BACKGROUND=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.background // .tool_input.background // false)' 2>/dev/null) || BACKGROUND=false
+  fm_hook_pretool_command "$CURSOR_MODE" || exit 0
+  CMD=$FM_HOOK_COMMAND
 fi
 
 [ -n "$CMD" ] || exit 0
@@ -165,8 +159,7 @@ case "$CMD" in
     ;;
 esac
 
-SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || exit 0
-ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd -P) || exit 0
+ROOT=$(CDPATH='' cd -P -- "$SCRIPT_DIR" 2>/dev/null && cd .. && pwd -P) || exit 0
 ACTIVE_HOME=${FM_HOME:-$ROOT}
 POLICY="$ROOT/bin/fm-arm-command-policy.mjs"
 
