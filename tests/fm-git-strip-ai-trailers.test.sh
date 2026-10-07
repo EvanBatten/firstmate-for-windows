@@ -94,7 +94,7 @@ test_hook_manager_cannot_displace_the_strip() {
   hooks="$TMP_ROOT/hooks-manager"
   "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
   target=$(with_hooks_env "$hooks" git -C "$repo" rev-parse --path-format=absolute --git-path hooks)
-  [ "$target" = "$hooks" ] || fail "a hook manager in the pane would resolve $target, not the strip dir $hooks"
+  [ "$target" -ef "$hooks" ] || fail "a hook manager in the pane would resolve $target, not the strip dir $hooks"
   mv "$target/commit-msg" "$target/commit-msg.old" 2>/dev/null &&
     fail "a hook manager could rename the strip's commit-msg aside"
   (printf '#!/bin/sh\nexit 0\n' >"$target/commit-msg") 2>/dev/null &&
