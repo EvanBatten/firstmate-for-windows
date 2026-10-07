@@ -93,8 +93,11 @@ function ancestorsOf(path) {
   }
 }
 
+// Claude Code walks the real path of its cwd, so a home or profile reached through a junction or symlink is
+// guarded under both spellings.
 function outsideDirs(home, env) {
-  return [...new Set([...ancestorsOf(dirname(home)), ...ancestorsOf(userHome(env))])];
+  const profile = userHome(env);
+  return [...new Set([dirname(home), dirname(safeReal(home)), profile, safeReal(profile)].flatMap(ancestorsOf))];
 }
 
 // claudeMdExcludes are picomatch globs over forward-slash paths; a single-character wildcard stands in for
@@ -149,22 +152,44 @@ export function measureClaudeConfig(config, home, env = process.env) {
   return reached.length ? `reaches ${reached.join(', ')}` : 'clean';
 }
 
-// A listing line names a skill and opens with its description; the description tells an operator skill
-// apart from a built-in command of the same name.
-function hostSkillListingLines(env) {
+// The scalar shapes a SKILL.md frontmatter uses: plain (with indented continuation lines), single- or
+// double-quoted, and folded or literal blocks.
+function frontmatter(raw) {
+  const lines = raw.split(/\r?\n/);
+  const fields = {};
+  if (lines[0] !== '---') return fields;
+  const indented = (i) => i < lines.length && (lines[i] === '' || /^\s/.test(lines[i]));
+  for (let i = 1; i < lines.length && lines[i] !== '---'; i++) {
+    const m = /^([\w-]+):\s*(.*?)\s*$/.exec(lines[i]);
+    if (!m) continue;
+    const [, key, rest] = m;
+    const block = /^([>|])[-+]?$/.exec(rest);
+    const body = [];
+    if (block || !/^["']/.test(rest)) while (indented(i + 1)) body.push(lines[++i].trim());
+    if (block) fields[key] = block[1] === '|' ? body.join('\n').trim() : body.filter(Boolean).join(' ');
+    else if (/^".*"$/.test(rest)) {
+      try { fields[key] = JSON.parse(rest); } catch { fields[key] = rest.slice(1, -1); }
+    } else if (/^'.*'$/.test(rest)) fields[key] = rest.slice(1, -1).replace(/''/g, "'");
+    else fields[key] = [rest, ...body.filter(Boolean)].join(' ');
+  }
+  return fields;
+}
+
+// A listing line names a skill by its directory, adds its frontmatter name when that differs, and opens with
+// its description; the description tells an operator skill apart from a built-in command of the same name.
+function hostSkills(env) {
   const dirs = [join(userHome(env), '.claude', 'skills')];
   if (env.CLAUDE_CONFIG_DIR) dirs.push(join(env.CLAUDE_CONFIG_DIR, 'skills'));
-  const lines = [];
+  const skills = [];
   for (const dir of dirs) {
-    let names = [];
-    try { names = readdirSync(dir); } catch {}
-    for (const name of names) {
-      let description;
-      try { description = readFileSync(join(dir, name, 'SKILL.md'), 'utf8').match(/^description:\s*["']?(.+?)["']?\s*$/m)?.[1]; } catch {}
-      if (description) lines.push(`- ${name}: ${description.slice(0, 40)}`);
+    for (const entry of safeList(dir)) {
+      let fields = {};
+      try { fields = frontmatter(readFileSync(join(dir, entry, 'SKILL.md'), 'utf8')); } catch {}
+      const name = fields.name || entry;
+      if (fields.description) skills.push({ name, line: `- ${entry}${name === entry ? '' : ` (${name})`}: ${fields.description.slice(0, 40)}` });
     }
   }
-  return lines;
+  return skills;
 }
 
 function isWithin(path, dir) {
@@ -189,7 +214,7 @@ export function measureLoadedContext(config, env = process.env) {
     });
   } catch {}
   if (!transcripts.length) return 'unobserved';
-  const operatorSkills = hostSkillListingLines(env);
+  const operatorSkills = hostSkills(env);
   const loaded = new Set();
   for (const transcript of transcripts) {
     for (const line of readFileSync(transcript, 'utf8').split('\n')) {
@@ -202,7 +227,7 @@ export function measureLoadedContext(config, env = process.env) {
           if (!(entry.cwd && isWithin(path, entry.cwd)) && !isWithin(path, projects)) loaded.add(path);
         }
       } else if (att?.type === 'skill_listing') {
-        for (const skill of operatorSkills) if ((att.content ?? '').includes(skill)) loaded.add(`skill ${skill.slice(2, skill.indexOf(':'))}`);
+        for (const { name, line } of operatorSkills) if ((att.content ?? '').includes(line)) loaded.add(`skill ${name}`);
       }
     }
   }
