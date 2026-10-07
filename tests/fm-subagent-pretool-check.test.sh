@@ -445,6 +445,10 @@ test_missing_jq_stdin_transport_fails_open() {
   mkdir -p "$fakebin"
   ln -sf "$bash_bin" "$fakebin/bash"
   ln -sf "$cat_bin" "$fakebin/cat"
+  # Git Bash makes ln -s a copy, and a copied MSYS binary loads its DLLs from its own directory.
+  for dll in "${bash_bin%/*}"/msys-*.dll; do
+    [ ! -e "$dll" ] || ln -sf "$dll" "$fakebin/"
+  done
   : > "$OUT"; : > "$ERR"
   printf '%s' '{"tool_name":"Agent"}' \
     | env PATH="$fakebin" FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
