@@ -55,7 +55,9 @@ fm_lock_lsof_holder() {
 # fm_lock_has_live_holder <lock> <dir>: 0 if a live process holds $lock or the
 # companion $dir open, OR if the answer is uncertain - a missing lsof or an lsof
 # error is treated as "cannot prove no holder" (fail safe: assume live). Returns
-# 1 only when lsof reports provably no holder on both.
+# 1 only when lsof reports provably no holder on both. A platform overlay that
+# cannot check liveness also sets FM_LOCK_HELD_REASON to a one-line fix a caller
+# shows where its stderr does not reach the captain.
 fm_lock_has_live_holder() {
   local lock=$1 dir=$2 status
   command -v lsof >/dev/null 2>&1 || return 0

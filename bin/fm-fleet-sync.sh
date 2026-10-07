@@ -165,6 +165,7 @@ packed_refs_lock_path() {
 # a session-start refresh (which discards fleet-sync stderr) still surfaces it.
 fetch_with_packed_refs_lock_guard() {
   local rc attempt=0 lock lock_desc
+  FM_LOCK_HELD_REASON=
   FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
   [ "$rc" -eq 0 ] && return 0
   is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
@@ -335,7 +336,9 @@ sync_project() {
 
   if ! fetch_with_packed_refs_lock_guard; then
     reason="fetch failed"
-    if [ -n "$FETCH_OUTPUT" ]; then
+    if [ -n "$FM_LOCK_HELD_REASON" ]; then
+      reason="$reason: $FM_LOCK_HELD_REASON"
+    elif [ -n "$FETCH_OUTPUT" ]; then
       reason="$reason: $(first_line "$FETCH_OUTPUT")"
     fi
     echo "$label: skipped: $reason"
