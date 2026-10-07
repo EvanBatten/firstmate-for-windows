@@ -13,7 +13,7 @@
 // procedure below stays private to this file. The CLI entry point at the bottom
 // runs only when this module is invoked directly, never on import.
 
-import path from "node:path";
+import { posix as path } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -912,8 +912,14 @@ function blessedProgram(analysis, context) {
   return true;
 }
 
+// Git for Windows rewrites a /c/... argument to C:/... before node starts, while
+// the command text keeps the shell's /c/... spelling of the same directory.
+function shellSpelling(directory) {
+  return directory.replace(/^([A-Za-z]):\//, (_, drive) => `/${drive.toLowerCase()}/`);
+}
+
 function decision(command, root, home) {
-  const context = { root: path.normalize(root), home: path.normalize(home), protectedVariables: new Set(), watcherPatterns: new Set(), watcherPids: new Set() };
+  const context = { root: path.normalize(shellSpelling(root)), home: path.normalize(shellSpelling(home)), protectedVariables: new Set(), watcherPatterns: new Set(), watcherPids: new Set() };
   const analysis = analyzeProgram(command, context);
   if (analysis.broadKill) return deny("broad-watcher-kill");
   if (analysis.error && analysis.protectedFound) return deny("unclassifiable-protected-command");
