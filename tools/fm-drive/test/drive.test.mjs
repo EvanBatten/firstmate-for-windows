@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, utimesSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
@@ -1020,6 +1020,38 @@ describe('fake-herdr end to end', () => {
     );
   });
 
+  test("the session's own CLAUDE.md is not operator context at close", () => {
+    const ownRoot = makeRoot({ 'CLAUDE.md': '# firstmate\n' });
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: ownRoot, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-own-claude-md'))], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, atClose: r.json?.fidelityAtClose?.claudeConfig },
+      { exit: 0, pass: true, atClose: 'clean' },
+      r.stderr,
+    );
+  });
+
+  test('a primary that never took a say leaves its context unobserved and the failed step keeps its exit', () => {
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
+    const trace = { feature: 'e2e-unobserved', steps: [{ say: '', until: 'file.contains:AGENTS.md:test root', budgetSec: 10 }, registerTrace('x').steps[0]] };
+    const r = runDrive(['run', writeTrace(tmp('trace'), trace)], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, vacuous: r.json?.steps[0]?.vacuous, atClose: r.json?.fidelityAtClose?.claudeConfig, error: r.json?.error },
+      { exit: 1, pass: false, vacuous: true, atClose: 'unobserved', error: undefined },
+      r.stderr,
+    );
+  });
+
+  test('a passing run whose primary context the driver cannot observe fails at close', () => {
+    const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run'), FAKE_CLAUDE_TRANSCRIPT: 'none' });
+    const r = runDrive(['run', writeTrace(tmp('trace'), registerTrace('e2e-blind'))], env);
+    assert.deepEqual(
+      { exit: r.status, pass: r.json?.pass, stepOk: r.json?.steps[0]?.ok, atClose: r.json?.fidelityAtClose?.claudeConfig, named: /claudeConfig is unobserved/.test(r.json?.error ?? '') },
+      { exit: 3, pass: false, stepOk: true, atClose: 'unobserved', named: true },
+      r.stderr,
+    );
+  });
+
   for (const claim of ['home.clean', 'wake.empty', 'file.contains:AGENTS.md:test root']) {
     test(`an empty say whose claim ${claim} held before the say it waits on fails as vacuous`, () => {
       const { env } = fakeEnv({ FM_DRIVE_ROOT: root, FAKE_HERDR_SCRIPT: join(FIXTURES, 'e2e-script.json'), FM_DRIVE_EVIDENCE: join(tmp('evidence'), 'run') });
@@ -1667,6 +1699,58 @@ describe('grafted onboarding config and shell prompts', () => {
     const unguarded = (await s.fidelity()).claudeConfig;
     const reached = unguarded.startsWith('reaches ') ? unguarded.slice('reaches '.length).split(', ') : [];
     assert.deepEqual({ prepared, reachesOperatorMd: reached.includes(operatorMd) }, { prepared: 'clean', reachesOperatorMd: true }, unguarded);
+  });
+
+  test('a home reached through a link keeps the instruction files above its real path from Claude', async () => {
+    const realParent = tmp('real-parent');
+    writeFileSync(join(realParent, 'CLAUDE.md'), '# above the real home\n');
+    mkdirSync(join(realParent, 'firstmate'));
+    const link = join(tmp('links'), 'parent');
+    symlinkSync(realParent, link, 'junction');
+    const home = join(link, 'firstmate');
+    const userHome = tmp('user-home');
+    const env = { ...process.env, HOME: userHome, USERPROFILE: userHome, CLAUDE_CONFIG_DIR: '' };
+    const config = prepareClaudeConfig(join(tmp('scratch'), 'claude-config'), home, env);
+    const prepared = sessionLib.measureClaudeConfig(config, home, env);
+    const settingsPath = join(config, 'settings.json');
+    const { claudeMdExcludes, ...rest } = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    writeFileSync(settingsPath, JSON.stringify(rest));
+    const unguarded = sessionLib.measureClaudeConfig(config, home, env);
+    const realMd = join(realpathSync(realParent), 'CLAUDE.md');
+    assert.deepEqual(
+      { prepared, reachesRealMd: unguarded.startsWith('reaches ') && unguarded.slice('reaches '.length).split(', ').includes(realMd) },
+      { prepared: 'clean', reachesRealMd: true },
+      unguarded,
+    );
+  });
+
+  test('operator skills are named in the close check whatever shape their frontmatter takes', () => {
+    const userHome = tmp('user-home');
+    const skills = {
+      'plain-op': 'name: plain-op\ndescription: Plain one-line operator skill for the probe.',
+      'block-op': 'name: block-op\ndescription: >-\n  Folded block description for the probe operator skill.',
+      'quoted-op': 'name: quoted-op\ndescription: "Say \\"hello\\" when the probe asks for it."',
+      'dirname-op': 'name: frontname-op\ndescription: Directory name differs from the frontmatter name.',
+      'builtin-twin': 'name: afk\ndescription: An operator skill that shares a built-in name.',
+    };
+    for (const [dir, front] of Object.entries(skills)) {
+      mkdirSync(join(userHome, '.claude', 'skills', dir), { recursive: true });
+      writeFileSync(join(userHome, '.claude', 'skills', dir, 'SKILL.md'), `---\n${front}\n---\nBody.\n`);
+    }
+    const config = tmp('claude-config');
+    mkdirSync(join(config, 'projects', 'p'), { recursive: true });
+    const listing = [
+      '- afk: Enter the away posture.',
+      '- block-op: Folded block description for the probe operator skill.',
+      '- dirname-op (frontname-op): Directory name differs from the frontmatter name.',
+      '- plain-op: Plain one-line operator skill for the probe.',
+      '- quoted-op: Say "hello" when the probe asks for it.',
+    ].join('\n');
+    writeFileSync(join(config, 'projects', 'p', 's.jsonl'), `${JSON.stringify({ type: 'attachment', cwd: userHome, attachment: { type: 'skill_listing', content: listing } })}\n`);
+    assert.equal(
+      sessionLib.measureLoadedContext(config, { HOME: userHome, USERPROFILE: userHome }),
+      'loaded skill block-op, skill frontname-op, skill plain-op, skill quoted-op',
+    );
   });
 
   test('a shell prompt read before a launch does not mark the launched primary dead', async () => {

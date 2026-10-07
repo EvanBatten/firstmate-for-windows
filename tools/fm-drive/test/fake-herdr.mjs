@@ -63,7 +63,7 @@ function startPrimary(s, launchLine) {
   s.launches += 1;
   s.lockSeq += 1;
   s.launchLine = launchLine;
-  writeTranscript(s);
+  s.transcriptWritten = false;
   s.startingCalls = Number.parseInt(process.env.FAKE_HERDR_CLAUDE_START_CALLS || '0', 10);
   if (s.startingCalls > 0) return;
   const delay = Number.parseInt(process.env.FAKE_HERDR_LOCK_DELAY_MS || '0', 10);
@@ -73,10 +73,13 @@ function startPrimary(s, launchLine) {
   } else writeLock(s);
 }
 
-// Shaped like Claude Code's own transcript: the instruction files and skills a session loaded ride in as
-// attachments. FAKE_CLAUDE_LOADS (paths) and FAKE_CLAUDE_SKILLS (listing lines) are JSON arrays of what it loads.
+// Shaped like Claude Code's own transcript, which appears with a session's first message: the instruction
+// files and skills it loaded ride in as attachments. FAKE_CLAUDE_LOADS (paths) and FAKE_CLAUDE_SKILLS (listing
+// lines) are JSON arrays of what it loads; FAKE_CLAUDE_TRANSCRIPT=none stands for a Claude that writes its
+// transcripts somewhere the driver does not look.
 function writeTranscript(s) {
-  if (!s.claudeConfigDir || !s.home) return;
+  if (s.transcriptWritten || !s.primary || !s.claudeConfigDir || !s.home || process.env.FAKE_CLAUDE_TRANSCRIPT === 'none') return;
+  s.transcriptWritten = true;
   const dir = join(s.claudeConfigDir, 'projects', s.home.replace(/[^A-Za-z0-9]/g, '-'));
   mkdirSync(dir, { recursive: true });
   const own = existsSync(join(s.home, 'CLAUDE.md')) ? [join(s.home, 'CLAUDE.md')] : [];
@@ -248,8 +251,9 @@ if (args[0] === '--apply') {
       } else if (text === '/exit') {
         s.exits += 1;
         killPrimary(s);
-      } else if (process.env.FAKE_HERDR_SCRIPT) {
-        const script = JSON.parse(readFileSync(process.env.FAKE_HERDR_SCRIPT, 'utf8'));
+      } else {
+        writeTranscript(s);
+        const script = process.env.FAKE_HERDR_SCRIPT ? JSON.parse(readFileSync(process.env.FAKE_HERDR_SCRIPT, 'utf8')) : {};
         const key = Object.keys(script).find((k) => text.includes(k));
         if (key) {
           const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--apply', JSON.stringify({ home: s.home, writes: script[key], sayText: text })], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true });
