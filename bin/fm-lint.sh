@@ -45,6 +45,9 @@
 # platform/windows/*.sh: in a function run from a trap it returns the status
 # from before the trap, so `false || return` succeeds there, and the overlay's
 # wrappers run inside upstream's traps.
+# The case-modification check rejects ${x,,}, ${x^^} and their one-character
+# forms in the core bin/ and bin/backends/ scripts, because stock macOS Bash
+# 3.2 parses them and then fails at run time.
 #
 # Lint defaults to two concurrency-limited workers over two stable logical
 # shards, and each worker runs ONE canonical root per ShellCheck process, so a
@@ -666,6 +669,33 @@ fm_lint_run_overlay_returns() {
   }
 }
 
+fm_lint_run_case_modification() {
+  local findings path canonical
+  local -a core_roots
+  core_roots=()
+  if [ "$EXPLICIT_PATHS" -eq 0 ]; then
+    core_roots=(bin/*.sh bin/backends/*.sh)
+  else
+    for path in "${ROOTS[@]}"; do
+      canonical=$(fm_lint_realpath "$path") || continue
+      case "$canonical" in
+        "$ROOT"/bin/*.sh|"$ROOT"/bin/backends/*.sh) core_roots+=("$canonical") ;;
+      esac
+    done
+  fi
+  [ "${#core_roots[@]}" -gt 0 ] || return 0
+  findings=$(LC_ALL=C awk '
+    /^[[:space:]]*#/ { next }
+    /\$\{[!#]?[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,|\^)/ {
+      print FILENAME ":" FNR ": case-modifying expansion needs Bash 4; stock macOS Bash 3.2 fails it at run time"
+    }
+  ' "${core_roots[@]}")
+  [ -z "$findings" ] || {
+    printf '%s\n' "$findings" >&2
+    return 1
+  }
+}
+
 JOBS=${FM_LINT_JOBS:-2}
 TELEMETRY=${FM_LINT_TELEMETRY:-}
 FAST=0
@@ -1227,6 +1257,7 @@ fi
 purity_rc=0
 fm_lint_run_backend_purity || purity_rc=$?
 fm_lint_run_overlay_returns || purity_rc=1
+fm_lint_run_case_modification || purity_rc=1
 if [ "$overall_rc" -eq 0 ] && [ "$purity_rc" -ne 0 ]; then
   overall_rc=$purity_rc
 fi

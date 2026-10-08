@@ -17,6 +17,7 @@ Do not infer this guard's scope, loop safety, or compatibility tradeoffs for tho
 | Question | Start here |
 | --- | --- |
 | What the guard enforces | [Current invariant](#current-invariant) |
+| Holding the first reply to naming missing tools | [Missing tools reach the captain](#missing-tools-reach-the-captain) |
 | Which sessions are in scope and what counts as supervision need | [Primary scope](#primary-scope) and [supervision need](#supervision-need) |
 | How the turn-end check and the mid-turn pull warning judge watcher health | [Strict watcher check at the turn boundary](#strict-watcher-check-at-the-turn-boundary) and [pull-warning verdict by supervision model](#pull-warning-verdict-by-supervision-model) |
 | Away and quiet mode | [Away and quiet mode daemon ownership](#away-and-quiet-mode-daemon-ownership) |
@@ -54,7 +55,7 @@ The guard remains a backstop.
 
 ## Guard predicates
 
-The turn-end guard checks primary scope first, then supervision need, then watcher health.
+The turn-end guard checks primary scope first, then whether the captain was told about missing tools, then supervision need, then watcher health.
 The mid-turn pull warning in `bin/fm-guard.sh` judges watcher health differently, as described under [pull-warning verdict by supervision model](#pull-warning-verdict-by-supervision-model).
 
 ### Primary scope
@@ -69,6 +70,15 @@ The marker must meet both of these conditions:
 An unmarked checkout or invalid marker falls through to the git-dir check.
 That check keeps crewmate and scout linked worktrees inert because their git dir differs from their git common dir.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory.
+
+### Missing tools reach the captain
+
+A locked session start writes the tools its bootstrap reported as `MISSING:` or `MISSING_MANUAL:` to `state/.captain-missing-tools`, one name per line, and removes the file when none are missing.
+The first turn end whose payload carries the reply text (`last_assistant_message`) consumes that file.
+When the reply leaves out any listed tool, the guard blocks once and names the tools the reply left out, so the agent tells the captain what to install and asks for consent before the turn ends.
+A payload without the reply text leaves the file for a later turn end.
+A lock-refused session start and a context re-emit do not write the file.
+On a Claude primary, the guard skips the file while another live session owns the home lock, so a lock-refused session never consumes the owner's list.
 
 ### Supervision need
 

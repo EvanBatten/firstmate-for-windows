@@ -751,6 +751,17 @@ if [ -n "$BOOT_OUT" ]; then
 else
   printf '(silent - all good)\n'
 fi
+# The turn-end guard holds the first reply of this session to naming every
+# tool listed here (docs/turnend-guard.md "Missing tools reach the captain").
+if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
+  MISSING_TOOLS=$(printf '%s\n' "$BOOT_OUT" \
+    | sed -n -e 's/^MISSING: \([^ ]*\) (install: .*/\1/p' -e 's/^MISSING_MANUAL: \([^ ]*\) (instructions: .*/\1/p')
+  if [ -n "$MISSING_TOOLS" ]; then
+    printf '%s\n' "$MISSING_TOOLS" > "$STATE/.captain-missing-tools"
+  else
+    rm -f "$STATE/.captain-missing-tools"
+  fi
+fi
 
 # --- 3. wake-drain ---------------------------------------------------------
 # The inactive-outcome startup scan runs in the deferred worker launched above,
