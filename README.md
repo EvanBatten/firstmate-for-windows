@@ -108,7 +108,6 @@ You chat with the first mate in a Herdr pane.
 Every action it takes goes through a script in `bin/`, and every crewmate reports back through a status file the watcher reads.
 
 ```mermaid
-%%{init: {'theme': 'neutral'}}%%
 flowchart TB
   C["You, the captain"] -- "chat" --> F["First mate<br/>Claude Code in a Herdr pane"]
   F -- "bin/fm-spawn.sh" --> T1["Crewmate 1<br/>Herdr tab, own worktree"]
@@ -123,7 +122,7 @@ flowchart TB
 
 A task moves through the same steps every time:
 
-1. `bin/fm-session-start.sh` takes the home's session lock and prints one digest of projects, backlog, and live crew.
+1. `bin/fm-session-start.sh` takes the home's session lock, runs bootstrap, drains the wake queue, and prints one digest of fleet state.
 2. `bin/fm-spawn.sh` creates a Treehouse worktree, opens a Herdr tab running Git Bash in it, and starts the crewmate on a written brief.
 3. `bin/fm-send.sh` writes any steering message to the task's durable inbox and rings the crewmate's tab.
 4. `bin/fm-watch.sh` blocks until a crewmate's status needs attention, then wakes the first mate with one reason line.
@@ -177,7 +176,6 @@ Seven files in `bin/` load `platform/windows/overrides.sh` through one line each
 Starting `claude` from the clone runs this chain:
 
 ```mermaid
-%%{init: {'theme': 'neutral'}}%%
 flowchart TB
   P["PowerShell in a Herdr pane<br/>claude function from claude.ps1"] --> B["Git Bash<br/>sources env.sh"]
   B --> E["claude.exe<br/>BASH_ENV=bash-env.sh"]

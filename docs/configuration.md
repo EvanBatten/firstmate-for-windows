@@ -717,25 +717,14 @@ On Windows, Claude Code is the only primary harness verified, launched through t
 
 Start the primary from the top folder of the clone, where `AGENTS.md` takes over.
 On Windows, use the overlay's `claude` function from [Install on Windows](../platform/windows/INSTALL.md#launch).
-On Linux and macOS, run one of these:
+On Linux and macOS, the harness references under [`harness-adapters`](../.agents/skills/harness-adapters/SKILL.md) own each launch:
 
-```sh
-claude
-grok --trust
-pi
-FM_PI_HARNESS=pi-signed pi-signed
-omp
-FM_OMP_HARNESS=omp omp
-codex
-opencode
-cursor-agent --trust
-```
-
-- Grok needs `--trust` once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok does the same.
-- Pi needs its project trust prompt approved once per clone so the tracked `.pi/extensions/*.ts` files load.
-- `FM_PI_HARNESS=pi-signed pi-signed` starts Pi's signed wrapper as its own harness identity.
-- `omp` auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, so naming them with `-e` as well loads each twice; use `FM_OMP_HARNESS=omp omp` when starting from inside a Claude Code pane.
-- Cursor Agent CLI loads its project hooks only with `--trust`, and headless `cursor-agent -p` has no turn-end hook, so run the primary interactively.
+- Claude Code starts with plain `claude`.
+- Grok needs launch-time `--trust`, or `/hooks-trust` inside Grok, before its project hooks load ([`grok.md`](../.agents/skills/harness-adapters/references/harness/grok.md#primary-integration)).
+- Pi auto-discovers its two tracked `.pi/extensions/` files once you approve its project trust dialog, and `FM_PI_HARNESS=pi-signed` at launch selects the signed wrapper ([`pi.md`](../.agents/skills/harness-adapters/references/harness/pi.md#primary-integration)).
+- Oh My Pi starts with plain `omp`, or `FM_OMP_HARNESS=omp omp` from inside a Claude Code pane ([`omp.md`](../.agents/skills/harness-adapters/references/harness/omp.md)).
+- Cursor Agent CLI needs `--trust` or its hooks do not load, and its stop hook does not fire in headless `cursor-agent -p` ([`cursor.md`](../.agents/skills/harness-adapters/references/harness/cursor.md)).
+- Codex and OpenCode primary integrations are described in [`codex.md`](../.agents/skills/harness-adapters/references/harness/codex.md#primary-integration) and [`opencode.md`](../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
 
 ### Harness restrictions and credentials
 
