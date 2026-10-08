@@ -1,7 +1,8 @@
 # Install on Windows
 
 [EvanBatten/firstmate-for-windows](https://github.com/EvanBatten/firstmate-for-windows) runs firstmate on Windows 11 under Git Bash, with Herdr as the runtime backend and Claude Code as the primary harness.
-Clone this fork, not upstream, and take its default branch, `main`, because `main` carries the Windows overlay on current upstream while the older `windows` branch is frozen.
+Clone this repo and take its default branch, `main`.
+The older `windows` branch is frozen.
 
 ## Turn on Developer Mode
 
@@ -70,15 +71,16 @@ Open a new PowerShell window so that it picks up the new `PATH`.
 In that window, run `claude` once, sign in, and exit it.
 
 Firstmate starts its Claude Code workers with `--dangerously-skip-permissions`, and Claude Code asks for your consent the first time it runs in that mode.
+In that mode, workers run commands and edit files without asking you first, and you take responsibility for what they do, as Claude Code's own prompt states.
 Until you accept, your first worker waits at that prompt in its Herdr tab.
-To accept it now, run `claude --dangerously-skip-permissions` once, choose **Yes, I accept**, and exit it.
+To accept it now, run `claude --dangerously-skip-permissions` once from any folder, choose **Yes, I accept**, and exit right away without giving it a task.
 If you do not want workers in that mode, set [Claude permission mode](../../docs/configuration.md#claude-permission-mode-configclaude-permission-mode) to `auto` instead.
 
 On its first start, firstmate lists any other tool it is missing and asks before it installs one.
 
 ## Clone
 
-```sh
+```powershell
 gh auth login
 git config --global user.name "Your Name"
 git config --global user.email "you@example.com"
@@ -99,14 +101,14 @@ Claude Code must also start through the Windows overlay in `platform/windows/`.
 
 1. Set Herdr to start its panes in PowerShell 7.
    Without this setting, Herdr starts Windows PowerShell 5.1 even when `pwsh` is on `PATH`.
-   Run these lines once in PowerShell.
+   Run these lines once in PowerShell 7 (`pwsh`), which writes UTF-8 without a byte order mark.
    They create `%APPDATA%\herdr\config.toml` from Herdr's default config with `default_shell = "pwsh"` turned on, and leave an existing config alone.
 
    ```powershell
    $herdrConfig = "$env:APPDATA\herdr\config.toml"
    if (-not (Test-Path $herdrConfig)) {
        New-Item -ItemType Directory -Force (Split-Path $herdrConfig) | Out-Null
-       herdr --default-config | ForEach-Object { $_ -replace '^# default_shell = ""$', 'default_shell = "pwsh"' } | Set-Content -Encoding ascii $herdrConfig
+       herdr --default-config | ForEach-Object { $_ -replace '^# default_shell = ""$', 'default_shell = "pwsh"' } | Set-Content -Encoding utf8 $herdrConfig
    }
    herdr config check
    ```

@@ -709,7 +709,22 @@ A local standalone-clone home cannot receive a primary-local commit through that
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and omp are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
+claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and omp are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only.
+The primary session supports Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, and Cursor Agent CLI.
+On Windows, Claude Code is the only primary harness verified, launched through the overlay in [Install on Windows](../platform/windows/INSTALL.md#launch).
+
+### Launch a primary session
+
+Start the primary from the top folder of the clone, where `AGENTS.md` takes over.
+On Windows, use the overlay's `claude` function from [Install on Windows](../platform/windows/INSTALL.md#launch).
+On Linux and macOS, the harness references under [`harness-adapters`](../.agents/skills/harness-adapters/SKILL.md) own each launch:
+
+- Claude Code starts with plain `claude`.
+- Grok needs launch-time `--trust`, or `/hooks-trust` inside Grok, before its project hooks load ([`grok.md`](../.agents/skills/harness-adapters/references/harness/grok.md#primary-integration)).
+- Pi auto-discovers its two tracked `.pi/extensions/` files once you approve its project trust dialog, and `FM_PI_HARNESS=pi-signed` at launch selects the signed wrapper ([`pi.md`](../.agents/skills/harness-adapters/references/harness/pi.md#primary-integration)).
+- Oh My Pi starts with plain `omp`, or `FM_OMP_HARNESS=omp omp` from inside a Claude Code pane ([`omp.md`](../.agents/skills/harness-adapters/references/harness/omp.md)).
+- Cursor Agent CLI needs `--trust` or its hooks do not load, and its stop hook does not fire in headless `cursor-agent -p` ([`cursor.md`](../.agents/skills/harness-adapters/references/harness/cursor.md)).
+- Codex and OpenCode primary integrations are described in [`codex.md`](../.agents/skills/harness-adapters/references/harness/codex.md#primary-integration) and [`opencode.md`](../.agents/skills/harness-adapters/references/harness/opencode.md#primary-integration).
 
 ### Harness restrictions and credentials
 

@@ -16,6 +16,7 @@ Herdr provides the terminal session while Treehouse continues to provide task wo
 | What you want to know | Start here |
 | --- | --- |
 | Install Herdr and select it | [Setup](#setup) |
+| How Herdr differs on Windows | [On Windows](#on-windows) |
 | Why a command ran on a different `herdr` client | [Client selection](#client-selection) |
 | Where task tabs appear and how to watch them | [Watching and task containers](#watching-and-task-containers) |
 | The one-task workspaces, their setting, and their cleanup | [Presentation spaces](#presentation-spaces) |
@@ -55,6 +56,16 @@ A remote second-mate agent is the one case with no choice: it always runs on Her
 Herdr is also auto-detected when the primary runs natively under `HERDR_ENV=1` and is not inside tmux.
 A tmux pane nested inside Herdr resolves to tmux because the innermost multiplexer wins.
 An auto-detected Herdr spawn stays silent, matching the verified tmux default path.
+
+### On Windows
+
+On Windows, Herdr is the runtime backend, and [Install on Windows](../platform/windows/INSTALL.md) owns its setup.
+Herdr there is a native Windows program, so [`platform/windows/herdr.sh`](../platform/windows/herdr.sh) changes four things about how Firstmate talks to it:
+
+- Every `herdr` call runs with MSYS argument conversion off, so a typed `/exit` reaches the pane unchanged, and only a `--cwd` value is converted.
+- A new task tab starts Git Bash on [`platform/windows/pane-rc.sh`](../platform/windows/pane-rc.sh) through the socket's `layout.apply`, instead of typing a command into the PowerShell pane Herdr opens by default.
+- Herdr reports its socket as a drive path such as `C:\...\herdr.sock`, which is folded to `/c/...` before use.
+- `pane get` does not report a pane's working directory on Windows, so the pane's prompt prints it as an OSC 9;9 sequence that the adapter reads instead.
 
 ### Spawn preflight and CI
 
