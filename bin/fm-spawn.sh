@@ -21,7 +21,9 @@
 #   guessed posture. A
 #   ship or scout spawn also refuses leftover `{TASK}` / `{FIRSTMATE_SPEC}`
 #   placeholders, an empty Task, an incomplete pair of Task subsections, or a
-#   `## Captain's intent` line opening with a Captain label or address.
+#   `## Captain's intent` line opening with a Captain label or address. A ship
+#   spawn refuses a project whose git resolves no commit author or committer
+#   identity, before any endpoint exists, so no worker invents one.
 #   Every ship or scout spawn renders `launch-brief.md`; for a no-mistakes ship
 #   it also carries the current `--intent` contract and the extracted captain
 #   intent. A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
@@ -3135,6 +3137,16 @@ if [ "$KIND" = ship ]; then
     echo "error: --yolo on is refused for $ID: $PROJ_NAME is registered forge=gerrit, where yolo is inactive because a Code-Review+2 is a positive attributed claim that a named human approved and firstmate must not manufacture one (captain's decision 2026-09-15); spawn with --yolo off" >&2
     exit 1
   fi
+  # A ship worker commits, and when git resolves no identity the only way past
+  # that failure is an author the worker makes up. Task worktrees are linked
+  # worktrees of the project, so the project resolves the same identity.
+  for ident in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
+    if ! ident_err=$(git -C "$PROJ_ABS" var "$ident" 2>&1 >/dev/null); then
+      ident_err=$(printf '%s\n' "$ident_err" | sed -n 's/^fatal: //p' | head -n 1)
+      echo "error: $ID cannot launch: git in $PROJ_ABS resolves no commit identity (${ident_err:-git var $ident failed}), so the worker's first commit would fail; the captain sets one with \`git config --global user.name \"Your Name\"\` and \`git config --global user.email you@example.com\` (or without --global inside the project), then spawn again" >&2
+      exit 1
+    fi
+  done
   # The registry holds the captain's standing posture, so dropping below it is
   # allowed (a current explicit captain instruction wins) but never silent. An
   # unregistered project resolves to the same no-mistakes standing default, which

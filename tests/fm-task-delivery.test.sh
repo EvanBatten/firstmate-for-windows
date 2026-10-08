@@ -1453,6 +1453,38 @@ EOF
   pass "fm-spawn: a registry forge token the parser refuses stops the launch, reason included"
 }
 
+# A worker whose git resolves no commit identity fails its first commit, and the
+# only way past that is an identity nobody chose for it. The spawn refuses before
+# any endpoint exists, naming the remedy only the captain can apply.
+# The case drops the fixture identity, and user.useConfigOnly stops git guessing
+# one from the host name, so the refusal does not depend on this host.
+test_spawn_refuses_a_project_without_a_git_identity() {
+  local rec home proj fakebin out status
+  rec=$(make_home identity)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+  git -C "$proj" config user.useConfigOnly true || fail "could not configure the identity fixture"
+  write_brief "$home" identity-none-a1 direct-PR
+  out=$(unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL EMAIL
+    export GIT_CONFIG_GLOBAL=/dev/null
+    run_spawn "$home" "$fakebin" identity-none-a1 "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a spawn launched a worker whose git has no commit identity"
+  assert_contains "$out" "identity-none-a1 cannot launch: git in $proj resolves no commit identity" \
+    "the spawn did not refuse a project without a git identity"
+  assert_contains "$out" 'git config --global user.email' "the refusal did not name the captain's remedy"
+  assert_absent "$home/state/identity-none-a1.meta" "the refused spawn still recorded a task"
+
+  git -C "$proj" config user.name 'Identity Fixture'
+  git -C "$proj" config user.email identity@example.invalid
+  write_brief "$home" identity-set-a2 direct-PR
+  out=$(unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL EMAIL
+    run_spawn "$home" "$fakebin" identity-set-a2 "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" "resolves no commit identity" "a configured identity was refused"
+  pass "fm-spawn: a ship spawn refuses a project whose git resolves no commit identity"
+}
+
 # Promotion renders the same single owner an ordinary brief does, so a promoted
 # worker on a bound forge must receive that forge's contract rather than the PR
 # one. Promotion decides the mode and yolo itself, but the forge is the project's
@@ -1634,6 +1666,7 @@ test_spawn_requires_the_brief_to_carry_the_registered_forge
 test_spawn_requires_the_brief_to_carry_the_selected_branch
 test_spawn_notices_a_ship_branch_against_the_registry_prefix
 test_spawn_refuses_a_registry_forge_it_cannot_read
+test_spawn_refuses_a_project_without_a_git_identity
 test_promotion_carries_the_forge_binding
 test_spawn_and_promote_require_filled_task_subsections
 test_project_mode_resolves_branch_prefix

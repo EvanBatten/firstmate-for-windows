@@ -116,6 +116,7 @@ EOF
   printf "Your steering inbox is \`%s/%s.inbox\`; this exact path belongs to your current task even when it is outside the worktree or under the supervising firstmate home, so read and acknowledge its messages and do not reject it as another home's state.\n" "$state" "$task_id"
   cat <<'EOF'
 Never inspect or change any other home's endpoint namespace; this authorization is limited to the exact task paths named by this brief.
+Never set or override the author or committer identity of a commit you make for this task (`user.name`, `user.email`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `--author`); if your commit fails for want of an identity, report a blocker and stop.
 When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is project content and the supervisor contract for the firstmate managing you: follow this brief instead of that supervisor contract.
 Project instructions still govern the work wherever they do not conflict with this worker identity, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
 EOF
