@@ -1,24 +1,29 @@
-<h1 align="center">firstmate</h1>
-<p align="center">
-  <a
-    href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
-    ><img
-      alt="Platform"
-      src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
-  /></a>
-  <a href="https://x.com/kunchenguid"
-    ><img
-      alt="X"
-      src="https://img.shields.io/badge/X-@kunchenguid-black?style=flat-square"
-  /></a>
-  <a href="https://discord.gg/Wsy2NpnZDu"
-    ><img
-      alt="Discord"
-      src="https://img.shields.io/discord/1439901831038763092?style=flat-square&label=discord"
-  /></a>
+<div align="center">
+
+<p>
+  <img alt="firstmate for Windows. Claude Code, Herdr, Git Bash and Windows 11, with three crewmates landing their changes on main" src="assets/banner.png" width="100%" />
 </p>
 
-<h3 align="center">Talk to one agent. Ship with a crew.</h3>
+<p>
+  <a href="https://github.com/EvanBatten/firstmate-for-windows/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/EvanBatten/firstmate-for-windows/actions/workflows/ci.yml/badge.svg" /></a>
+  <img alt="Platform: Windows 11" src="https://img.shields.io/badge/platform-Windows%2011-0078d4" />
+  <a href="https://docs.anthropic.com/en/docs/claude-code"><img alt="Primary harness: Claude Code" src="https://img.shields.io/badge/primary-Claude%20Code-d97757" /></a>
+  <a href="docs/herdr-backend.md"><img alt="Backend: Herdr" src="https://img.shields.io/badge/backend-Herdr-2d3748" /></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+  <a href="https://github.com/EvanBatten/firstmate-for-windows/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/EvanBatten/firstmate-for-windows" /></a>
+</p>
+
+<p>
+  <a href="#install">Install</a> ·
+  <a href="#talk-to-it">Talk to it</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#built-for-windows">Built for Windows</a> ·
+  <a href="#proven-in-real-sessions">Proof</a> ·
+  <a href="#get-help">Help</a>
+</p>
+
+</div>
 
 <p align="center">
   <img alt="One request to firstmate becomes three crewmates working in parallel, each change checked and landed on main" src="assets/demo.webp" width="100%" />
@@ -26,121 +31,40 @@
   <sub>A real firstmate session with three crewmates, sped up.</sub>
 </p>
 
-<p align="center">
-  <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
-</p>
-
 ## What it is
 
-You can run one coding agent easily.
-But the moment you want three project tasks done in parallel - fixes, investigations, plans, audits - you become a tab-juggler: babysitting sessions, copy-pasting context between repos, forgetting which terminal had the failing test.
+firstmate runs a crew of coding agents for you on Windows 11.
+You talk to one Claude Code session, the first mate.
+It starts each task as a crewmate in its own Herdr tab and its own git worktree, watches the crew without spending tokens, and brings you back finished pull requests, approved local merges, and investigation reports.
 
-firstmate flips the model.
-You talk to a single agent - the first mate - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
-For larger fleets, you can opt in to persistent secondmates: second mates that are still ordinary direct reports, but run from their own isolated firstmate homes on this machine or another SSH-reachable host.
+There is no app to install.
+The cloned repo is the product: [`AGENTS.md`](AGENTS.md) is the first mate's contract, `.agents/skills/` holds the procedures it loads, and `bin/` holds the scripts it runs.
+`platform/windows/` adapts those scripts to Git Bash, Windows paths, and a native Herdr.
 
-firstmate is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
-firstmate is an agent distro for running a crew of agents.
-An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
-There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
-Launching a supported harness inside it for your primary session instantiates your first mate - and makes you the captain.
+## Install
 
-## Features
+You need Windows 11 with Developer Mode on, and these tools on `PATH`: Git for Windows (for Git Bash), PowerShell 7, the GitHub CLI, Node.js, jq, Claude Code, Herdr, and Treehouse 2.0.1.
+[Install on Windows](platform/windows/INSTALL.md) has the `winget` and download command for each one.
 
-- **One liaison** - you talk only to the first mate; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
-- **A visible crew** - every crewmate works in its own tmux window or Herdr tab, or in an experimental Zellij tab, experimental cmux workspace, or experimental Orca terminal you can watch or type into; the first mate reconciles.
-- **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, or an Orca-managed worktree when `backend=orca`, so parallel work on one repo never collides.
-- **Two task shapes** - ship tasks deliver authorized changes; scout tasks leave standalone investigation reports when the intake contract warrants separate research.
-- **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` merge-autonomy flag, an optional `branch=<prefix>` override for the default `fm/` ship-branch prefix, and an optional `forge=gerrit` binding under which the worker publishes a Gerrit change instead of opening a pull request.
-- **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, either locally or as a whole home on an SSH-reachable host, with guarded updates and recovery that never turns an unavailable remote route into a local replacement.
-- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
-- **Optional Relay** - opt in with one local `.env` pairing token so firstmate can answer your public mentions on X and Discord alike, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-Relay behavior; a final reply promised in a thread becomes durable state that is reconciled from disk, so a restart or a compacted conversation cannot lose it; dry-run preview records would-be replies and dismissals locally before go-live.
-- **Strict project boundary** - the first mate is read-only over your projects except for the narrow guarded and captain-approved operations authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), including fleet sync's guarded safe branch pruning; crewmates make every other project change behind the configured merge authority.
-- **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); the next session reconciles after a restart, while ordinary supervision recovers confirmed-dead secondmate agents without waiting for one.
-
-Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
-
-## Quick Start
-
-### Requirements
-
-- A verified primary agent harness: Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, or Cursor Agent CLI.
-- Git and the GitHub CLI, authenticated through `gh auth login`.
-- The CLI and dependencies for your selected runtime backend; tmux is the reference default.
-
-The first mate detects and offers to install supported missing tools after you approve.
-Backend-specific setup is linked in [Documentation](#documentation).
-
-### Recommended harnesses
-
-**Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary firstmate session, with `pi-signed` supported as Pi's distinct signed-wrapper identity.
-Claude Code uses a tracked Stop hook for tokenless watcher re-arm and rewake, Grok uses background-notify wake cycles, and Pi uses its tracked primary watcher extension.
-All three have verified turn-end guard paths when launched with their documented setup.
-Pick whichever one matches your subscription and workflow.
-
-Oh My Pi (`omp`), a Pi fork, is verified as a primary with the same extension-owned watcher model as Pi and a stronger turn-end guard: its blocking `session_stop` hook compels a continuation instead of requesting one.
-Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
-Cursor Agent CLI is verified as a primary too, using a tracked project-scope `.cursor/hooks.json` whose `stop` hook parks on the watcher between turns, closest in shape to Claude Code's.
-Launch it with `--trust`, or none of its project hooks load; it also has no turn-end hook in headless `cursor-agent -p`, so run the primary session interactively.
-
-### Install and launch
-
-On Windows, follow [Install on Windows](platform/windows/INSTALL.md) instead.
-It lists the tools to install before you clone and the Herdr launch steps.
+Then clone with symlinks on:
 
 ```sh
 gh auth login
-git clone https://github.com/kunchenguid/firstmate
+git clone -c core.symlinks=true https://github.com/EvanBatten/firstmate-for-windows firstmate
 cd firstmate
 ```
 
-Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
+Then follow the [launch steps](platform/windows/INSTALL.md#launch) once to load the overlay's `claude` function in Herdr's PowerShell.
+After that, every launch is `herdr`, then `claude` from the clone.
+On its first start, the first mate lists any tool it is still missing and asks before it installs one.
 
-**Claude Code**
+## Talk to it
 
-```sh
-claude
-```
-
-**Grok**
-
-```sh
-grok --trust
-```
-
-**Pi**
-
-```sh
-pi
-# or, when the signed wrapper is installed
-FM_PI_HARNESS=pi-signed pi-signed
-```
-
-**Oh My Pi**
-
-```sh
-omp
-# or, when starting from inside a Claude Code pane
-FM_OMP_HARNESS=omp omp
-```
-
-Start `omp` with this checkout as its working directory: it auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, and naming them with `-e` as well would load each twice.
-
-For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
-For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
-The `/calm` toggle on Pi, and on Claude Code behind its default-off early-access function-hooks flag, hides supported transcript chrome, including canonically classified Firstmate operational user rows, and uses a Calm-only animated working boat during active runs while preserving all model context and session data.
-Calm changes only presentation, not the user-role delivery, ordering, authority, persistence, or exports of the operational inputs it hides.
-The preference persists for the effective Firstmate home, and toggling it off restores ordinary rendering.
-[Calm's current behavior and supported limits](docs/calm.md) are separate from its [version-scoped maintainer evidence](docs/calm-mode-feasibility.md).
-Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning effort for the supervision branch alone, from the eligible models and thinking levels Pi itself reports, and with no pin the branch normally follows your own conversation's model and effort; see the [configuration schema](docs/configuration.md#pi-supervision-branch-model-and-effort-configsupervision-branch-model-configsupervision-branch-effort).
-
-### Talk to it
-
-```sh
+```text
 > ahoy! look at my github project xyz, then fix the flaky login test and add dark mode
 
-# firstmate checks its toolchain (asking your consent before installing anything),
-# clones the project under projects/ and spawns two isolated workers in the active backend.
+# The first mate checks its tools, clones xyz under projects/,
+# and starts two crewmates, each in its own Herdr tab and worktree.
 # Minutes later:
 
   PR ready for review, captain: https://github.com/you/xyz/pull/42
@@ -149,118 +73,201 @@ Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning
 > alright merge it
 ```
 
-### More backends
+You never type into a crewmate's tab unless you want to.
+The first mate brings you only what needs your word: a review, a merge, a design choice, or a blocker.
 
-Setup guides for tmux (the default) and every other supported backend (herdr, zellij, Orca, cmux) are linked in [Documentation](#documentation) below.
+## Features
 
-## How It Works
+<img src="assets/icons/proven.svg" width="14" height="14" alt="" /> marks a feature that a recorded real session proved on Windows.
+<img src="assets/icons/unproven.svg" width="14" height="14" alt="" /> marks a feature the code has that no Windows session has proved yet, with the issue that tracks it.
 
+- <img src="assets/icons/proven.svg" width="14" height="14" alt="Proven" /> **One liaison.** You talk only to the first mate, which dispatches, supervises, and brings you only the decisions that are yours.
+  Proven by the [`whole-session`](tools/fm-drive/traces/whole-session.json) drive.
+- <img src="assets/icons/proven.svg" width="14" height="14" alt="Proven" /> **A visible crew.** Each crewmate works in its own Herdr tab, running Git Bash, that you can watch or type into.
+  Proven by the [`ship-local`](tools/fm-drive/traces/ship-local.json) drive.
+- <img src="assets/icons/proven.svg" width="14" height="14" alt="Proven" /> **Disposable worktrees.** Each task runs in a clean [Treehouse](platform/windows/INSTALL.md#install-the-tools) git worktree, so parallel work on one repo never collides.
+  Proven by the [`whole-session`](tools/fm-drive/traces/whole-session.json) drive, three crewmates on one repo.
+- <img src="assets/icons/proven.svg" width="14" height="14" alt="Proven" /> **Ship and scout tasks.** A ship task delivers a change, and a scout task leaves a written report at `data/<id>/report.md` before its worktree goes.
+  Proven by the [`scout-report`](tools/fm-drive/traces/scout-report.json) drive.
+- <img src="assets/icons/unproven.svg" width="14" height="14" alt="Not yet proven" /> **Project modes.** Each project ships through `no-mistakes`, `direct-PR`, or `local-only`, and `+yolo` lets the first mate merge green work itself.
+  The `pr-land` and `ship-local` drives prove `direct-PR` and `local-only` landing, and [#84](https://github.com/EvanBatten/firstmate-for-windows/issues/84) tracks the rest.
+- <img src="assets/icons/unproven.svg" width="14" height="14" alt="Not yet proven" /> **Second mates.** Persistent second mates run from their own isolated firstmate homes.
+  No Windows session has proved it yet, see [#89](https://github.com/EvanBatten/firstmate-for-windows/issues/89).
+- <img src="assets/icons/proven.svg" width="14" height="14" alt="Proven" /> **Tokenless supervision.** A bash watcher sleeps on the crew and wakes the first mate only when something needs it, and Claude Code's Stop hook re-arms it at every turn end.
+  Proven by the [`watcher-wake`](tools/fm-drive/traces/watcher-wake.json) drive.
+- <img src="assets/icons/unproven.svg" width="14" height="14" alt="Not yet proven" /> **Relay.** Relay is an opt-in bridge that lets the first mate answer public mentions on X and Discord.
+  The maintainer's Windows machine cannot verify it yet, see [#97](https://github.com/EvanBatten/firstmate-for-windows/issues/97).
+- <img src="assets/icons/unproven.svg" width="14" height="14" alt="Not yet proven" /> **A strict project boundary.** The first mate reads your projects but never changes them outside its guarded paths, and crewmates make every change.
+  [#83](https://github.com/EvanBatten/firstmate-for-windows/issues/83) tracks the session-level proof.
+- <img src="assets/icons/proven.svg" width="14" height="14" alt="Proven" /> **Restart-proof.** All state lives on disk and in Herdr, so a new session takes the lock, finds the crew from its records, and carries on.
+  Proven by the [`restart-primary`](tools/fm-drive/traces/restart-primary.json) drive.
+
+## How it works
+
+You chat with the first mate in a Herdr pane.
+Every action it takes goes through a script in `bin/`, and every crewmate reports back through a status file the watcher reads.
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart TB
+  C["You, the captain"] -- "chat" --> F["First mate<br/>Claude Code in a Herdr pane"]
+  F -- "bin/fm-spawn.sh" --> T1["Crewmate 1<br/>Herdr tab, own worktree"]
+  F -- "bin/fm-spawn.sh" --> T2["Crewmate 2<br/>Herdr tab, own worktree"]
+  F -. "bin/fm-send.sh<br/>steering inbox" .-> T1
+  T1 -- "state/&lt;id&gt;.status" --> W["bin/fm-watch.sh<br/>tokenless watcher"]
+  T2 -- "state/&lt;id&gt;.status" --> W
+  W -- "wakes on actionable status" --> F
+  F -- "your go" --> L["Land<br/>fm-pr-merge.sh or fm-merge-local.sh"]
+  L --> D["bin/fm-teardown.sh<br/>refuses unlanded work"]
 ```
-            you (the captain)
-                  │  chat: requests, decisions, "merge it"
-                  ▼
- ┌─────────────────────────────────────┐
- │ firstmate            (this repo)    │
- │ reads projects/ + firstmate routes  │
- │ writes guarded backlog/briefs/state │
- └──┬──────────────┬───────────────┬───┘
-    │ backend sends / status files │
-    ▼              ▼               ▼
- ┌────────┐   ┌────────┐      ┌────────┐
- │fm-task1│   │fm-task2│  ... │fm-taskN│   tmux windows, herdr/zellij tabs, cmux workspaces, or Orca terminals
- │crewmate│   │crewmate│      │crewmate│   one autonomous agent each
- └───┬────┘   └───┬────┘      └───┬────┘
-     ▼            ▼               ▼
-  treehouse worktree, Orca worktree, or isolated secondmate home
-     │
-     ├─ ship: project mode ► PR/local merge ► teardown
-     │
-     └─ scout: report at data/<id>/report.md ► decision inventory ► relay findings ► teardown
+
+A task moves through the same steps every time:
+
+1. `bin/fm-session-start.sh` takes the home's session lock and prints one digest of projects, backlog, and live crew.
+2. `bin/fm-spawn.sh` creates a Treehouse worktree, opens a Herdr tab running Git Bash in it, and starts the crewmate on a written brief.
+3. `bin/fm-send.sh` writes any steering message to the task's durable inbox and rings the crewmate's tab.
+4. `bin/fm-watch.sh` blocks until a crewmate's status needs attention, then wakes the first mate with one reason line.
+5. `bin/fm-pr-merge.sh` merges an approved PR and confirms GitHub reports it landed, and `bin/fm-merge-local.sh` fast-forwards main for a `local-only` task.
+6. `bin/fm-teardown.sh` returns the worktree and closes the tab, and it refuses while the task has uncommitted or unlanded work.
+
+[docs/architecture.md](docs/architecture.md) covers the supervision engine, worktree isolation, project modes, and self-update in full.
+
+## Built for Windows
+
+The shared scripts in `bin/` are written for a Unix shell.
+Seven files in `bin/` load `platform/windows/overrides.sh` through one line each, and `platform/windows/env.sh` sets up every Git Bash the overlay reaches.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="assets/icons/launch.svg" width="28" height="28" alt="" /><br />
+      <b>Launch through Git Bash</b><br />
+      <code>claude.ps1</code> wraps <code>claude</code> in your PowerShell profile, so the session starts from a Git Bash with <code>env.sh</code> sourced and can own the session lock.
+    </td>
+    <td width="33%" valign="top">
+      <img src="assets/icons/panes.svg" width="28" height="28" alt="" /><br />
+      <b>Git Bash in every Herdr pane</b><br />
+      <code>herdr.sh</code> lays out each new tab with Git Bash on <code>pane-rc.sh</code> instead of typing into PowerShell, and turns off MSYS path rewriting for every Herdr call.
+    </td>
+    <td width="33%" valign="top">
+      <img src="assets/icons/paths.svg" width="28" height="28" alt="" /><br />
+      <b>One spelling per path</b><br />
+      <code>path.sh</code> makes <code>pwd</code> answer in the same spelling <code>cygpath -u</code> gives, so <code>/tmp/x</code> and its <code>%TEMP%</code> twin compare equal.
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="assets/icons/symlink.svg" width="28" height="28" alt="" /><br />
+      <b>Real symlinks</b><br />
+      <code>env.sh</code> sets <code>MSYS=winsymlinks:nativestrict</code>, and <code>symlinks.sh</code> repairs a clone made without <code>core.symlinks=true</code> on every launch.
+    </td>
+    <td width="33%" valign="top">
+      <img src="assets/icons/process.svg" width="28" height="28" alt="" /><br />
+      <b>Both process trees</b><br />
+      <code>proc.sh</code> walks the MSYS and Win32 process trees together, because a bash that a native program starts reports parent pid 1.
+    </td>
+    <td width="33%" valign="top">
+      <img src="assets/icons/lock.svg" width="28" height="28" alt="" /><br />
+      <b>Private by folder ACL</b><br />
+      Git Bash ignores <code>chmod</code>, so <code>env.sh</code> checks that the home's ACL names only you, SYSTEM, and Administrators, and <code>private-root.sh apply</code> fixes one that does not.
+    </td>
+  </tr>
+</table>
+
+Starting `claude` from the clone runs this chain:
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart LR
+  P["PowerShell in a Herdr pane<br/>claude function from claude.ps1"] --> B["Git Bash<br/>sources env.sh"]
+  B --> E["claude.exe<br/>with BASH_ENV=bash-env.sh"]
+  E --> S["bin/ scripts<br/>load overrides.sh"]
+  S --> H["herdr.sh<br/>native Herdr calls"]
 ```
 
-You chat with the first mate.
-It routes each request to a crewmate in its own session endpoint and git worktree, supervises the fleet with a zero-token event-driven watcher, and brings you finished PRs, approved local merges, or investigation reports.
-Optional secondmates extend this to persistent local or whole-home remote second mates, dispatch profiles let you steer which harness handles which task, and opt-in Relay lets the same fleet answer public mentions.
-`codex-app` is not a runtime backend yet; [docs/codex-app-backend.md](docs/codex-app-backend.md) owns the Codex App boundary.
+## Proven in real sessions
 
-Full architecture - the supervision engine, worktree isolation, secondmates, dispatch profiles, project modes, optional Relay, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
+Each trace below is a script of captain messages in plain English.
+`node tools/fm-drive/drive.mjs run <trace.json>` plays it against a real first mate in a throwaway home on Windows, and the run passes only when the home's own records show each claim within its time budget.
+All nine passed at commit `90fa7f8f`, recorded in [`behaviors.tsv`](.agents/skills/verify-firstmate/behaviors.tsv).
 
-## Built-in skills
+| Trace | What the captain asks for, and what must become true |
+|---|---|
+| [`register`](tools/fm-drive/traces/register.json) | Add a project, and the session start runs once |
+| [`ship-local`](tools/fm-drive/traces/ship-local.json) | One change in a visible tab, checked, landed on main, cleaned up |
+| [`steer`](tools/fm-drive/traces/steer.json) | A new requirement mid-task reaches the crewmate and lands in its change |
+| [`watcher-wake`](tools/fm-drive/traces/watcher-wake.json) | The first mate ends its turn, and the crewmate's finish wakes it |
+| [`pr-land`](tools/fm-drive/traces/pr-land.json) | A pull request opened, merged on your word, and confirmed landed |
+| [`cleanup-refusal`](tools/fm-drive/traces/cleanup-refusal.json) | Cleanup of unlanded work is refused, then the work lands |
+| [`restart-primary`](tools/fm-drive/traces/restart-primary.json) | The session exits mid-task, and a new one picks up the crew |
+| [`scout-report`](tools/fm-drive/traces/scout-report.json) | An investigation leaves a report, then the same crewmate builds from it |
+| [`whole-session`](tools/fm-drive/traces/whole-session.json) | Three changes in parallel, three landings on main, a healthy home |
 
-Firstmate ships these user-invocable built-in skills.
-Claude and grok use the slash form shown here; codex uses the same names with `$`, such as `$afk`.
+The [`verify-firstmate`](.agents/skills/verify-firstmate/SKILL.md) skill keeps the full inventory of claims and marks each one proven, unproven, or blocked on this machine.
 
-| Skill              | What it does                                                                                                                                  |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/afk`             | Enter away-mode supervision: Pi's in-process branch, an [opt-in supervision host](docs/configuration.md#supervision-host-configsupervision-host) beside the other primaries, or the daemon handles wakes while you step away; see the [away procedure](.agents/skills/afk/SKILL.md) for the posture and return contract |
-| `/quiet`           | Keep routine wakes off main while staying and chatting; requested actions proceed now rather than waiting for your return. Where Pi's branch or an [attended supervision host](docs/supervision-host.md#quiet-mode) already does this, it only says so; otherwise it starts the quiet daemon, which stays active through ordinary chat until `/quiet off` |
-| `/ahoy`            | Recap visible session events since the prior real captain message plus visibly unanswered captain decisions, then guide the captain through any open decisions one at a time in agent-judged impact order; fall back to Bearings when invoked as the session's first real captain message |
-| `/bearings`        | Generate a concise four-section chat digest from bounded fleet state, including registered remote-home ledgers and measured follow-up for owned contributions; use `/bearings file` to also replace today's dated report in `data/`, and add `include PRs` for live GitHub enrichment |
-| `/updatefirstmate` | Guardedly update the running firstmate and its secondmates - fast-forward, or reconcile a redundant post-squash-merge divergence - then persist and restart every live mate successfully left on the target commit - including already-current homes - with an honest re-read nudge only when restart cannot be proven |
-| `/stow`            | Sweep the session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, curate tiered startup memory with decay and cold archival, enforce each home's budget or surface the required decision, cascade to registered second mates, and report what is safe to reset |
+<details>
+<summary><b>Built-in skills</b></summary>
 
-Bearings invocation examples:
+Type these in the first mate's chat.
+They ship with the code, and their Windows proof is still open in the issue named beside each.
 
-- `/bearings` returns the fresh four-section digest in chat only.
-- Owned-contribution follow-up comes from the cached coverage projection; `include PRs` remains the opt-in for repository-wide live PR enrichment.
-- `/bearings include PRs` keeps chat-only mode and opts into live PR enrichment.
-- `/bearings file` replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch and links it from the four-section chat digest.
-- `/bearings file include PRs` combines the dated report with live PR enrichment.
+| Skill | What it does |
+|---|---|
+| `/afk` | Hands supervision to a background daemon while you step away, and briefs you when you return ([#94](https://github.com/EvanBatten/firstmate-for-windows/issues/94)) |
+| `/quiet` | Keeps routine wakes out of the chat while you stay, until `/quiet off` ([#94](https://github.com/EvanBatten/firstmate-for-windows/issues/94)) |
+| `/ahoy` | Recaps what happened since your last message and walks you through open decisions one at a time ([#95](https://github.com/EvanBatten/firstmate-for-windows/issues/95)) |
+| `/bearings` | Prints a four-section digest of the fleet, and `/bearings file` also writes it to `data/` ([#95](https://github.com/EvanBatten/firstmate-for-windows/issues/95)) |
+| `/updatefirstmate` | Fast-forwards this clone from `origin` and restarts every live mate on the new commit ([#93](https://github.com/EvanBatten/firstmate-for-windows/issues/93)) |
+| `/stow` | Saves what the session learned to disk and trims startup memory before a reset ([#95](https://github.com/EvanBatten/firstmate-for-windows/issues/95)) |
 
-Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
+`.agents/skills/` also holds the agent-only skills the first mate loads at the triggers [`AGENTS.md`](AGENTS.md) names.
+`skills/` holds `stow`, a public skill you can install into any project on its own.
 
-### Two-tier skill layout
+</details>
 
-Firstmate's skills live in two separate places with different audiences:
+<details>
+<summary><b>Other platforms and harnesses</b></summary>
 
-- `.agents/skills/` - agent-loaded skills (this section's table, plus firstmate's agent-only reference skills). Every one of these assumes a live firstmate home and is meaningless, or actively misleading, installed anywhere else, so each carries `metadata.internal: true` in its frontmatter. That flag hides them from installer discovery (tools like the [skills.sh](https://skills.sh) `npx skills add` installer) without affecting how firstmate itself loads them - frontmatter metadata is inert to the agent's own skill loader.
-- `skills/` - public, installer-facing skills meant to be installed standalone into any project, independent of firstmate.
-  Each one is a self-contained skill with no dependency on firstmate's paths, tools, or vocabulary.
-  Today that is `skills/stow`, a generic session-knowledge-sweep skill that routes findings by explicit instruction first, then existing local conventions, then a private `.stow-notes.md` fallback, and curates tiered entries through decay, local archival, and user-approved on-demand offload proposals.
-  It intentionally shares no code with the firstmate-internal `.agents/skills/stow` it is named after, so the two can evolve independently.
+The same checkout runs on Linux and macOS, where tmux is the default backend, as [docs/tmux-backend.md](docs/tmux-backend.md) describes.
+CI runs the behavior suites on Linux, the Herdr suite on Linux, and a Bash compatibility check on macOS.
+The code also supports Codex, Grok, Pi, OpenCode, Cursor Agent CLI, and Oh My Pi as the primary harness, and Zellij, Orca, and cmux as backends.
+No Windows session has verified those yet, see [#97](https://github.com/EvanBatten/firstmate-for-windows/issues/97).
+[docs/configuration.md](docs/configuration.md#harness-support) lists what each one needs.
 
-## Documentation
+</details>
 
-- [docs/architecture.md](docs/architecture.md) - maintainer architecture for the crew, supervision, worktrees, secondmates, and project modes.
-- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, runtime backend selection, optional Relay and its X and Discord setup steps, trusted external process-event adapter setup, the files you set, and harness support.
-- [docs/extension-bindings.md](docs/extension-bindings.md) - maintainer architecture for the narrow trusted external `process-event-adapter/1` package, binding, handshake, and evidence boundary.
-- [docs/remote-secondmates.md](docs/remote-secondmates.md) - current setup, routing, transfer, recovery, and safety behavior for whole-home remote second mates.
-- [docs/calm.md](docs/calm.md) - current `/calm` behavior on Pi and Claude Code and its supported presentation limits.
-- [docs/voice-relay.md](docs/voice-relay.md) - the optional spoken interface: setup on both machines, measured round-trip cost, what a spoken answer may read, and what this build does not do yet.
-- [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.
-- [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
-- [docs/tmux-backend.md](docs/tmux-backend.md) - current setup and limits for the tmux reference backend.
-- [docs/herdr-backend.md](docs/herdr-backend.md) - current setup, CI coverage, safety boundaries, and limits for the Herdr backend.
-- [docs/zellij-backend.md](docs/zellij-backend.md) - current setup and limits for the experimental Zellij backend.
-- [docs/orca-backend.md](docs/orca-backend.md) - current setup and limits for the experimental Orca backend.
-- [docs/cmux-backend.md](docs/cmux-backend.md) - current setup, socket security, and limits for the experimental cmux backend.
-- [docs/codex-app-backend.md](docs/codex-app-backend.md) - the current blocked Codex App backend boundary and rollout contract.
-- [docs/verification/runtime-backends.md](docs/verification/runtime-backends.md) - active maintainer verification for runtime backend guarantees.
-- [docs/gerrit-forge-integration.md](docs/gerrit-forge-integration.md) - maintainer architecture for the forge axis: why change-shaped review is not a forge variant, the mode/forge/shape composition test, and where responsibility for forge mechanics sits.
-- [docs/gitlab-merge-watch.md](docs/gitlab-merge-watch.md) - maintainer verification for watching and merging GitLab merge requests on arbitrary instances.
-- [docs/gerrit-change-watch.md](docs/gerrit-change-watch.md) - maintainer verification for watching Gerrit changes read-only, and why the merge path refuses one.
-- [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's current "no turn ends blind" backstop, scope, loop safety, and compatibility limits.
-- [docs/verification/supervision.md](docs/verification/supervision.md) - active maintainer verification for session-start, guard, continuity, and wedge integrations.
-- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi and `pi-signed`, omp, Grok, Cursor, and unknown harness fallback.
-- [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
-- [docs/documentation-audiences.md](docs/documentation-audiences.md) - documentation audiences and the machine-checked placement boundary.
-- [`AGENTS.md`](AGENTS.md) - the supervisor contract, role boundary, and routing index for conditional procedures.
-- [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.
+<details>
+<summary><b>Documentation</b></summary>
+
+- [Install on Windows](platform/windows/INSTALL.md) - tools, clone, launch, and symlink repair.
+- [docs/architecture.md](docs/architecture.md) - the crew, supervision, worktrees, second mates, and project modes.
+- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, backend selection, Relay setup, and the files you set.
+- [docs/herdr-backend.md](docs/herdr-backend.md) - setup, CI coverage, safety boundaries, and limits of the Herdr backend.
+- [docs/tmux-backend.md](docs/tmux-backend.md), [docs/zellij-backend.md](docs/zellij-backend.md), [docs/orca-backend.md](docs/orca-backend.md), and [docs/cmux-backend.md](docs/cmux-backend.md) - the other backends.
+- [docs/remote-secondmates.md](docs/remote-secondmates.md) - second mates on another SSH-reachable host.
+- [docs/wedge-alarm.md](docs/wedge-alarm.md) - an alert for an away-mode escalation that gets stuck.
+- [docs/turnend-guard.md](docs/turnend-guard.md) - the backstop that keeps a turn from ending while work is unsupervised.
+- [docs/calm.md](docs/calm.md) - the `/calm` presentation toggle.
+- [docs/scripts.md](docs/scripts.md) - the `bin/` reference.
+- [docs/documentation-audiences.md](docs/documentation-audiences.md) - who each doc is for, checked by `bin/fm-doc-audience-check.sh`.
+- [`AGENTS.md`](AGENTS.md) - the first mate's contract.
+
+</details>
+
+## Get help
+
+Open an issue at [EvanBatten/firstmate-for-windows](https://github.com/EvanBatten/firstmate-for-windows/issues).
+Include the first mate's session-start digest and the output of `herdr --version` and `bash --version`.
 
 ## Contributing
 
-Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, repo conventions, and how to run the tests.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the workflow, the repo conventions, and the test commands.
+
+## Credits
+
+firstmate for Windows is a Windows port of [firstmate](https://github.com/kunchenguid/firstmate) by Kun Chen.
+The design, the first mate's contract, and the shared scripts in `bin/` come from his project.
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=kunchenguid%2Ffirstmate&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kunchenguid/firstmate&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kunchenguid/firstmate&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kunchenguid/firstmate&type=date&legend=top-left" />
- </picture>
-</a>
+MIT, see [LICENSE](LICENSE).
