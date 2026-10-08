@@ -53,10 +53,16 @@ new_home_pair() {
   printf '%s\n' "$primary|$second"
 }
 
+# A noacl drive reports the mode the reader's umask implies, so the expected
+# mode is read from a file chmodded to it beside the one under test.
 assert_shared_readonly() {
-  local path=$1
-  [ "$(file_mode "$path")" = "$FM_SHARED_CAPTAIN_MODE" ] \
-    || fail "$path mode should be $FM_SHARED_CAPTAIN_MODE, got $(file_mode "$path")"
+  local path=$1 ref expected
+  ref=$(mktemp "${path%/*}/.mode-ref.XXXXXX") || fail "could not create a mode reference beside $path"
+  chmod "$FM_SHARED_CAPTAIN_MODE" "$ref"
+  expected=$(file_mode "$ref")
+  rm -f "$ref"
+  [ "$(file_mode "$path")" = "$expected" ] \
+    || fail "$path mode should be $FM_SHARED_CAPTAIN_MODE (reads as $expected here), got $(file_mode "$path")"
 }
 
 assert_secondmate_write_fails() {
@@ -318,10 +324,11 @@ test_unsafe_artifacts_and_failure_restore_readonly_mode() {
   assert_grep "unsafe destination" "$err" "unsafe destination hardlink error should be explicit"
   rm -f "$second/data/captain-shared.md" "$other"
 
-  # Root reads a mode-000 file regardless, which would make this case vacuous.
-  if [ "$(id -u)" != 0 ]; then
-    write_shared "$second/data/captain-shared.md" "unreadable local bytes"
-    chmod 000 "$second/data/captain-shared.md"
+  # Root, and any user on a noacl drive, reads a mode-000 file regardless,
+  # which would make this case vacuous.
+  write_shared "$second/data/captain-shared.md" "unreadable local bytes"
+  chmod 000 "$second/data/captain-shared.md"
+  if ! cat "$second/data/captain-shared.md" >/dev/null 2>&1; then
     err="$TMP_ROOT/unreadable-dest.err"
     propagate_secondmate_inheritance "$primary" "$second" >/dev/null 2>"$err"; rc=$?
     chmod 600 "$second/data/captain-shared.md"
@@ -329,21 +336,30 @@ test_unsafe_artifacts_and_failure_restore_readonly_mode() {
     assert_grep "failed to hash destination" "$err" "unhashable destination error should be explicit"
     assert_grep "unreadable local bytes" "$second/data/captain-shared.md" \
       "unhashable destination was replaced without keeping its bytes"
-    rm -f "$second/data/captain-shared.md"
+  else
+    printf 'skip: a mode-000 file stays readable here, so the destination cannot be made unhashable\n'
   fi
+  chmod 600 "$second/data/captain-shared.md"
+  rm -f "$second/data/captain-shared.md"
 
   write_shared "$second/data/captain-shared.md" "permission drift"
   chmod "$FM_SHARED_CAPTAIN_MODE" "$second/data/captain-shared.md"
   before_mode=$(file_mode "$second/data/captain-shared.md")
   chmod 500 "$second/data"
-  err="$TMP_ROOT/restore-readonly.err"
-  propagate_secondmate_inheritance "$primary" "$second" >/dev/null 2>"$err"; rc=$?
-  chmod 700 "$second/data"
-  [ "$rc" -ne 0 ] || fail "unwritable destination directory should make quarantine fail"
-  [ "$(file_mode "$second/data/captain-shared.md")" = "$before_mode" ] \
-    || fail "failed quarantine did not restore read-only mode"
-  assert_grep "failed to quarantine divergent destination" "$err" \
-    "recoverable failure should explain quarantine failure"
+  if ( : > "$second/data/.write-probe" ) 2>/dev/null; then
+    rm -f "$second/data/.write-probe"
+    chmod 700 "$second/data"
+    printf 'skip: a mode-500 directory stays writable here, so quarantine cannot be made to fail\n'
+  else
+    err="$TMP_ROOT/restore-readonly.err"
+    propagate_secondmate_inheritance "$primary" "$second" >/dev/null 2>"$err"; rc=$?
+    chmod 700 "$second/data"
+    [ "$rc" -ne 0 ] || fail "unwritable destination directory should make quarantine fail"
+    [ "$(file_mode "$second/data/captain-shared.md")" = "$before_mode" ] \
+      || fail "failed quarantine did not restore read-only mode"
+    assert_grep "failed to quarantine divergent destination" "$err" \
+      "recoverable failure should explain quarantine failure"
+  fi
   pass "unsafe shared captain artifacts are rejected and failure restores read-only mode"
 }
 

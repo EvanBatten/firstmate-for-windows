@@ -3716,6 +3716,39 @@ test_leaked_worktree_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's worktree is reaped by teardown, not left surviving"
 }
 
+test_crafted_cwd_cannot_forge_a_reap() {
+  local case_dir rc victim injector evil wt
+  case_dir=$(make_case crafted-cwd-reap)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  mkdir -p "$case_dir/outside"
+  wt=$(cd "$case_dir/wt" && pwd -P)
+
+  ( cd "$case_dir/outside" && exec sleep 300 ) &
+  victim=$!
+  disown
+  # A directory name holding a newline and a tab spells a whole scan record
+  # that puts the victim's pid under the worktree.
+  evil="$case_dir/ev"$'\n'"/proc/$victim"$'\t'"$wt"
+  mkdir -p "$evil"
+  ( cd "$evil" && exec sleep 300 ) &
+  injector=$!
+  disown
+  sleep 0.3
+  kill -0 "$victim" 2>/dev/null || fail "crafted-cwd-reap: setup victim did not start"
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  if ! kill -0 "$victim" 2>/dev/null; then
+    kill -KILL "$injector" 2>/dev/null || true
+    fail "crafted-cwd-reap: a process outside the worktree was reaped through a crafted directory name"
+  fi
+  kill -KILL "$victim" "$injector" 2>/dev/null || true
+  expect_code 0 "$rc" "crafted-cwd-reap: teardown should succeed"
+  pass "a directory name that spells a scan record cannot make teardown reap a process outside the worktree"
+}
+
 test_leaked_tasktmp_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-tasktmp-reap)
@@ -4343,6 +4376,7 @@ test_not_found_status_after_abort_confirms_completion
 test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
+test_crafted_cwd_cannot_forge_a_reap
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
