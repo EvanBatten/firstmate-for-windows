@@ -114,8 +114,8 @@ flowchart TB
   F -- "bin/fm-spawn.sh" --> T1["Crewmate 1<br/>Herdr tab, own worktree"]
   F -- "bin/fm-spawn.sh" --> T2["Crewmate 2<br/>Herdr tab, own worktree"]
   F -. "bin/fm-send.sh<br/>steering inbox" .-> T1
-  T1 -- "state/&lt;id&gt;.status" --> W["bin/fm-watch.sh<br/>tokenless watcher"]
-  T2 -- "state/&lt;id&gt;.status" --> W
+  T1 -- "state/#lt;id#gt;.status" --> W["bin/fm-watch.sh<br/>tokenless watcher"]
+  T2 -- "state/#lt;id#gt;.status" --> W
   W -- "wakes on actionable status" --> F
   F -- "your go" --> L["Land<br/>fm-pr-merge.sh or fm-merge-local.sh"]
   L --> D["bin/fm-teardown.sh<br/>refuses unlanded work"]
@@ -178,11 +178,11 @@ Starting `claude` from the clone runs this chain:
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
-flowchart LR
+flowchart TB
   P["PowerShell in a Herdr pane<br/>claude function from claude.ps1"] --> B["Git Bash<br/>sources env.sh"]
-  B --> E["claude.exe<br/>with BASH_ENV=bash-env.sh"]
+  B --> E["claude.exe<br/>BASH_ENV=bash-env.sh"]
   E --> S["bin/ scripts<br/>load overrides.sh"]
-  S --> H["herdr.sh<br/>native Herdr calls"]
+  S --> H["herdr.sh<br/>talks to native Herdr"]
 ```
 
 ## Proven in real sessions
