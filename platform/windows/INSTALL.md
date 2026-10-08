@@ -20,7 +20,6 @@ Firstmate cannot start without them, and its own install hints do not cover Wind
    ```
 
 2. Install PowerShell 7.
-   Herdr starts its panes in PowerShell 7 when it finds `pwsh` on `PATH`, and in Windows PowerShell 5.1 otherwise.
    PowerShell 7 ships with the `RemoteSigned` execution policy, so it loads the profile line from [Launch](#launch).
    Windows PowerShell 5.1 starts with the `Restricted` policy on Windows 11, which refuses to load any profile.
 
@@ -69,15 +68,26 @@ Firstmate cannot start without them, and its own install hints do not cover Wind
 
 Open a new PowerShell window so that it picks up the new `PATH`.
 In that window, run `claude` once, sign in, and exit it.
+
+Firstmate starts its Claude Code workers with `--dangerously-skip-permissions`, and Claude Code asks for your consent the first time it runs in that mode.
+Until you accept, your first worker waits at that prompt in its Herdr tab.
+To accept it now, run `claude --dangerously-skip-permissions` once, choose **Yes, I accept**, and exit it.
+If you do not want workers in that mode, set [Claude permission mode](../../docs/configuration.md#claude-permission-mode-configclaude-permission-mode) to `auto` instead.
+
 On its first start, firstmate lists any other tool it is missing and asks before it installs one.
 
 ## Clone
 
 ```sh
 gh auth login
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
 git clone -c core.symlinks=true https://github.com/EvanBatten/firstmate-for-windows firstmate
 cd firstmate
 ```
+
+Git for Windows starts with no commit identity, and a worker's commit fails with `Author identity unknown` until you set one.
+Skip the two `git config` lines if `git config user.email` already prints your address.
 
 Git for Windows sets `core.symlinks=false` by default.
 A clone without `-c core.symlinks=true` writes each tracked symlink as a small text file that holds the link target, so Claude Code finds no skills.
@@ -87,13 +97,30 @@ A clone without `-c core.symlinks=true` writes each tracked symlink as a small t
 Firstmate on Windows runs its workers in Herdr, and it picks Herdr automatically when Claude Code starts inside a Herdr pane.
 Claude Code must also start through the Windows overlay in `platform/windows/`.
 
-1. Start Herdr from PowerShell.
+1. Set Herdr to start its panes in PowerShell 7.
+   Without this setting, Herdr starts Windows PowerShell 5.1 even when `pwsh` is on `PATH`.
+   Run these lines once in PowerShell.
+   They create `%APPDATA%\herdr\config.toml` from Herdr's default config with `default_shell = "pwsh"` turned on, and leave an existing config alone.
+
+   ```powershell
+   $herdrConfig = "$env:APPDATA\herdr\config.toml"
+   if (-not (Test-Path $herdrConfig)) {
+       New-Item -ItemType Directory -Force (Split-Path $herdrConfig) | Out-Null
+       herdr --default-config | ForEach-Object { $_ -replace '^# default_shell = ""$', 'default_shell = "pwsh"' } | Set-Content -Encoding ascii $herdrConfig
+   }
+   herdr config check
+   ```
+
+   The last line prints `config: ok`.
+   If you already had a config, set `default_shell = "pwsh"` in its `[terminal]` section yourself.
+
+2. Start Herdr from PowerShell.
 
    ```powershell
    herdr
    ```
 
-2. In the Herdr pane, add the overlay's `claude` function to the profile of that pane's PowerShell, then load it.
+3. In the Herdr pane, add the overlay's `claude` function to the profile of that pane's PowerShell, then load it.
    Herdr can start a different PowerShell than your terminal does, and each one reads its own `$PROFILE`, so run these lines in the Herdr pane.
    Replace `C:\path\to\firstmate` with the folder you cloned into.
 
@@ -103,7 +130,7 @@ Claude Code must also start through the Windows overlay in `platform/windows/`.
    . $PROFILE
    ```
 
-3. Go to the clone and start Claude Code.
+4. Go to the clone and start Claude Code.
    The function applies the overlay only when the current folder is the top folder of the clone.
 
    ```powershell
@@ -111,8 +138,8 @@ Claude Code must also start through the Windows overlay in `platform/windows/`.
    claude
    ```
 
-You add the profile line once.
-After that, every launch is steps 1 and 3.
+You set the Herdr shell and add the profile line once.
+After that, every launch is steps 2 and 4.
 
 If the Herdr pane runs Git Bash instead of PowerShell, source the overlay before you start Claude Code.
 
