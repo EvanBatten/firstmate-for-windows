@@ -3,7 +3,7 @@
 Thanks for wanting to contribute.
 One rule up front:
 
-**Human-authored pull requests targeting `main` must be raised through [`no-mistakes`](https://github.com/kunchenguid/no-mistakes).**
+**Human-authored pull requests targeting `main` must be raised through `no-mistakes`.**
 We require this to reduce the maintainer's burden of reviewing and merging contributions.
 
 `no-mistakes` puts a local git proxy in front of your real remote.
@@ -16,9 +16,9 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 
 ## Workflow
 
-1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
+1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:EvanBatten/firstmate-for-windows.git`).
 2. Create a branch and make your changes.
-3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (contributing to firstmate requires **no-mistakes v1.46.0+** for structured attestation; without a fork, plain `no-mistakes init` still works for maintainers with push access).
+3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate-for-windows.git` (contributing to firstmate requires **no-mistakes v1.46.0+** for structured attestation; without a fork, plain `no-mistakes init` still works for maintainers with push access).
 4. Commit your changes.
 5. Push through the gate instead of pushing to `origin`:
 
@@ -30,7 +30,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
 7. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
 
-See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
+`no-mistakes --help` lists its commands, and `no-mistakes doctor` checks its setup.
 
 ## Maintaining required checks
 
@@ -54,7 +54,7 @@ Coordinate any workflow rollback with its required-check names so a retired chec
 - This repo is a template for running a firstmate orchestrator agent.
   [`AGENTS.md`](AGENTS.md) owns the supervisor contract, role boundary, and bundled firstmate skill triggers; `CLAUDE.md` is a real `@AGENTS.md` pointer to it, and `.claude/skills` is a symlink to `.agents/skills`.
 - Only shared material is tracked: `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/`.
-  `.agents/skills/` holds agent-loaded skills that assume a live firstmate home and carry `metadata.internal: true` so installers such as [skills.sh](https://skills.sh) hide them from discovery; `skills/` holds standalone, installer-facing public skills with no firstmate dependency (see the README's "Two-tier skill layout").
+  `.agents/skills/` holds agent-loaded skills that assume a live firstmate home and carry `metadata.internal: true` so installers such as [skills.sh](https://skills.sh) hide them from discovery; `skills/` holds standalone, installer-facing public skills with no firstmate dependency.
   `.claude/mods/` holds Claude Code mods, plugins whose behavior lives in one function-hooks module; each is reached through an `.agents/skills/<mod>` symlink because Claude Code adopts project plugins only from `.claude/skills`, carries no `SKILL.md` so every other harness's skill loader ignores that entry, and imports only files physically inside its own folder because Claude Code refuses anything else.
   A module may load through `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` or Claude Code's `tengu_plugin_hooks_modules` rollout flag, but the Calm mod activates only when `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` is exactly `1` and is otherwise a complete no-op; Firstmate never sets that variable in any settings file, and [`docs/calm.md`](docs/calm.md) owns the contract.
   Everything personal to one captain's fleet (`.env`, `data/`, `state/`, `config/`, `projects/`, `.no-mistakes/`) is gitignored; never commit it.
@@ -147,4 +147,4 @@ The [Herdr backend guide](docs/herdr-backend.md#destructive-lab-safety) owns the
 
 ## Questions
 
-Open an issue, or talk to me on [Discord](https://discord.gg/Wsy2NpnZDu).
+Open an issue at [EvanBatten/firstmate-for-windows](https://github.com/EvanBatten/firstmate-for-windows/issues).

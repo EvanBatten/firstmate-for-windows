@@ -709,7 +709,33 @@ A local standalone-clone home cannot receive a primary-local commit through that
 
 ## Harness support
 
-claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and omp are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only, and [README requirements](../README.md#requirements) own the set supported for the primary session.
+claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and omp are empirically verified for crewmate and secondmate launches; gemini is verified for crewmate and scout launches only.
+The primary session supports Claude Code, Grok, Pi, `pi-signed`, Oh My Pi (`omp`), Codex, OpenCode, and Cursor Agent CLI.
+On Windows, Claude Code is the only primary harness verified, launched through the overlay in [Install on Windows](../platform/windows/INSTALL.md#launch).
+
+### Launch a primary session
+
+Start the primary from the top folder of the clone, where `AGENTS.md` takes over.
+On Windows, use the overlay's `claude` function from [Install on Windows](../platform/windows/INSTALL.md#launch).
+On Linux and macOS, run one of these:
+
+```sh
+claude
+grok --trust
+pi
+FM_PI_HARNESS=pi-signed pi-signed
+omp
+FM_OMP_HARNESS=omp omp
+codex
+opencode
+cursor-agent --trust
+```
+
+- Grok needs `--trust` once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok does the same.
+- Pi needs its project trust prompt approved once per clone so the tracked `.pi/extensions/*.ts` files load.
+- `FM_PI_HARNESS=pi-signed pi-signed` starts Pi's signed wrapper as its own harness identity.
+- `omp` auto-discovers the tracked `.omp/extensions/*.ts` files with no trust dialog, so naming them with `-e` as well loads each twice; use `FM_OMP_HARNESS=omp omp` when starting from inside a Claude Code pane.
+- Cursor Agent CLI loads its project hooks only with `--trust`, and headless `cursor-agent -p` has no turn-end hook, so run the primary interactively.
 
 ### Harness restrictions and credentials
 
