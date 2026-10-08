@@ -77,7 +77,8 @@ A locked session start writes the tools its bootstrap reported as `MISSING:` or 
 The first turn end whose payload carries the reply text (`last_assistant_message`) consumes that file.
 When the reply leaves out any listed tool, the guard blocks once and names the tools the reply left out, so the agent tells the captain what to install and asks for consent before the turn ends.
 A payload without the reply text leaves the file for a later turn end.
-A lock-refused session and a context re-emit leave the file alone, because the session that owns the home already holds it.
+A lock-refused session start and a context re-emit do not write the file.
+On a Claude primary, the guard skips the file while another live session owns the home lock, so a lock-refused session never consumes the owner's list.
 
 ### Supervision need
 

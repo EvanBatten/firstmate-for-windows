@@ -168,19 +168,31 @@ fi
 # so this exempts them while guarding every real secondmate home.
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
+# --- the actual predicate ----------------------------------------------------
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+if [ "$CLAUDE_MODE" -eq 1 ]; then
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+fi
+
 # --- missing tools reach the captain ----------------------------------------
 # Session start lists the tools its bootstrap found missing. The first reply
 # this hook can read must name every one, so a new captain learns what to
-# install; the list is consumed by that reply and blocks at most once.
+# install; the list is consumed by that reply and blocks at most once. A Claude
+# session refused the home lock leaves the owner's list alone.
 MISSING_TOOLS_FILE="$STATE/.captain-missing-tools"
-if [ -s "$MISSING_TOOLS_FILE" ]; then
+if [ -s "$MISSING_TOOLS_FILE" ] \
+  && { [ "$CLAUDE_MODE" -eq 0 ] || ! fm_session_lock_foreign_owner_live "$STATE"; }; then
   LAST_REPLY=$(printf '%s' "$PAYLOAD" | jq -r '
     .last_assistant_message | if type == "string" then . else error("reply") end
   ' 2>/dev/null) && {
     UNNAMED=()
+    shopt -s nocasematch
     while IFS= read -r tool; do
-      case "${LAST_REPLY,,}" in *"${tool,,}"*) ;; *) UNNAMED+=("$tool") ;; esac
+      case "$LAST_REPLY" in *"$tool"*) ;; *) UNNAMED+=("$tool") ;; esac
     done < "$MISSING_TOOLS_FILE"
+    shopt -u nocasematch
     rm -f "$MISSING_TOOLS_FILE"
     if [ "${#UNNAMED[@]}" -gt 0 ]; then
       {
@@ -192,14 +204,6 @@ if [ -s "$MISSING_TOOLS_FILE" ]; then
       exit 2
     fi
   }
-fi
-
-# --- the actual predicate ----------------------------------------------------
-# shellcheck source=bin/fm-wake-lib.sh
-. "$SCRIPT_DIR/fm-wake-lib.sh"
-if [ "$CLAUDE_MODE" -eq 1 ]; then
-  # shellcheck source=bin/fm-session-lock-lib.sh
-  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 fi
 
 BUDGET_FILE="$STATE/.turnend-claude-blocks"
