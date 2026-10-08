@@ -1283,6 +1283,51 @@ test_rejects_a_bare_return_in_the_windows_overlay() {
   pass "fm-lint.sh rejects a bare return in the Windows overlay"
 }
 
+test_rejects_case_modification_in_core_bin() {
+  local tmp fakebin spelling out rc
+  tmp=$(fm_test_tmproot fm-lint-case-mod)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_overlay_repo "$tmp" "$fakebin"
+
+  # shellcheck disable=SC2016 # Script source text, not expansions.
+  for spelling in \
+    'echo "${reply,,}"' \
+    'echo "${reply^^}"' \
+    'echo "${reply,}"' \
+    'echo "${reply^}"' \
+    'echo "${list[1],,}"' \
+    'case "${reply,,}" in *"${tool,,}"*) ;; esac'
+  do
+    printf '#!/usr/bin/env bash\n%s\n' "$spelling" > "$tmp/repo/bin/case.sh"
+    rc=0
+    out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" bin/fm-lint.sh 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "lint accepted a case-modifying expansion in bin/: $spelling"
+    assert_contains "$out" "bin/case.sh:2: case-modifying expansion needs Bash 4" \
+      "lint did not name the case-modifying expansion: $spelling"$'\n'"$out"
+  done
+
+  # shellcheck disable=SC2016 # Script source text, not expansions.
+  for spelling in \
+    'echo "${reply:-a,b}"' \
+    'echo "${reply//,/ }"' \
+    'echo "${#reply}"' \
+    'echo "$reply,^"' \
+    '# ${reply,,} is Bash 4 only'
+  do
+    printf '#!/usr/bin/env bash\n%s\n' "$spelling" > "$tmp/repo/bin/case.sh"
+    rc=0
+    out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" bin/fm-lint.sh 2>&1) || rc=$?
+    [ "$rc" -eq 0 ] || fail "lint rejected an expansion stock Bash 3.2 runs: $spelling"$'\n'"$out"
+  done
+
+  # shellcheck disable=SC2016 # Script source text, not an expansion.
+  printf '#!/usr/bin/env bash\necho "${reply,,}"\n' > "$tmp/repo/bin/case.sh"
+  rc=0
+  out=$(cd "$tmp/repo" && PATH="$fakebin:$PATH" bin/fm-lint.sh bin/case.sh 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an explicit bin/ path bypassed the case-modification check"
+  pass "fm-lint.sh rejects case-modifying expansions that stock macOS Bash 3.2 cannot run"
+}
+
 test_windows_overlay_has_no_bare_return() {
   local tmp fakebin out rc
   tmp=$(fm_test_tmproot fm-lint-overlay-real)
@@ -1960,6 +2005,7 @@ test_catches_a_real_lint_defect
 test_rejects_direct_beads_cli_invocations
 test_rejects_direct_beads_cli_in_explicit_core_path
 test_rejects_a_bare_return_in_the_windows_overlay
+test_rejects_case_modification_in_core_bin
 test_windows_overlay_has_no_bare_return
 test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes

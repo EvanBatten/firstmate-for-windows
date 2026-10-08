@@ -350,6 +350,34 @@ test_hook_keeps_missing_tools_when_payload_has_no_reply() {
   pass "fm-turnend-guard: keeps the missing-tool list when the payload carries no reply"
 }
 
+test_hook_foreign_lock_owner_keeps_missing_tools() {
+  local dir out status owner_pid harness_bin home
+  dir=$(make_primary_dir "$TMP_ROOT/hook-missing-foreign")
+  harness_bin=$(fm_fakebin "$TMP_ROOT/every-pid-claude")
+  cat > "$harness_bin/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  '-o comm= -p '*|'-o args= -p '*) printf '%s\n' claude ;;
+  '-o ppid= -p '*) printf '%s\n' 1 ;;
+  *) exec "$(command -v ps)" "\$@" ;;
+esac
+SH
+  chmod +x "$harness_bin/ps"
+  sleep 300 &
+  owner_pid=$!
+  printf '%s\n' "$owner_pid" > "$dir/state/.lock"
+  printf 'gh-axi\n' > "$dir/state/.captain-missing-tools"
+  home=$(cd "$dir" && pwd)
+  out=$(printf '%s' '{"stop_hook_active":false,"last_assistant_message":"done"}' \
+    | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID PATH="$harness_bin:$PATH" CLAUDECODE=1 FM_HOME="$home" \
+      bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1); status=$?
+  kill "$owner_pid" 2>/dev/null; wait "$owner_pid" 2>/dev/null
+  expect_code 0 "$status" "a session refused the home lock must not block on the owner's missing-tool list"
+  assert_not_contains "$out" "THE CAPTAIN HAS NOT BEEN TOLD" "a session refused the home lock judged the owner's reply"
+  assert_equals "gh-axi" "$(cat "$dir/state/.captain-missing-tools")" "a session refused the home lock consumed the owner's missing-tool list"
+  pass "fm-turnend-guard: a session refused the home lock leaves the owner's missing-tool list"
+}
+
 test_hook_blocks_when_fresh_beacon_has_no_live_lock() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-fresh-no-lock")
@@ -2245,6 +2273,7 @@ test_hook_silent_when_no_work_in_flight
 test_hook_blocks_once_when_reply_omits_missing_tools
 test_hook_allows_reply_naming_every_missing_tool
 test_hook_keeps_missing_tools_when_payload_has_no_reply
+test_hook_foreign_lock_owner_keeps_missing_tools
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_source_only_home
 test_hook_blocks_when_dead_lock_has_fresh_beacon
