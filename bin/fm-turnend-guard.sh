@@ -168,6 +168,32 @@ fi
 # so this exempts them while guarding every real secondmate home.
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
+# --- missing tools reach the captain ----------------------------------------
+# Session start lists the tools its bootstrap found missing. The first reply
+# this hook can read must name every one, so a new captain learns what to
+# install; the list is consumed by that reply and blocks at most once.
+MISSING_TOOLS_FILE="$STATE/.captain-missing-tools"
+if [ -s "$MISSING_TOOLS_FILE" ]; then
+  LAST_REPLY=$(printf '%s' "$PAYLOAD" | jq -r '
+    .last_assistant_message | if type == "string" then . else error("reply") end
+  ' 2>/dev/null) && {
+    UNNAMED=()
+    while IFS= read -r tool; do
+      case "${LAST_REPLY,,}" in *"${tool,,}"*) ;; *) UNNAMED+=("$tool") ;; esac
+    done < "$MISSING_TOOLS_FILE"
+    rm -f "$MISSING_TOOLS_FILE"
+    if [ "${#UNNAMED[@]}" -gt 0 ]; then
+      {
+        printf '●  THE CAPTAIN HAS NOT BEEN TOLD ABOUT MISSING TOOLS\n'
+        printf '●  Session start found these tools missing and your reply did not name them: %s\n' "${UNNAMED[*]}"
+        printf '●  Tell the captain now, per the bootstrap-diagnostics skill: each missing tool, what it is for, and the install command the digest printed for it.\n'
+        printf '●  Then ask for consent to install them; do not install anything before the captain approves.\n'
+      } >&2
+      exit 2
+    fi
+  }
+fi
+
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
