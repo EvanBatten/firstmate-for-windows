@@ -68,15 +68,26 @@ Firstmate cannot start without them, and its own install hints do not cover Wind
 
 Open a new PowerShell window so that it picks up the new `PATH`.
 In that window, run `claude` once, sign in, and exit it.
+
+Firstmate starts its Claude Code workers with `--dangerously-skip-permissions`, and Claude Code asks for your consent the first time it runs in that mode.
+Until you accept, your first worker waits at that prompt in its Herdr tab.
+To accept it now, run `claude --dangerously-skip-permissions` once, choose **Yes, I accept**, and exit it.
+If you do not want workers in that mode, set [Claude permission mode](../../docs/configuration.md#claude-permission-mode-configclaude-permission-mode) to `auto` instead.
+
 On its first start, firstmate lists any other tool it is missing and asks before it installs one.
 
 ## Clone
 
 ```sh
 gh auth login
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
 git clone -c core.symlinks=true https://github.com/EvanBatten/firstmate-for-windows firstmate
 cd firstmate
 ```
+
+Git for Windows starts with no commit identity, and a worker's commit fails with `Author identity unknown` until you set one.
+Skip the two `git config` lines if `git config user.email` already prints your address.
 
 Git for Windows sets `core.symlinks=false` by default.
 A clone without `-c core.symlinks=true` writes each tracked symlink as a small text file that holds the link target, so Claude Code finds no skills.
