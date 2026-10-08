@@ -162,6 +162,19 @@ printf 'signal: task.status done: slow fixture\n'
 exit 0
 SH
       ;;
+    first-held-actionable)
+      cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
+if mkdir "$FM_HOME/state/arm-first" 2>/dev/null; then
+  i=0
+  while [ ! -e "$FM_HOME/state/arm-release" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+fi
+printf 'pending:downtime:fixture-generation\n' > "$FM_HOME/state/.watcher-down"
+touch "$FM_HOME/state/.last-watcher-beat"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+printf 'stale: fixture-win actionable\n'
+exit 0
+SH
+      ;;
     blocking-actionable)
       cat >> "$dir/bin/fm-watch-arm.sh" <<'SH'
 sleep 6
@@ -1365,7 +1378,7 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   local dir a_out a_pid b_out b_status c_out c_status a_status i count
   dir=$(make_primary_dir "$TMP_ROOT/v2-superseded-silence")
   : > "$dir/state/task1.meta"
-  write_arm_fixture "$dir" blocking-actionable
+  write_arm_fixture "$dir" first-held-actionable
   a_out="$dir/state/a.out"
   run_autoarm_bg "$dir" "$a_out"
   a_pid=$RUN_AUTOARM_BG_PID
@@ -1387,6 +1400,7 @@ test_superseded_owner_goes_silent_and_never_double_translates() {
   c_out=$(run_autoarm "$dir" 2>/dev/null); c_status=$?
   expect_code 2 "$c_status" "the superseding generation must translate its own close"
   assert_contains "$c_out" "firstmate watcher wake" "the superseding generation must carry the rewake banner"
+  : > "$dir/state/arm-release"
   wait "$a_pid"
   a_status=$?
   expect_code 0 "$a_status" "the superseded owner must exit 0 instead of double-translating"

@@ -15,7 +15,7 @@
 #   SESSION     - bin/fm-sessionstart-cursor.sh, which injects the digest at
 #                 sessionStart.
 #
-# The park runs as a child of a fake harness (a bash symlink named cursor-agent)
+# The park runs as a child of a fake harness (fm_test_fake_cursor in tests/lib.sh)
 # whose pid holds the fixture home's session lock, so the real Cursor ancestry
 # path in bin/fm-session-lock-lib.sh is exercised rather than stubbed.
 # tests/fm-cursor-primary-live-e2e.test.sh is the opt-in guard against a real
@@ -30,38 +30,7 @@ TMP_ROOT=$(fm_test_tmproot fm-cursor-primary)
 fm_git_identity fmtest fmtest@example.invalid
 
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
-# Use a real executable whose own canonical basename is cursor-agent. A symlink
-# to bash is not sufficient on Linux: /proc resolves it to bash, so the real
-# Cursor ancestry classifier correctly rejects that process as an impostor.
-CC_BIN=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
-[ -n "$CC_BIN" ] || fail "a C compiler is required to build the fake Cursor process"
-cat > "$TMP_ROOT/fake-cursor.c" <<'C'
-#include <errno.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-int main(int argc, char **argv) {
-  int status;
-  pid_t child;
-  if (argc != 3 || strcmp(argv[1], "-c") != 0) return 64;
-  child = fork();
-  if (child < 0) return 70;
-  if (child == 0) {
-    execl("/bin/bash", "bash", "-c", argv[2], (char *)0);
-    _exit(127);
-  }
-  while (waitpid(child, &status, 0) < 0) {
-    if (errno != EINTR) return 71;
-  }
-  if (WIFEXITED(status)) return WEXITSTATUS(status);
-  if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-  return 72;
-}
-C
-"$CC_BIN" -o "$FAKEBIN/cursor-agent" "$TMP_ROOT/fake-cursor.c" \
-  || fail "could not build the fake Cursor process"
-FAKE_CURSOR="$FAKEBIN/cursor-agent"
+fm_test_fake_cursor "$FAKEBIN" "$TMP_ROOT"
 
 CURSOR_PAYLOAD='{"session_id":"sess-cursor","generation_id":"gen-1","loop_count":0,"status":"completed","hook_event_name":"stop","cursor_version":"2026.08.11-e8db854"}'
 CLAUDE_STOP_PAYLOAD='{"session_id":"sess-claude","stop_hook_active":false}'
