@@ -23,4 +23,10 @@
 # shared helpers, the runner, and the standalone entry points that run without a
 # live vendor - and the changed-file map selects it for a change to this file.
 
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# The global layer is a tracked fixture that holds only a commit identity, so a
+# fixture resolves one the way a configured machine does whatever this host's
+# name is; bin/fm-spawn.sh refuses a ship spawn whose project resolves none.
+# A copy of this helper without the fixture beside it reads an absent global
+# file, which git treats as empty.
+GIT_CONFIG_GLOBAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixture.gitconfig"
+export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM=1
