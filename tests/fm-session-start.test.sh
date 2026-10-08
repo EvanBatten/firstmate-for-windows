@@ -863,6 +863,7 @@ EOF
   # tasks-axi, so bootstrap's own read-only tool-detection line fires
   # deterministically regardless of what is installed on the test host).
   assert_contains "$out" "MISSING: tasks-axi (install:" "detect-only bootstrap diagnostics did not run on the read-only path"
+  [ ! -e "$home/state/.captain-missing-tools" ] || fail "a read-only session recorded missing tools for the session that owns the home"
 
   # The mutating secondmate sweep must NOT have run: no SECONDMATE_SYNC/
   # NUDGE_SECONDMATES line, and the sowed secondmate meta's target dir is
@@ -1067,6 +1068,7 @@ EOF
   missing_line=$(printf '%s\n' "$out" | grep -n 'MISSING: node' | head -1 | cut -d: -f1)
   [ -n "$missing_line" ] || fail "MISSING diagnostic did not appear at all"
   [ "$missing_line" -lt "$fleet_line" ] || fail "actionable MISSING diagnostic was buried after the bulk fleet-state digest"
+  grep -qx 'node' "$home/state/.captain-missing-tools" 2>/dev/null || fail "session start did not record the missing tool for the first-reply check"
 
   pass "digest sections are ordered safety-preamble first, live fleet state before curated memory"
 }

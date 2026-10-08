@@ -307,6 +307,49 @@ test_hook_silent_when_no_work_in_flight() {
   pass "fm-turnend-guard: silent no-op with nothing in flight"
 }
 
+run_hook_reply() {
+  local dir=$1 payload=$2 home
+  home=$(cd "$dir" && pwd)
+  printf '%s' "$payload" | PATH="$BLIND_BIN:$PATH" CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
+}
+
+test_hook_blocks_once_when_reply_omits_missing_tools() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-missing-omitted")
+  printf 'gh-axi\nquota-axi\n' > "$dir/state/.captain-missing-tools"
+  out=$(run_hook_reply "$dir" '{"stop_hook_active":false,"last_assistant_message":"greeter is registered. gh-axi is not installed."}'); status=$?
+  expect_code 2 "$status" "a first reply that omits a missing tool must block"
+  assert_contains "$out" "your reply did not name them: quota-axi" "the block must name exactly the omitted tool"
+  assert_contains "$out" "ask for consent to install them" "the block must ask for the captain's install consent"
+  [ ! -e "$dir/state/.captain-missing-tools" ] || fail "the missing-tool list must be consumed by the first reply"
+  out=$(run_hook_reply "$dir" '{"stop_hook_active":true,"last_assistant_message":"done"}'); status=$?
+  expect_code 0 "$status" "the missing-tool block must fire at most once"
+  [ -z "$out" ] || fail "the second turn end produced output: $out"
+  pass "fm-turnend-guard: blocks once when the first reply omits a missing tool"
+}
+
+test_hook_allows_reply_naming_every_missing_tool() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-missing-named")
+  printf 'gh-axi\nquota-axi\n' > "$dir/state/.captain-missing-tools"
+  out=$(run_hook_reply "$dir" '{"stop_hook_active":false,"last_assistant_message":"Two tools are missing: GH-AXI and quota-axi. May I install them?"}'); status=$?
+  expect_code 0 "$status" "a reply naming every missing tool must not block"
+  [ -z "$out" ] || fail "a reply naming every missing tool produced output: $out"
+  [ ! -e "$dir/state/.captain-missing-tools" ] || fail "the missing-tool list must be consumed once the captain was told"
+  pass "fm-turnend-guard: allows a first reply that names every missing tool"
+}
+
+test_hook_keeps_missing_tools_when_payload_has_no_reply() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-missing-no-reply")
+  printf 'gh-axi\n' > "$dir/state/.captain-missing-tools"
+  out=$(run_hook_reply "$dir" '{"stop_hook_active":false}'); status=$?
+  expect_code 0 "$status" "a payload without the reply text cannot be judged and must not block"
+  [ -z "$out" ] || fail "a payload without the reply text produced output: $out"
+  assert_equals "gh-axi" "$(cat "$dir/state/.captain-missing-tools")" "the list must wait for a reply the hook can read"
+  pass "fm-turnend-guard: keeps the missing-tool list when the payload carries no reply"
+}
+
 test_hook_blocks_when_fresh_beacon_has_no_live_lock() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-fresh-no-lock")
@@ -2199,6 +2242,9 @@ test_predicate_unregistered_check_needs_nothing
 test_predicate_task_pr_poll_is_not_a_custom_check
 test_predicate_relay_shim_is_not_a_custom_check
 test_hook_silent_when_no_work_in_flight
+test_hook_blocks_once_when_reply_omits_missing_tools
+test_hook_allows_reply_naming_every_missing_tool
+test_hook_keeps_missing_tools_when_payload_has_no_reply
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_source_only_home
 test_hook_blocks_when_dead_lock_has_fresh_beacon
