@@ -41,5 +41,5 @@ Preconditions:
 
 - The steer must reach the worker before it commits; the task is sized for a few minutes of work and the script sends the steer within seconds of dispatch.
   A worker that commits first and amends is still a pass, because the claim reads the tip.
-- A primary that answers the cleanup request with a question passes `the primary answers the cleanup request`; the wait counts a parked question as an answer.
+- A primary that answers the cleanup request with a question about that cleanup (one naming cleanup, discarding, landing, or the isolated copy) passes `the primary answers the cleanup request`; a question about anything else fails it.
   The no-discard claim is checked on its own, and the script dismisses the question before its next message, as a captain would.
