@@ -2062,14 +2062,19 @@ conclude_task_no_mistakes_run() {  # <worktree>
 }
 
 # Fix 2 (see script header): pids of every process whose CURRENT WORKING
-# DIRECTORY is exactly $1 or under it, from one bounded system-wide `lsof -a
-# -d cwd` scan (never the recursive +D file-tree walk, which lsof itself
-# documents as slow). Never $$ (this script's own pid). Empty output when
-# nothing matches; failure means the scan could not establish a safe result.
-pids_with_cwd_under() {  # <dir>
-  local dir=$1 out pid path line
-  [ -n "$dir" ] && [ -d "$dir" ] || return 0
-  dir=$(cd "$dir" && pwd -P) || return 1
+# DIRECTORY is one of the given dirs or under one, from one bounded system-wide
+# `lsof -a -d cwd` scan (never the recursive +D file-tree walk, which lsof
+# itself documents as slow). Never $$ (this script's own pid). Empty output
+# when nothing matches; failure means the scan could not establish a safe result.
+pids_with_cwd_under() {  # <dir>...
+  local dir out pid path line
+  local -a dirs=()
+  for dir in "$@"; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    dir=$(cd "$dir" && pwd -P) || return 1
+    dirs+=("$dir")
+  done
+  [ "${#dirs[@]}" -gt 0 ] || return 0
   out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1
   [ -n "$out" ] || return 0
   pid=
@@ -2083,11 +2088,14 @@ pids_with_cwd_under() {  # <dir>
       n*)
         [ -n "$pid" ] || return 1
         path=${line#n}
-        case "$path" in
-          "$dir"|"$dir"/*)
-            [ -n "$pid" ] && [ "$pid" != "$$" ] && printf '%s\n' "$pid"
-            ;;
-        esac
+        for dir in "${dirs[@]}"; do
+          case "$path" in
+            "$dir"|"$dir"/*)
+              [ "$pid" != "$$" ] && printf '%s\n' "$pid"
+              break
+              ;;
+          esac
+        done
         ;;
       '') ;;
       *) return 1 ;;
@@ -2130,16 +2138,13 @@ task_pid_list_contains() {  # <pid-list> <pid>
 task_pids_under_roots() {  # <dir>...
   TASK_PIDS=
   TASK_PIDS_FAILED_DIR=
-  local dir dir_pids pids=""
-  for dir in "$@"; do
-    [ -n "$dir" ] || continue
-    if ! dir_pids=$(pids_with_cwd_under "$dir"); then
-      TASK_PIDS_FAILED_DIR=$dir
-      return 1
-    fi
-    pids="$pids
-$dir_pids"
-  done
+  local pids dir
+  if ! pids=$(pids_with_cwd_under "$@"); then
+    for dir in "$@"; do
+      [ -n "$dir" ] && TASK_PIDS_FAILED_DIR=${TASK_PIDS_FAILED_DIR:+$TASK_PIDS_FAILED_DIR }$dir
+    done
+    return 1
+  fi
   TASK_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un || true)
 }
 
