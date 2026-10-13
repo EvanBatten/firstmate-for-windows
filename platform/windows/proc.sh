@@ -76,19 +76,28 @@ _fm_win32_cache_load() {
 # from one ToolHelp snapshot in a tenth of that, so it is compiled once with the
 # C# compiler Windows ships, and pwsh stays the fallback where that fails.
 _fm_win_ptree_build() {
-  local exe src tmp csc
+  local exe src tmp csc want='' built=''
   [ -z "${_FM_WIN_PTREE_EXE:-}" ] || return 0
   [ -z "${_FM_WIN_PTREE_FAILED:-}" ] || return 1
   _FM_WIN_PTREE_FAILED=1
   src=$_FM_WIN_PROC_DIR/ptree.cs
   [ -f "$src" ] && _fm_win_cache_dir || return 1
   exe=$_FM_WIN_CACHE_DIR/ptree.exe
-  if [ ! -f "$exe" ] || [ "$src" -nt "$exe" ]; then
+  # The exe is keyed by the source text it was built from, since every clone of
+  # a home gives ptree.cs a fresh mtime.
+  { IFS= read -r -d '' want < "$src"; } 2>/dev/null
+  { IFS= read -r -d '' built < "$exe.cs"; } 2>/dev/null
+  if [ ! -f "$exe" ] || [ "$want" != "$built" ]; then
     csc=${WINDIR:-C:/Windows}
     csc=${FM_WIN_CSC:-${csc//\\//}/Microsoft.NET/Framework64/v4.0.30319/csc.exe}
-    tmp=$_FM_WIN_CACHE_DIR/ptree.$$.exe
-    "$csc" -nologo -optimize "-out:$(cygpath -w -- "$tmp")" "$(cygpath -w -- "$src")" >/dev/null 2>&1 || { rm -f -- "$tmp"; return 1; }
-    mv -f -- "$tmp" "$exe" 2>/dev/null || rm -f -- "$tmp"
+    tmp=$_FM_WIN_CACHE_DIR/ptree.$$
+    if ! "$csc" -nologo -optimize "-out:$(cygpath -w -- "$tmp.exe")" "$(cygpath -w -- "$src")" >/dev/null 2>&1 \
+      || ! printf '%s' "$want" > "$tmp.cs"; then
+      rm -f -- "$tmp.exe" "$tmp.cs"
+      return 1
+    fi
+    mv -f -- "$tmp.exe" "$exe" 2>/dev/null && mv -f -- "$tmp.cs" "$exe.cs" 2>/dev/null
+    rm -f -- "$tmp.exe" "$tmp.cs"
     [ -f "$exe" ] || return 1
   fi
   _FM_WIN_PTREE_EXE=$exe _FM_WIN_PTREE_FAILED=

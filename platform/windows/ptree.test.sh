@@ -54,6 +54,20 @@ esac
 if [ "${got%$'\n'helper=*}" = "$want" ]; then ok "ptree.exe gives the pids and parents pwsh gives"
 else not_ok "ptree.exe rows differ from pwsh: ${got%$'\n'helper=*} vs $want"; fi
 
+exe=$T/helper/fm-platform-windows/ptree.exe
+touch -d '2001-01-01' "$exe"
+rm -f "$T"/helper/fm-platform-windows/chain-*
+got=$(chain_rows "$T/helper" FM_WIN_CSC="$T/no-such-csc.exe")
+case $got in
+  *"helper=$exe"*) ok "a later load reuses the built ptree.exe without a compiler" ;;
+  *) not_ok "a later load did not reuse ptree.exe (got: $got)" ;;
+esac
+if [ "$(stat -c %Y "$exe")" = "$(date -d '2001-01-01' +%s)" ]; then ok "the reuse did not rebuild it"; else not_ok "the reuse rebuilt ptree.exe"; fi
+printf 'stale' > "$exe.cs"
+rm -f "$T"/helper/fm-platform-windows/chain-*
+got=$(chain_rows "$T/helper")
+if [ "$(stat -c %Y "$exe")" != "$(date -d '2001-01-01' +%s)" ]; then ok "a changed source rebuilds ptree.exe"; else not_ok "a changed source kept the old ptree.exe"; fi
+
 got=$(chain_rows "$T/nocsc" FM_WIN_CSC="$T/no-such-csc.exe")
 case $got in
   *"helper=none"*) ok "without a compiler the chain load falls back to pwsh" ;;
