@@ -27,7 +27,7 @@ Preconditions:
 - The checkout under test is a git repository the script can clone from, because a second mate home is a clone of firstmate itself.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run secondmate-home`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path.
 - **Provision.** Inside the throwaway home, the script runs `bin/fm-home-seed.sh docsmate <mate directory> --no-projects` with `FM_SECONDMATE_CHARTER='Own the docs domain.'` and `FM_SECONDMATE_SCOPE='docs'`.
   It succeeds.
 - **Read the identity.** The mate directory holds `.fm-secondmate-home`, and `.fm-secondmate-parent` carries a `parent_home=` line.

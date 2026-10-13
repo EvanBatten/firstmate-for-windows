@@ -1,7 +1,7 @@
 # Notification queue
 
 Everything that needs firstmate's attention arrives through one durable queue.
-Work in that queue is presented to firstmate, stays there until firstmate acknowledges it, and can only be acknowledged by the turn that was handed it, so an interrupted turn loses nothing and a stale one retires nothing.
+Work in that queue is presented to firstmate and stays there until firstmate acknowledges it, so an interrupted turn loses nothing, and a recovery episode can only be retired by the turn that was handed it.
 
 ## Sub-features
 
@@ -27,7 +27,7 @@ Preconditions:
 - The script fills the queue through the captain inbox, so [Captain inbox](./captain-inbox.md) must work on this machine for this result to mean anything.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run wake-queue`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path.
 - **Queue two items.** The script runs `bin/fm-inbox.sh note "first"` and `bin/fm-inbox.sh note "second"`, then `bin/fm-wake-drain.sh`.
   Two `check: captain inbox note` lines appear.
 - **Read the acknowledgement.** The same output carries `WAKE_ACK_REQUIRED` with `--ack-through <seq>` and `--recovery-generation <generation>`.
@@ -45,8 +45,9 @@ Preconditions:
 
 ## Gotchas
 
-- With no recovery episode pending, any generation is accepted, because there is nothing to bind to.
-  The script creates an episode on purpose; a hand drive that skips that step proves nothing about generations.
+- The generation never gates removing rows: `--ack-through <seq>` removes every presented row up to `<seq>` whatever generation it carries, and the generation only decides whether the recovery episode in `state/.watcher-down` is marked acknowledged.
+  The script writes that episode itself (`pending:handling:fixture`); a hand drive that skips that step proves nothing about generations.
+- The script's first stale-generation acknowledgement already removes both notes, so the later "right acknowledgement" and "acknowledged work is gone" claims run on an empty queue and do not prove the acknowledgement on their own.
 - The session-start entry point is not driven here.
   It presents the same queue, but its own digest is unproved by this script.
 - The leftover-file claim is the regression check for a defect that leaked one empty file per acknowledgement, so do not weaken it to a count.

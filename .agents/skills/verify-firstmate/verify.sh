@@ -123,6 +123,13 @@ cmd_doctor() {
       || d_warn "$tool is missing: herdr-lab-pane will skip, and a skip proves nothing"
   done
 
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if [ -f "$ROOT/platform/windows/env.sh" ] && ! grep -q 'platform/windows/env\.sh' "$SUITE/lib.sh" "$SUITE/session-lib.sh" 2>/dev/null; then
+        d_warn "the suite drives bin/ without platform/windows/env.sh, the overlay every Windows captain runs under, so condition-watch fails to arm and lock-home-spelling grows a takeover chain here although the product under the overlay does neither"
+      fi ;;
+  esac
+
   tmp=${TMPDIR:-/tmp}
   if [ -d "$tmp" ] && [ -w "$tmp" ]; then
     d_ok "throwaway homes can be built under $tmp"

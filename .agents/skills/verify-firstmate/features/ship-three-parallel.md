@@ -9,7 +9,7 @@ It is a session: the code under test is cloned into a fresh home, a real firstma
 - `ships-register` registers a local-only project from a captain message and clones it into the home.
 - `ships-dispatch` turns one request for three changes into three work items, three sets of instructions, three tabs and three isolated copies.
 - `ships-done` sees each worker report its task done.
-- `ships-land` lands all three on main with the captain's standing approval, the later two after a rebase, and the work does what was asked when run from main.
+- `ships-land` lands all three on main with the captain's standing approval, and the work does what was asked when run from main.
 - `ships-cleanup` removes every tab, returns every copy, leaves no task record and leaves the home healthy.
 
 ## How to get to it (user POV)
@@ -23,7 +23,7 @@ It is a session: the code under test is cloned into a fresh home, a real firstma
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- You are inside a Herdr session, and `herdr`, `jq`, `claude`, `git`, `timeout` and `cygpath` are installed, with `claude` signed in.
+- You are inside a Herdr session, and `herdr`, `jq`, `claude`, `git`, `timeout`, `cygpath` and `tar` are installed, with `claude` signed in.
 - The primary checkout has a `.tools/` directory with the axi tools, and treehouse is installed; the session gives the clone the same toolchain.
 - You accept that it spends model tokens and opens tabs the captain will see.
   Without `VERIFY_REAL_SESSION=1` the script skips, and a skip counts as unproven.
@@ -35,7 +35,7 @@ Preconditions:
 - **Register.** `data/projects.md` gains a `greeter` line and `projects/greeter/.git` exists.
 - **Dispatch.** Three `state/<id>.meta` records appear; each names a worktree that is a linked worktree other than the project's checkout, and a Herdr pane that exists.
 - **Done.** Each `state/<id>.status` gains a `done:` line.
-- **Land.** The project's bare origin has `main` three commits ahead of its start, and `greet.sh`, `farewell.sh` and `VERSION` from `main` do what was asked when run.
+- **Land.** The project's clone in the home has `main` three commits ahead of its start, because a local-only project lands there and never on a remote, and `greet.sh`, `farewell.sh` and `VERSION` from `main` do what was asked when run.
 - **Clean up.** No `state/<id>.meta` remains and no tab opened for the session is still open.
 - **Health.** The session ends with the health check every session gets: no lock takeover chain, no lock owner left, an empty acknowledged queue, no waiting note, no task record, a beacon that stayed fresh whenever work was in flight and the primary idle, and no tab left.
 - **Proof.** Read `ship-three-parallel/transcript.txt`, the `panes/` snapshots of the primary and every worker, the `records/` snapshots of `state/` and `data/` over time, `ticks.tsv`, `captain.log`, `project-refs.txt` and `home-records.tar` in the evidence directory.

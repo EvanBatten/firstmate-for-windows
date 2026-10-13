@@ -24,10 +24,11 @@ Firstmate arms a watch that checks the condition by itself, runs the action once
 Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
-- Nothing else is needed: the condition is a file the script creates, and the action touches another file.
+- The condition is a file the script creates, and the action touches another file.
+- On Windows the watch's private spec only validates when the home runs under the overlay (`platform/windows/env.sh`, with umask 077 for that home); the suite does not load it, so `arm` fails with `published spec failed validation` there, see Gotchas.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run condition-watch`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`, and takes a few minutes because the watch polls for real.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`; a passing run takes under a minute, and each wait is capped at 90 seconds.
 - **Arm.** The script runs `bin/fm-procevent-when.sh arm probe --interval 2 --stable 1 --deadline 180 --condition test -f <flag> --action touch <marker>`.
   It succeeds, and `bin/fm-procevent.sh list` names `when-probe`.
 - **Start.** The script runs `bin/fm-procevent.sh reconcile`.
@@ -42,6 +43,9 @@ Preconditions:
 ## Gotchas
 
 - The watch is a real background process with its own 180 second deadline, so an interrupted run ends by itself.
+- On Windows, even with the overlay loaded, `bin/fm-procevent.sh reconcile` can print `failed=1` and exit `1` after about 30 seconds while the runner it launched does take the source and fire the action, so the start claim fails although the watch works.
+  The runner took its claim after reconcile stopped waiting, which reads as a launch-confirmation window too short for this host.
+  That is a product gap, not a broken watch.
 - The action and the notification land at different moments, which is why the script waits for each separately.
   A hand drive that checks both at once will see a false failure.
 - Only a file-exists condition and a `touch` action are driven here.

@@ -26,17 +26,17 @@ Preconditions:
 - No configuration is needed: `note`, `status`, `list`, and `drain` make no model call and no network call.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run captain-inbox`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path.
 - **Queue a note.** The script runs `bin/fm-inbox.sh note "the release notes need a look"`.
   The claim `ok - the note is queued and names its own id` holds when the command prints `queued <id>`.
 - **See it waiting.** The script runs `bin/fm-inbox.sh list` and `bin/fm-inbox.sh status`.
-  The list names the id and the status reports `1 note`.
+  The list names the id and the status prints `inbox    1 note(s) waiting for firstmate`.
 - **Deliver it.** The script runs `bin/fm-wake-drain.sh`.
   The output names the id and prints a `WAKE_ACK_REQUIRED` line carrying `--ack-through` and `--recovery-generation` values.
 - **Acknowledge it.** The script runs `bin/fm-inbox.sh drain --ack <id>` and then `bin/fm-wake-drain.sh --ack-through <seq> --recovery-generation <generation>` with the values the drain printed.
   Both succeed.
 - **Confirm it is gone.** The script runs `bin/fm-wake-drain.sh` and `bin/fm-inbox.sh status` again.
-  The id is not presented a second time and the status no longer reports `1 note`.
+  The id is not presented a second time and the status no longer reports `1 note(s) waiting`.
 - **Proof.** Read `captain-inbox/transcript.txt` in the evidence directory.
   One `ok` line per claim above and no `FAIL` line prove the feature, and the header names the commit it ran against.
 

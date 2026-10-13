@@ -33,7 +33,7 @@ Preconditions:
   Without `VERIFY_REAL_SESSION=1` the script skips and says so.
 
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run real-session`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`, and takes several minutes.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path, and takes several minutes.
 - **File and instruct.** The script builds a project with its own local `origin`, files a work item, and fills the instructions with a small task: add `greet.sh`.
 - **Spawn.** The script runs `bin/fm-spawn.sh <task> <project> --mode local-only --yolo off --harness claude`.
   It succeeds, the recorded isolated copy is a linked worktree that is not the project's own checkout, and `herdr tab list` shows a tab labelled `fm-<task>`.
