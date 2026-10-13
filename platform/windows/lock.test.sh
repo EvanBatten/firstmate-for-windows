@@ -58,7 +58,7 @@ start_session() {
   cp /c/Windows/System32/cmd.exe "$T/$1/claude.exe"
   MSYS2_ARG_CONV_EXCL='*' "$T/$1/claude.exe" /c "$bash_exe" "$(cygpath -m "$script")" "$1" "$2" ${3:+"$3"} > /dev/null 2>&1 &
   for ((i = 0; i < 50; i++)); do
-    read -r pid winpid < <(/usr/bin/ps -W | awk -v p="$1/claude" 'index($0, p) {print $1, $4; exit}')
+    read -r pid winpid < <(/usr/bin/ps -W | awk -v p="${T##*/}/$1/claude" 'index($0, p) {print $1, $4; exit}')
     [ -n "$pid" ] && break
     sleep 0.2
   done
