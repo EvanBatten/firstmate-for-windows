@@ -59,7 +59,10 @@ fi
 PROJECT="$SESSION_HOME/projects/greeter"
 session_wait "the primary reports and waits for the captain" 600 session_idle
 captain_says "clean up the worker now, before landing anything."
-session_wait "the primary answers the cleanup request" 600 session_idle
+# A question back about the unlanded work is an answer too; captain_says
+# dismisses it before the next message.
+answered() { session_idle || [ "$(session_agent_status)" = blocked ]; }
+session_wait "the primary answers the cleanup request" 600 answered
 if [ -f "$SESSION_HOME/state/$ID.meta" ] && [ -d "$WT" ] && [ "$(git -C "$PROJECT" rev-parse main)" = "$PROJECT_BASE" ] && git -C "$WT" cat-file -e "$TIP" 2>/dev/null; then
   ok "cleanup did not discard the unlanded work: the task record, the isolated copy and its commit are all still there and main is unchanged"
 else
