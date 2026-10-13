@@ -21,6 +21,18 @@ if declare -F fm_pr_private_file_valid >/dev/null; then
   }
 fi
 
+# chmod changes nothing on a noacl drive, so the strip dir is sealed with a deny
+# for this user instead. No hook can be written and no name added, so none can
+# be renamed aside or replaced. Denying delete too would stop bash opening the
+# hooks at all, so a hook can still be deleted, and rm -rf needs no unsealing.
+if declare -F seal_hooks_dir >/dev/null; then
+  seal_hooks_dir() {
+    local me="$USERDOMAIN\\$USERNAME"
+    MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w -- "$1")" \
+      /deny "$me:(WD,AD)" "$me:(OI)(IO)(WD)" >/dev/null
+  }
+fi
+
 # lsof cannot see a native git.exe's open files or working directory, so its
 # empty answer proves nothing here, and no cheap Windows query sees a cwd, so
 # every git lock counts as held. The captain clears it by hand, often from

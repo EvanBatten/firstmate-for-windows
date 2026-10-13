@@ -139,12 +139,6 @@ quote_for_hook() {
   printf "'%s'" "${1//"$sq"/"$esc"}"
 }
 
-write_executable() {
-  local dest=$1
-  cat >"$dest" || return 1
-  chmod 500 "$dest"
-}
-
 # Shared body for every wrapper: after the pane-wide GIT_CONFIG override is
 # cleared, resolve this repository's own hooks directory the way git does
 # (core.hooksPath, else the common dir's hooks) and exec that name if it
@@ -217,7 +211,7 @@ install_hooks() {
   chmod 700 "$hooks_dir" 2>/dev/null || true
   hooks_dir=$(CDPATH='' cd -- "$hooks_dir" && pwd -P) || return 1
 
-  write_executable "$hooks_dir/commit-msg" <<EOF
+  cat >"$hooks_dir/commit-msg" <<EOF || return 1
 #!/usr/bin/env bash
 set -u
 $(quote_for_hook "$SELF") "\$1" || exit \$?
@@ -228,15 +222,21 @@ EOF
   for name in $FM_GIT_CLIENT_HOOKS; do
     printf '#!/usr/bin/env bash\nset -u\n%s\n' "$body" >"$hooks_dir/$name" || return 1
   done
+  seal_hooks_dir "$hooks_dir"
+}
+
+# Read-only, so a hook manager in the pane cannot rename, replace or add a hook.
+seal_hooks_dir() {
   # shellcheck disable=SC2086 # Each name is one word.
-  (cd -- "$hooks_dir" && chmod 500 $FM_GIT_CLIENT_HOOKS) || return 1
-  chmod 500 "$hooks_dir"
+  (cd -- "$1" && chmod 500 commit-msg $FM_GIT_CLIENT_HOOKS) || return 1
+  chmod 500 "$1"
 }
 
 CMD=${1:-}
 case "$CMD" in
 install)
   [ "$#" -eq 3 ] || usage
+  [ -z "${FM_PLATFORM_OVERLAY:-}" ] || eval '. "$FM_PLATFORM_OVERLAY"'
   install_hooks "$2" "$3"
   ;;
 -h | --help)
