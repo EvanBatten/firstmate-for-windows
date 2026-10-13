@@ -480,11 +480,12 @@ export class Session {
     const sha = await this.git(['-C', this.root, 'rev-parse', 'HEAD']);
     const branch = await this.git(['-C', this.root, 'rev-parse', '--abbrev-ref', 'HEAD']);
     if (branch === 'HEAD') {
-      await this.git(['clone', '-q', '-c', 'core.symlinks=true', this.root, this.home]);
+      await this.git(['clone', '-q', '--no-tags', '-c', 'core.symlinks=true', this.root, this.home]);
       await this.git(['-C', this.home, 'checkout', '-q', sha]);
     } else {
-      await this.git(['clone', '-q', '-c', 'core.symlinks=true', '--branch', branch, this.root, this.home]);
+      await this.git(['clone', '-q', '--no-tags', '-c', 'core.symlinks=true', '--branch', branch, this.root, this.home]);
     }
+    this.committedHooks = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
     const dirty = await this.git(['-C', this.root, 'status', '--porcelain']);
     if (dirty) {
       try {
@@ -503,6 +504,7 @@ export class Session {
         this.log(`uncommitted changes could not be applied; the clone is ${sha} exactly`);
       }
     }
+    await this.squashHistory();
     const tools = this.env.FM_DRIVE_TOOLS_DIR || join(this.root, '.tools');
     if (existsSync(tools)) {
       try { symlinkSync(realpathSync(tools), join(this.home, '.tools'), 'dir'); } catch { cpSync(tools, join(this.home, '.tools'), { recursive: true }); }
@@ -515,6 +517,22 @@ export class Session {
     }
     this.code = { sha, dirty: dirty !== '' };
     this.keep('code.txt', `root ${this.root}\nbranch ${branch}\ncommit ${sha}\nhome ${this.home}\n${dirty ? `uncommitted:\n${dirty}\n` : ''}`);
+  }
+
+  // Claude Code puts the home's branch, status and recent commit subjects in the primary's system
+  // prompt, so a home cloned at a PR head would tell the primary what the fix under test is meant to
+  // do. A fresh install shows none of that: one commit on main holding the code under test.
+  async squashHistory() {
+    const git = (...a) => this.git(['-C', this.home, ...a]);
+    await git('remote', 'remove', 'origin');
+    await git('add', '-A');
+    const tree = await git('write-tree');
+    const commit = await git('-c', 'user.name=firstmate', '-c', 'user.email=firstmate@example.invalid', 'commit-tree', tree, '-m', 'firstmate');
+    await git('checkout', '-q', '-B', 'main', commit);
+    for (const head of (await git('for-each-ref', '--format=%(refname:short)', 'refs/heads')).split('\n')) {
+      if (head && head !== 'main') await git('branch', '-q', '-D', head);
+    }
+    await git('reflog', 'expire', '--expire=now', '--all');
   }
 
   async seedProject(name) {
