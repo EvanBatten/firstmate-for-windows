@@ -417,7 +417,9 @@ export class Session {
     else if (shellName === 'cmd' || shellName === 'cmd.exe') this.shell = 'cmd';
     else this.shell = 'posix';
     const paneRc = join(this.home, 'platform', 'windows', 'pane-rc.sh');
-    if (this.shell === 'pwsh' && existsSync(paneRc)) await this.enterGitBash(created.tab?.tab_id, paneRc, paneEnv);
+    // Herdr can answer before the new pane's shell has started, so its reported
+    // shell cannot decide whether the primary needs the overlay's Git Bash.
+    if (process.platform === 'win32' && existsSync(paneRc)) await this.enterGitBash(created.tab?.tab_id, paneRc, paneEnv);
     this.keep('workspace.json', JSON.stringify({ workspace_id: this.workspaceId, pane_id: this.paneId, session: this.herdr.session, transport: this.herdr.transport }, null, 2));
     this.watchPrimaryStatus();
   }
