@@ -9,6 +9,7 @@
 # A cached walk row can outlive its process by FM_WIN_CHAIN_TTL seconds, so the
 # cache answers identity and parent links only, never liveness.
 FM_WIN_CHAIN_TTL=${FM_WIN_CHAIN_TTL:-10}
+_FM_WIN_PROC_DIR=${BASH_SOURCE[0]%/*}
 FM_PROC_PPID='' FM_PROC_PGID='' FM_PROC_COMM='' FM_PROC_ARGS='' FM_PROC_WINPID=''
 declare -gA _FM_W32_PPID=() _FM_W32_COMM=()
 
@@ -70,6 +71,29 @@ _fm_win32_cache_load() {
   [ "${#stale[@]}" -eq 0 ] || rm -f "${stale[@]}" 2>/dev/null
 }
 
+# Starting pwsh for Get-Process costs about 2 s here, and every bash a native
+# program starts pays it to find its Win32 parent. ptree.cs answers the same rows
+# from one ToolHelp snapshot in a tenth of that, so it is compiled once with the
+# C# compiler Windows ships, and pwsh stays the fallback where that fails.
+_fm_win_ptree_build() {
+  local exe src tmp csc
+  [ -z "${_FM_WIN_PTREE_EXE:-}" ] || return 0
+  [ -z "${_FM_WIN_PTREE_FAILED:-}" ] || return 1
+  _FM_WIN_PTREE_FAILED=1
+  src=$_FM_WIN_PROC_DIR/ptree.cs
+  [ -f "$src" ] && _fm_win_cache_dir || return 1
+  exe=$_FM_WIN_CACHE_DIR/ptree.exe
+  if [ ! -f "$exe" ] || [ "$src" -nt "$exe" ]; then
+    csc=${WINDIR:-C:/Windows}
+    csc=${FM_WIN_CSC:-${csc//\\//}/Microsoft.NET/Framework64/v4.0.30319/csc.exe}
+    tmp=$_FM_WIN_CACHE_DIR/ptree.$$.exe
+    "$csc" -nologo -optimize "-out:$(cygpath -w -- "$tmp")" "$(cygpath -w -- "$src")" >/dev/null 2>&1 || { rm -f -- "$tmp"; return 1; }
+    mv -f -- "$tmp" "$exe" 2>/dev/null || rm -f -- "$tmp"
+    [ -f "$exe" ] || return 1
+  fi
+  _FM_WIN_PTREE_EXE=$exe _FM_WIN_PTREE_FAILED=
+}
+
 fm_win32_chain_load() {
   local root=$1 out
   case "$root" in ''|*[!0-9]*|0) return 1 ;; esac
@@ -77,7 +101,8 @@ fm_win32_chain_load() {
   _fm_win32_cache_load
   [ -n "${_FM_W32_PPID[$root]+x}" ] && return 0
   # shellcheck disable=SC2016 # PowerShell syntax, passed through unexpanded.
-  out=$(FM_WIN_ROOT=$root pwsh -NoProfile -NonInteractive -Command '
+  if ! _fm_win_ptree_build || ! out=$("$_FM_WIN_PTREE_EXE" "$root" 2>/dev/null) || [ -z "$out" ]; then
+    out=$(FM_WIN_ROOT=$root pwsh -NoProfile -NonInteractive -Command '
 $p = Get-Process -Id ([int]$env:FM_WIN_ROOT) -ErrorAction SilentlyContinue
 for ($i = 0; $i -lt 16 -and $p; $i++) {
   $q = $null; try { $q = $p.Parent } catch {}
@@ -85,6 +110,7 @@ for ($i = 0; $i -lt 16 -and $p; $i++) {
   "{0}`t{1}`t{2}" -f $p.Id, $(if ($q) { $q.Id } else { 0 }), $c
   $p = $q
 }' 2>/dev/null) || return 1
+  fi
   out=${out//$'\r'/}
   [ -n "$out" ] || return 1
   if _fm_win_cache_dir; then
