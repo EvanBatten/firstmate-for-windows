@@ -91,6 +91,23 @@ for ((i = 0; i < 50; i++)); do
 done
 expect_eq "the pane's current path follows a cd" "$want" "$got"
 
+process_state_until() {  # <expected> -> the last state read
+  local i state
+  for ((i = 0; i < 30; i++)); do
+    state=$(FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 fm_backend_herdr_pane_process_state "$S" "$pane")
+    [ "$state" = "$1" ] && break
+    sleep 0.2
+  done
+  printf '%s' "$state"
+}
+expect_eq "an idle task pane reads as a shell-only pane" shell "$(process_state_until shell)"
+mkdir -p "$T/agentbin"
+cp /usr/bin/sleep.exe "$T/agentbin/claude.exe"
+fm_backend_herdr_send_text_line "$target" "$(printf '%q' "$T/agentbin/claude.exe") 900"
+expect_eq "a pane running a harness-named process reads as an agent pane" agent "$(process_state_until agent)"
+fm_backend_herdr_send_key "$target" C-c
+expect_eq "the pane reads shell-only again once that process exits" shell "$(process_state_until shell)"
+
 fm_backend_herdr_send_literal "$target" /exit
 for ((i = 0; i < 50; i++)); do
   last=$(fm_backend_herdr_capture "$target" 60 | awk 'NF { line = $0 } END { print line }')

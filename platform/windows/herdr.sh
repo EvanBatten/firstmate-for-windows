@@ -3,7 +3,7 @@
 # after every hooked library. Sourcing it again changes nothing.
 #
 # Herdr here is a native Windows program, and upstream talks to it as if it
-# were a Unix one. This file fixes the four places where that shows:
+# were a Unix one. This file fixes the five places where that shows:
 #   - MSYS rewrites any argument that looks like a POSIX path before a native
 #     program sees it, so a bare `/exit` typed into a pane arrives as
 #     `C:/Program Files/Git/exit`. Every herdr call runs with argument
@@ -18,6 +18,8 @@
 #     not absolute. It is folded to /c/... first.
 #   - `pane get` never fills foreground_cwd here. The pane's cwd comes from
 #     the OSC 9;9 that pane-rc.sh prints at each prompt, in drive spelling.
+#   - `pane process-info` names only the pane's own shell as its foreground,
+#     whatever runs in it, so what a pane runs is read from /proc instead.
 #
 # A herdr found on PATH that is not a native program is a test fixture's fake,
 # and gets every call byte for byte as upstream made it.
@@ -166,4 +168,50 @@ fm_backend_herdr_current_path() {  # <target>
     | jq -r '.result.pane.foreground_cwd // .result.pane.cwd // empty' 2>/dev/null)
   case $path in [A-Za-z]:[\\/]*) path=$(cygpath -u -- "$path") ;; esac
   [ -z "$path" ] || printf '%s\n' "$path"
+}
+
+# Herdr here names only the pane's own shell as its foreground, by Win32 pid,
+# whatever runs in it, so upstream reads every pane as `other` and pays its whole
+# settle window. What runs in the pane is that shell's MSYS descendants.
+_fm_win_herdr_keep_upstream fm_backend_herdr_pane_process_state_sample
+fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
+  local info shell f pid ppid grew others=0
+  local -A parent=() inside=()
+  [ "$PATH" = "${_FM_WIN_HERDR_PATH_KEY-}" ] || _fm_win_herdr_resolve
+  if [ "$_FM_WIN_HERDR_NATIVE" != 1 ]; then
+    _fm_win_upstream_fm_backend_herdr_pane_process_state_sample "$@"
+    return $?
+  fi
+  info=$(fm_backend_herdr_cli "$1" pane process-info --pane "$2" 2>/dev/null) || { printf 'unreadable'; return 0; }
+  shell=$(jq -er --arg pane "$2" '.result
+    | select(.type == "pane_process_info" and .process_info.pane_id == $pane)
+    | .process_info.shell_pid | select(type == "number" and . > 1) | floor' <<< "$info" 2>/dev/null) \
+    || { printf 'unreadable'; return 0; }
+  fm_win_msys_pid "$shell" || { printf 'unreadable'; return 0; }
+  for f in /proc/[0-9]*; do
+    ppid=
+    { read -r ppid < "$f/ppid"; } 2>/dev/null
+    [ -n "$ppid" ] && parent[${f#/proc/}]=$ppid
+  done
+  inside[$FM_WIN_MSYS_PID]=1
+  grew=1
+  while [ "$grew" = 1 ]; do
+    grew=0
+    for pid in "${!parent[@]}"; do
+      [ -z "${inside[$pid]+x}" ] && [ -n "${inside[${parent[$pid]}]+x}" ] || continue
+      inside[$pid]=1
+      grew=1
+    done
+  done
+  unset "inside[$FM_WIN_MSYS_PID]"
+  for pid in "${!inside[@]}"; do
+    fm_win_msys_proc "$pid" || continue
+    _fm_win_image_name "$FM_PROC_COMM"
+    case $(fm_agent_process_classify "$_FM_WIN_NAME" "${FM_PROC_ARGS%% *}" "$FM_PROC_ARGS" "$pid") in
+      agent) printf 'agent'; return 0 ;;
+      shell) ;;
+      *) others=$((others + 1)) ;;
+    esac
+  done
+  if [ "$others" -eq 0 ]; then printf 'shell'; else printf 'other'; fi
 }
