@@ -2065,6 +2065,40 @@ test('no module spawns a shell', () => {
   }
 });
 
+describe('home history', () => {
+  test('the home shows the primary none of the branch names or commit subjects of the checkout under test', async () => {
+    const root = makeRoot();
+    const git = (dir, ...a) => {
+      const r = spawnSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+      assert.equal(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git(root, 'checkout', '-q', '-b', 'direct/teach-the-primary-the-answer');
+    writeFileSync(join(root, 'AGENTS.md'), '# test root\nanswer: 42\n');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qam', 'make the primary name the missing tools');
+    writeFileSync(join(root, 'bin', 'fix.sh'), 'echo fixed\n');
+    git(root, 'add', 'bin/fix.sh');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'fix the guard so it blocks once');
+    writeFileSync(join(root, 'bin', 'fix.sh'), 'echo fixed twice\n');
+
+    const s = new sessionLib.Session({ trace: { feature: 'history', steps: [] }, env: { ...process.env, FM_DRIVE_ROOT: root } });
+    await s.cloneFresh();
+    scratch.push(s.scratch);
+
+    const seen = [
+      git(s.home, 'log', '--all', '--format=%s%n%b'),
+      git(s.home, 'for-each-ref', '--format=%(refname)'),
+      git(s.home, 'status', '--porcelain', '--branch'),
+    ].join('\n');
+    assert.doesNotMatch(seen, /teach-the-primary|missing tools|blocks once/);
+    assert.equal(git(s.home, 'symbolic-ref', '--short', 'HEAD'), 'main');
+    assert.equal(git(s.home, 'status', '--porcelain'), '');
+    assert.equal(readFileSync(join(s.home, 'AGENTS.md'), 'utf8'), '# test root\nanswer: 42\n');
+    assert.equal(readFileSync(join(s.home, 'bin', 'fix.sh'), 'utf8'), 'echo fixed twice\n');
+    assert.deepEqual(s.code, { sha: git(root, 'rev-parse', 'HEAD'), dirty: true });
+  });
+});
+
 describe('repo checkout', () => {
   test('a clone made with core.autocrlf=true, the Git for Windows default, checks every file out with LF', () => {
     const dest = join(tmp('autocrlf'), 'home');
