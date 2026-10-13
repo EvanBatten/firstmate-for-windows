@@ -759,8 +759,10 @@ test_github_failed_merge_never_claims_armed_auto_merge() {
     "github-auto-merge-command-fails: the original forge error was masked"
   assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
     "github-auto-merge-command-fails: refusal did not name the concrete observed state"
-  assert_no_grep 'armed' "$case_dir/stderr" \
+  assert_no_grep 'requested and armed' "$case_dir/stderr" \
     "github-auto-merge-command-fails: a failed merge command was reported as an armed auto-merge"
+  assert_no_grep 'remains armed' "$case_dir/stderr" \
+    "github-auto-merge-command-fails: a failed merge command left a merge poll armed"
   assert_grep 'auto-merge was requested for https://github.com/example/repo/pull/67' \
     "$case_dir/stderr" \
     "github-auto-merge-command-fails: the refusal never said auto-merge had only been requested"
@@ -792,8 +794,10 @@ test_github_failed_merge_with_queue_flags_never_claims_acceptance() {
     "github-failed-merge-queue-flags: refusal did not name the concrete observed state"
   assert_no_grep 'was accepted with the exact flags' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: a failed merge command was reported as an accepted request"
-  assert_no_grep 'armed' "$case_dir/stderr" \
+  assert_no_grep 'requested and armed' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: a failed merge command was reported as an armed auto-merge"
+  assert_no_grep 'remains armed' "$case_dir/stderr" \
+    "github-failed-merge-queue-flags: a failed merge command left a merge poll armed"
   assert_grep 'base branch main requires the merge queue; retry with:' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: the failed merge command lost its concrete retry guidance"
   assert_grep 'task-x1 https://github.com/example/repo/pull/74 --attended-override -- --auto --merge' "$case_dir/stderr" \
