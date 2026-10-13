@@ -839,7 +839,7 @@ test_cli_scopes_the_selected_client_to_its_session() {
   local dir out
   dir="$TMP_ROOT/client-pair-cross-session"
   mkdir -p "$dir/stale" "$dir/current" "$dir/tools"
-  ln -sf "$(command -v jq)" "$dir/tools/jq"
+  ln -sf "$(type -P jq)" "$dir/tools/jq"
   cat > "$dir/stale/herdr" <<'SH'
 #!/usr/bin/env bash
 session=${!#}
@@ -928,7 +928,7 @@ test_cli_single_client_pays_no_selection_read() {
 test_client_status_reads_both_status_shapes() {
   local dir out
   dir="$TMP_ROOT/client-status-shapes"; mkdir -p "$dir/bin" "$dir/tools"
-  ln -sf "$(command -v jq)" "$dir/tools/jq"
+  ln -sf "$(type -P jq)" "$dir/tools/jq"
   # An older client that reports protocols but no .server.compatible field
   # (the pre-0.8 status shape) must be judged by protocol equality.
   cat > "$dir/bin/herdr" <<'SH'

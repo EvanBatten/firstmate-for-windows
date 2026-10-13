@@ -20,7 +20,7 @@ KIMI_RUNTIME_TASK_TMP=
 KIMI_RUNTIME_LAUNCH_DIR=
 PYTHON_BIN=$(command -v python3) || fail "test needs python3"
 PYTHON_BIN_DIR=$(dirname "$PYTHON_BIN")
-JQ_BIN=$(command -v jq) || fail "test needs jq"
+JQ_BIN=$(type -P jq) || fail "test needs jq"
 BASE_PATH=${FM_TEST_BASE_PATH:-$PYTHON_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin}
 
 ai_trailer_hooks_prefix() {  # <home> <id>

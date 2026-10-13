@@ -25,7 +25,7 @@ HOLDER_FD=5
 trap 'if [ "${#HOLDER_PIDS[@]}" -gt 0 ]; then kill "${HOLDER_PIDS[@]}" 2>/dev/null || true; fi; fm_test_cleanup || true' EXIT
 
 GUARD="$ROOT/bin/fm-remote-herdr-guard.sh"
-JQ=$(command -v jq)
+JQ=$(type -P jq)
 SESSION=fm-remote
 
 # The guard must see only the fixture and the system tools it really needs,

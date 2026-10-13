@@ -24,7 +24,7 @@
 make_herdr_client_pair() {  # <dir> [stale-version stale-protocol current-version current-protocol]
   local dir=$1 stale_version=${2:-0.8.2} stale_protocol=${3:-20} current_version=${4:-0.9.0} current_protocol=${5:-22}
   mkdir -p "$dir/stale" "$dir/current" "$dir/tools"
-  ln -sf "$(command -v jq)" "$dir/tools/jq"
+  ln -sf "$(type -P jq)" "$dir/tools/jq"
   cat > "$dir/stale/herdr" <<SH
 #!/usr/bin/env bash
 printf '%s\\n' "\$*" >> "\${FM_HERDR_PAIR_DIR:?}/stale.log"

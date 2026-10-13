@@ -305,7 +305,7 @@ test_transcript_fold_ignores_lifecycle_tokens_in_message_text() {
   [ "$out" = "busy cursor-transcript" ] \
     || fail "lifecycle-shaped message text must not close an active turn, got '$out'"
 
-  jq_bin=$(command -v jq) || fail "jq is required to exercise Cursor's primary transcript parser"
+  jq_bin=$(type -P jq) || fail "jq is required to exercise Cursor's primary transcript parser"
   [ -x "$jq_bin" ] || fail "jq must be executable"
   state=$(make_cursor_binding malformed-close conv-malformed '{"role":"user"}
 {"type":"turn_ended",broken}

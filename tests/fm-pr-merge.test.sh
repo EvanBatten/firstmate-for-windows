@@ -26,7 +26,7 @@ MR_URL="$MR_PROJECT_URL/-/merge_requests/7"
 MR_HEAD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 MR_STALE_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
-JQ_BIN=$(command -v jq) || fail "these tests read glab's JSON with the real jq, which was not found"
+JQ_BIN=$(type -P jq) || fail "these tests read glab's JSON with the real jq, which was not found"
 REAL_MV=$(command -v mv) || fail "these tests need mv to simulate a failed poll publish"
 
 # Build a fresh sandbox for one test case: a state dir with task metadata and a
