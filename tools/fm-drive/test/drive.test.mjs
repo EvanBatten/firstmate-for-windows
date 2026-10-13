@@ -1871,6 +1871,36 @@ describe('grafted onboarding config and shell prompts', () => {
     assert.equal(s.primaryPid, 4242);
   });
 
+  test('on Windows the primary pane enters Git Bash before herdr reports its shell', { skip: process.platform !== 'win32' && 'the overlay Git Bash pane exists only on Windows' }, async () => {
+    const home = tmp('git-bash-home');
+    mkdirSync(join(home, 'platform', 'windows'), { recursive: true });
+    writeFileSync(join(home, 'platform', 'windows', 'pane-rc.sh'), '');
+    const herdr = {
+      session: 'fake',
+      transport: 'cli',
+      subscribe: () => ({}),
+      call: async (method) => {
+        if (method === 'workspace.create') return { workspace: { workspace_id: 'w1' }, root_pane: { pane_id: 'w1:p1' }, tab: { tab_id: 'w1:t1' } };
+        if (method === 'pane.process_info') return { process_info: { foreground_processes: [] } };
+        if (method === 'layout.apply') return { layout: { root: { pane_id: 'w1:p2' } } };
+        return {};
+      },
+    };
+    const attach = Herdr.attach;
+    Herdr.attach = async () => herdr;
+    try {
+      const s = new sessionLib.Session({ trace: { feature: 'git-bash', steps: [] }, env: process.env });
+      s.home = home;
+      s.evidenceDir = tmp('git-bash-evidence');
+      s.claudeConfigDir = tmp('git-bash-config');
+      await s.open();
+      assert.equal(s.paneId, 'w1:p2');
+      assert.equal(s.shell, 'git-bash');
+    } finally {
+      Herdr.attach = attach;
+    }
+  });
+
   test('waitUntil keeps a claim that already holds when the primary then asks a question', async () => {
     const home = buildHome('ship-in-flight');
     const started = Date.now();
