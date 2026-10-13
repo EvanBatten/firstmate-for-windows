@@ -102,6 +102,21 @@ case $out in
   *) ok "a shell whose walk did not break ignores another session's CLAUDE_PID" ;;
 esac
 
+# Windows gives a dead process's pid to a new one within seconds, while a walk
+# keeps the chain it saw for FM_WIN_CHAIN_TTL. A row a dead process left for
+# this hook's pid names that process's parent, not this hook's.
+mkdir -p "$T/reused/state" "$T/tmp/fm-platform-windows"
+TMPDIR=$T/tmp start_session s7 "$T/reused" hook; p7=$SESSION_PID w7=$SESSION_WINPID
+hook_winpid=$(run_lock s7 1 'cat /proc/$$/winpid' | head -n 1)
+plant_dead_chain() {
+  printf '%s\n%s\t4\t%s\n4\t0\tSystem\n' "$EPOCHSECONDS" "$hook_winpid" 'C:\Program Files\Git\usr\bin\bash.exe' > "$T/tmp/fm-platform-windows/$1"
+}
+plant_dead_chain chain-8
+expect "a hook-shaped session ignores a dead process's cached row for its pid" "lock acquired: harness pid $p7" "$(run_lock s7 2 "CLAUDE_PID=$w7 bin/fm-lock.sh")"
+rm -f "$T"/tmp/fm-platform-windows/chain-* "$T/reused/state/.lock" "$T/reused/state/.lock-session"
+plant_dead_chain "chain-$hook_winpid"
+expect "a hook-shaped session ignores a dead process's cached chain under its pid" "lock acquired: harness pid $p7" "$(run_lock s7 3 "CLAUDE_PID=$w7 bin/fm-lock.sh")"
+
 start_session s1 "$H"; p1=$SESSION_PID w1=$SESSION_WINPID
 start_session s2 "$H"; p2=$SESSION_PID
 
