@@ -35,6 +35,10 @@ _fm_win_path=${_fm_win_path#:}
 PATH=$_fm_win_dir/bin:${_fm_win_path%:}
 # shellcheck source=platform/windows/jq.sh
 . "$_fm_win_dir/jq.sh" "$_fm_win_dir/bin"
+# A test fixture runs bin/jq by its path from a PATH with no jq.exe on it, so
+# bin/jq falls back to the one this shell found.
+[ -n "${FM_WIN_JQ_EXE:-}" ] || FM_WIN_JQ_EXE=${FM_WIN_JQ_BIN:-}
+export FM_WIN_JQ_EXE
 
 _fm_win_msys=
 for _fm_win_word in ${MSYS:-}; do

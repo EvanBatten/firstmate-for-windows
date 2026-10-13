@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # jq on Windows writes CRLF, which leaves a CR on every value upstream reads.
-# -b makes it write LF.
+# -b makes it write LF. Only a native jq.exe is taken, because a jq script ahead
+# of this one on PATH may itself exec this file by path and loop forever.
 self=${BASH_SOURCE[0]%/*}
 IFS=: read -r -a dirs <<< "$PATH"
 for d in "${dirs[@]}"; do
-  [ -n "$d" ] && [ ! "$d" -ef "$self" ] && [ -x "$d/jq" ] && exec "$d/jq" -b "$@"
+  [ -n "$d" ] && [ ! "$d" -ef "$self" ] && [ -x "$d/jq.exe" ] && exec "$d/jq.exe" -b "$@"
 done
+[ -z "${FM_WIN_JQ_EXE:-}" ] || exec "$FM_WIN_JQ_EXE" -b "$@"
 echo "jq: not found on PATH" >&2
 exit 127
