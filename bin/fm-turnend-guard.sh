@@ -98,6 +98,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
+fm_timing_mark turnend-guard begin
+trap 'fm_timing_mark turnend-guard exit' EXIT
 CLAUDE_MODE=0
 CURSOR_MODE=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
