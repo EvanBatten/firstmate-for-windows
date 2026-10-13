@@ -2079,6 +2079,7 @@ describe('home history', () => {
     writeFileSync(join(root, 'bin', 'fix.sh'), 'echo fixed\n');
     git(root, 'add', 'bin/fix.sh');
     git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'fix the guard so it blocks once');
+    git(root, 'tag', 'teach-the-primary-v1');
     writeFileSync(join(root, 'bin', 'fix.sh'), 'echo fixed twice\n');
 
     const s = new sessionLib.Session({ trace: { feature: 'history', steps: [] }, env: { ...process.env, FM_DRIVE_ROOT: root } });
@@ -2089,6 +2090,7 @@ describe('home history', () => {
       git(s.home, 'log', '--all', '--format=%s%n%b'),
       git(s.home, 'for-each-ref', '--format=%(refname)'),
       git(s.home, 'status', '--porcelain', '--branch'),
+      git(s.home, 'reflog', '--all'),
     ].join('\n');
     assert.doesNotMatch(seen, /teach-the-primary|missing tools|blocks once/);
     assert.equal(git(s.home, 'symbolic-ref', '--short', 'HEAD'), 'main');
