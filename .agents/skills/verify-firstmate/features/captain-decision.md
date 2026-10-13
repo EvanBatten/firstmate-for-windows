@@ -15,7 +15,7 @@ The question rides on a real work item that reads as waiting on him, and only hi
 
 - The captain is asked a question in chat, and answers it in chat; firstmate records that answer with `bin/fm-captain-hold.sh answer <task-id> --decision-file <path>`.
 - Firstmate holds a work item with `bin/fm-captain-hold.sh hold <task-id> --reason <question>`.
-- The captain answers from a structured review surface, which feeds `bin/fm-captain-hold.sh answers` with keyed answers on standard input.
+- The captain answers from a structured review surface, which feeds `bin/fm-captain-hold.sh answers --source <provenance>` with keyed answers on standard input.
 - Anyone reads what is waiting with `tasks-axi show <task-id>`.
 
 ## Driving it with verify.sh
@@ -26,7 +26,7 @@ Preconditions:
 - The throwaway home carries a copy of `.tasks.toml`, which the script's home builder provides.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run captain-decision`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path.
 - **File the work.** The script runs `tasks-axi add ship-or-wait --title "ship the notes or wait"` inside the home.
   It succeeds.
 - **Hold it.** The script runs `bin/fm-captain-hold.sh hold ship-or-wait --reason "Ship now or wait for the fix? Options: ship now, wait."`.

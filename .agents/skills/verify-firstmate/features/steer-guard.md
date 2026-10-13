@@ -22,7 +22,7 @@ Preconditions:
 - The doctor reports `# doctor: worth driving`.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run steer-guard`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path.
 - **Steer with no home.** The script runs `env -u FM_HOME bin/fm-send.sh some-task "hello"`.
   It is refused, and the refusal names `FM_HOME`.
 - **Steer an unknown worker.** The script runs `bin/fm-send.sh no-such-task "hello"` with `FM_HOME` set to the throwaway home.

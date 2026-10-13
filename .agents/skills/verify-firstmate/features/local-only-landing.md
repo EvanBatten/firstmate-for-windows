@@ -24,7 +24,7 @@ Preconditions:
 - The script builds its own project repository under the throwaway home's `projects/`, a work branch `fm/demo` in a separate worktree, and the task's durable record naming both; nothing outside the throwaway home is a project here.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run local-only-landing`.
-  The run ends with `verification: 1 passed, 0 failed, 0 skipped`.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path.
 - **Land approved work.** The script runs `bin/fm-merge-local.sh demo`.
   It succeeds.
 - **Read main.** The script runs `git rev-parse main` in the project.

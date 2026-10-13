@@ -49,7 +49,7 @@ The suite also clears every `FM_*_OVERRIDE` variable before it drives anything, 
 
 The doctor writes nothing and exits `0` when the checkout is worth driving and `1` when it is not.
 Run it first, and run it again whenever a result looks wrong.
-It reports whether the suite is present, whether this is a linked worktree or the primary checkout, which commit is under test and how many paths are uncommitted, whether the harness skill link resolves, which tools are missing, and whether the temp directory can hold a throwaway home.
+It reports whether the suite is present, whether this is a linked worktree or the primary checkout, which commit is under test and how many paths are uncommitted, whether the harness skill link resolves, which tools are missing, whether the temp directory can hold a throwaway home, and on Windows whether the suite loads the `platform/windows/` overlay a captain runs under.
 A `warn -` line does not stop a run, but read it: a missing optional tool means a feature will skip, and a skip proves nothing.
 `run` calls the doctor itself and refuses to drive a checkout the doctor rejects.
 

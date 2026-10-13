@@ -22,12 +22,13 @@ Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
 - On a machine whose temp directory has one spelling, both drives use the same path and must still pass.
+- On Windows the fix for #82 lives in the overlay (`platform/windows/path.sh`, loaded by `platform/windows/env.sh`), which a captain always runs under; the suite does not load it, so a drive through `verify.sh` tests bare upstream code and fails under the physical spelling with a takeover chain.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run lock-home-spelling`.
 - **Two spellings.** The transcript names the home under both spellings, or says the temp directory has one.
 - **Note and drain, twice.** For each spelling the script runs `bin/fm-inbox.sh note` and then `bin/fm-wake-drain.sh` against the same home.
-  Each completes within 60 s, `state/` holds no `*.steal*` entry and no `.wake-queue.lock*` entry afterwards, `.wake-queue` holds exactly one row, and the drain output names the captain inbox note.
-- **Proof.** Read `lock-home-spelling/transcript.txt`; on a failure `state-<spelling>.txt` lists the chain that grew.
+  Each completes within 60 s, `state/` holds no `*.steal*` entry and no `.wake-queue.lock*` entry after the note, `.wake-queue` holds exactly one row, and the drain output names the captain inbox note.
+- **Proof.** Read `lock-home-spelling/transcript.txt`; on a failure `state-temp-alias.txt` or `state-physical.txt` lists the chain that grew.
 
 ## Gotchas
 
