@@ -689,6 +689,8 @@ subsection "LOCK"
 LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
 fm_timing_mark session-start lock-acquired
+HOME_SUMMARY_PID=
+HOME_SUMMARY_OUT=/dev/null
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
 if [ "$LOCK_RC" -ne 0 ]; then
@@ -719,8 +721,12 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # A full locked start publishes this home's current structured summary.
   # Publication is side-band and best-effort, so it can never change the
   # session-start result. A context re-emit is not another session start.
+  # It takes seconds and nothing below reads it, so it runs alongside the rest
+  # of the digest and is waited for before the start is recorded complete.
   if [ "$REEMIT" -eq 0 ]; then
-    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+    HOME_SUMMARY_OUT=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-summary.XXXXXX" 2>/dev/null) || HOME_SUMMARY_OUT=/dev/null
+    "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort </dev/null >"$HOME_SUMMARY_OUT" 2>&1 &
+    HOME_SUMMARY_PID=$!
   fi
   fm_timing_mark session-start home-summary
   # Every network call and the potentially slow inactive-outcome startup scan
@@ -1084,6 +1090,15 @@ cat <<'EOF'
 The digest above is complete for this session start. The READ-ONCE CONTRACT
 section near the top of it governs what may still be read from disk.
 EOF
+
+if [ -n "$HOME_SUMMARY_PID" ]; then
+  wait "$HOME_SUMMARY_PID" 2>/dev/null || true
+  if [ "$HOME_SUMMARY_OUT" != /dev/null ]; then
+    cat "$HOME_SUMMARY_OUT" 2>/dev/null || true
+    rm -f "$HOME_SUMMARY_OUT" 2>/dev/null || true
+  fi
+fi
+fm_timing_mark session-start summary-wait
 
 if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
   COMPLETION_RECORDED=0
