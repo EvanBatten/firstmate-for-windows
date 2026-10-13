@@ -23,7 +23,7 @@
     },
     {
       "say": "",
-      "until": "report.exists && report.mentions:greet",
+      "until": "report.exists && report.mentions:greet && status.verb:done",
       "budgetSec": 420
     },
     {
