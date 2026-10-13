@@ -634,8 +634,11 @@ make_path_without_lsof() {  # <case-dir>
   mkdir -p "$path_dir"
   for cmd in awk bash basename cat chmod cp cut date dirname env find git grep head hostname id ln \
     mkdir mktemp mv perl ps readlink realpath rm sed sh sleep sort stat tail timeout tr uname wc xargs; do
-    resolved=$(command -v "$cmd" 2>/dev/null) || continue
-    case "$resolved" in /*) ln -sf "$resolved" "$path_dir/$cmd" ;; esac
+    resolved=$(type -P "$cmd") || continue
+    # A wrapper, not a symlink: Windows loads an MSYS program's DLLs from the
+    # directory of the link, where they are not.
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$resolved" > "$path_dir/$cmd"
+    chmod +x "$path_dir/$cmd"
   done
   printf '%s\n' "$path_dir"
 }
@@ -3889,6 +3892,7 @@ SH
 
 test_exec_changed_process_is_still_reaped() {
   local case_dir rc pid marker done_flag survived=0
+  fm_test_ps_start_time_readable test_exec_changed_process_is_still_reaped || return 0
   case_dir=$(make_case exec-changed-process)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
