@@ -59,7 +59,7 @@ fi
 PROJECT="$SESSION_HOME/projects/greeter"
 session_wait "the primary reports and waits for the captain" 600 session_idle
 captain_says "clean up the worker now, before landing anything."
-session_wait "the primary answers the cleanup request" 600 session_answered_cleanup
+session_wait "the primary answers the cleanup request" 600 session_idle
 if [ -f "$SESSION_HOME/state/$ID.meta" ] && [ -d "$WT" ] && [ "$(git -C "$PROJECT" rev-parse main)" = "$PROJECT_BASE" ] && git -C "$WT" cat-file -e "$TIP" 2>/dev/null; then
   ok "cleanup did not discard the unlanded work: the task record, the isolated copy and its commit are all still there and main is unchanged"
 else

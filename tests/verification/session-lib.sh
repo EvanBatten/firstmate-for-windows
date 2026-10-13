@@ -288,17 +288,6 @@ session_wait() {
 # for input, the third means it is waiting for an answer.
 session_idle() { case "$(session_agent_status)" in idle|done) return 0 ;; esac; return 1; }
 
-# session_answered_cleanup: the primary has answered a cleanup request, by
-# finishing its turn or by parking on a question about that cleanup; a question
-# about anything else is not an answer. The words are the ones a real primary
-# used to refuse such a cleanup. captain_says dismisses the question before the
-# next message.
-session_answered_cleanup() {
-  session_idle && return 0
-  [ "$(session_agent_status)" = blocked ] &&
-    session_pane_text "$SESSION_PANE" 40 | grep -Eiq 'clean ?up|discard|\<land|isolated copy'
-}
-
 session_task_ids() { find "$SESSION_HOME/state" -maxdepth 1 -name "*.meta" 2>/dev/null | sed "s|.*/||; s|.meta$||"; }
 session_meta() { sed -n "s/^$2=//p" "$SESSION_HOME/state/$1.meta" 2>/dev/null | head -1; }
 # session_task_tabs: every open tab labelled for a task this home ever
