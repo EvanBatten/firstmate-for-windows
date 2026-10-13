@@ -196,7 +196,7 @@ if declare -F pids_with_cwd_under >/dev/null; then
       [ "$pid" != "$$" ] || self=1
       cwd=${cwd//\\/\\\\} cwd=${cwd//$'\n'/\\n} cwd=${cwd//$'\t'/\\t}
       printf 'p%s\nfcwd\nn%s\n' "$pid" "$cwd"
-    done < <(find /proc -mindepth 2 -maxdepth 2 -name cwd -printf '%h\t%l\0' 2>/dev/null)
+    done < <(find /proc/[0-9]*/cwd -maxdepth 0 -printf '%h\t%l\0' 2>/dev/null)
     # An unreadable /proc scans empty, which must not read as no process left.
     [ "$self" = 1 ]
   }
