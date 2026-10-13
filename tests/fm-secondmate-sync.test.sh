@@ -399,7 +399,7 @@ SH
 
 add_real_jq() {
   local fakebin=$1 real_jq
-  real_jq=$(command -v jq 2>/dev/null) || return 1
+  real_jq=$(type -P jq) || return 1
   cat > "$fakebin/jq" <<SH
 #!/usr/bin/env bash
 exec '$real_jq' "\$@"

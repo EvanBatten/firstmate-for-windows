@@ -34,12 +34,12 @@ GUARD="$ROOT/bin/fm-remote-herdr-guard.sh"
 TOOLS="$TMP_ROOT/tools"
 mkdir -p "$TOOLS"
 ln -sf "$(command -v git)" "$TOOLS/git"
-ln -sf "$(command -v jq)" "$TOOLS/jq"
+ln -sf "$(type -P jq)" "$TOOLS/jq"
 BASE_PATH="$TOOLS:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Real socket-owner holders for the Darwin birth check: jq blocked on a fifo
 # this test keeps open, with exactly the marker environment each birth needs.
-JQ=$(command -v jq)
+JQ=$(type -P jq)
 HOLDER_FD=5
 hold() { # <marker-env...> -> HOLDER_PID
   local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo"

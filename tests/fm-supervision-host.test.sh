@@ -609,7 +609,7 @@ test_branch_outcomes_stay_unread_when_a_projection_fails() {
   home="$TMP_ROOT/drain-projection"
   mkdir -p "$home/state" "$home/config" "$home/bin"
   : > "$home/config/supervision-host"
-  printf '#!/usr/bin/env bash\ncase "$*" in *"newest of"*) exit 5 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$home/bin/jq"
+  printf '#!/usr/bin/env bash\ncase "$*" in *"newest of"*) exit 5 ;; esac\nexec %q "$@"\n' "$(type -P jq)" > "$home/bin/jq"
   chmod +x "$home/bin/jq"
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task demo --verdict routine --summary 'merged the docs fix' >/dev/null \
     || fail "fixture: could not record the routine outcome"

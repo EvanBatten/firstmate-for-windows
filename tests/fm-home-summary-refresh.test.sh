@@ -483,7 +483,7 @@ LOCK_HOLDER_PID=
 pass "best-effort refresh bounds publication lock acquisition"
 
 HANGBIN="$TMP_ROOT/hangbin"
-REAL_JQ=$(command -v jq)
+REAL_JQ=$(type -P jq)
 mkdir -p "$HANGBIN"
 cat > "$HANGBIN/jq" <<'SH'
 #!/usr/bin/env bash

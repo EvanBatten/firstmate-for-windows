@@ -267,7 +267,7 @@ test_mirror_is_owner_only_under_an_open_umask() {
 JQ_SHIM="$TMP_ROOT/jq-shim"
 mkdir -p "$JQ_SHIM"
 {
-  printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(command -v jq)"
+  printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(type -P jq)"
   cat <<'SH'
 printf '%s\n' "$@" >> "$FM_HOME/jq-argv.log"
 exec "$REAL_JQ" "$@"

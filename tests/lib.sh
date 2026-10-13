@@ -870,6 +870,14 @@ fm_test_lock_staleness_provable() {
   return 0
 }
 
+# fm_test_ps_start_time_readable <label>: a case that hides /proc so a process
+# identity must come from `ps -o lstart=` calls this first and returns when it
+# fails. A platform overlay whose ps cannot report a start time prints one skip
+# line instead.
+fm_test_ps_start_time_readable() {
+  return 0
+}
+
 # fm_test_fake_cursor <bin-dir> <scratch-dir>: put a real executable whose own
 # canonical basename is cursor-agent in <bin-dir> and set FAKE_CURSOR to it.
 # `$FAKE_CURSOR -c <script>` runs the script in a child bash and stays alive as

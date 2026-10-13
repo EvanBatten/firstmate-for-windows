@@ -11,6 +11,13 @@ fm_test_lock_staleness_provable() {
   return 1
 }
 
+# Windows always has /proc, so teardown never reads a start time from ps here,
+# and MSYS ps cannot report one.
+fm_test_ps_start_time_readable() {
+  printf 'skip: %s: ps reports no process start time on Windows\n' "$1"
+  return 1
+}
+
 # Git for Windows ships no C compiler, so the fake Cursor is a copy of bash.exe,
 # which MSYS names by its own file. Bash execs the last command of a -c script in
 # place of itself unless an EXIT trap is set, which would drop the Cursor parent,
@@ -19,7 +26,7 @@ fm_test_fake_cursor() {
   local bin=$1 scratch=$2
   cp /usr/bin/bash.exe "$bin/cursor-agent.exe" || fail "could not copy bash for the fake Cursor process"
   {
-    printf '. %q\n' "$BASH_ENV"
+    [ -z "${BASH_ENV:-}" ] || printf '. %q\n' "$BASH_ENV"
     # shellcheck disable=SC2016 # Expanded by the fake Cursor bash.
     printf '%s\n' 'case $BASH in */cursor-agent*) trap "exit \$?" EXIT ;; esac'
   } > "$scratch/fake-cursor.rc"

@@ -1578,7 +1578,7 @@ test_per_repository_pr_cap_is_disclosed() {
 
 install_failing_jq() {  # <fakebin> <model|toon>
   local fakebin=$1 phase=$2 real
-  real=$(command -v jq)
+  real=$(type -P jq)
   cat > "$fakebin/jq" <<SH
 #!/usr/bin/env bash
 case "\$*" in

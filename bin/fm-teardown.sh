@@ -1658,6 +1658,17 @@ path_is_ancestor_of() {
   return 1
 }
 
+teardown_cwd_is_under() {  # <dir>...
+  local here dir
+  here=$(pwd -P) || return 1
+  for dir in "$@"; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    dir=$(cd "$dir" && pwd -P) || continue
+    case "$here" in "$dir"|"$dir"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 removal_target_abs_path() {
   local target=$1
   if [ -d "$target" ]; then
@@ -3553,6 +3564,12 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
+# A teardown started from inside the worktree or tasktmp would find the shell
+# that ran it, and its own subshells, holding that directory and reap them.
+if [ "$KIND" != secondmate ] && teardown_cwd_is_under "$WT" "$TASK_TMP"; then
+  echo "REFUSED: teardown is running from inside $(pwd -P), which belongs to $ID; run it again from outside the task's worktree and tasktmp." >&2
+  exit 1
+fi
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
