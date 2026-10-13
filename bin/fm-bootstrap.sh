@@ -1389,27 +1389,67 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
-  # The treehouse lease-support upgrade check is only relevant when the resolved
-  # backend actually requires treehouse (every backend except orca, which owns its
-  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
+  # Each version probe below starts a node or native process, about half a
+  # second apiece on Windows, and none depends on another, so they run at once
+  # and their lines print in this fixed order. tasks-axi stays in this shell,
+  # where its memoised verdict is reused later.
+  local probes slot tasks_axi_line=
+  probes=$(mktemp -d "${TMPDIR:-/tmp}/fm-bootstrap-probes.XXXXXX" 2>/dev/null) || probes=
+  probe_slot "$probes" treehouse probe_treehouse_lease
+  probe_slot "$probes" no-mistakes probe_tool_floor no-mistakes "$NO_MISTAKES_MIN"
+  probe_slot "$probes" gh-axi probe_tool_floor gh-axi "$GH_AXI_MIN"
+  probe_slot "$probes" lavish-axi probe_lavish_axi
+  probe_slot "$probes" quota-axi probe_quota_axi
+  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
+    tasks_axi_line="MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
+  fi
+  if [ -n "$probes" ]; then
+    wait
+    for slot in treehouse no-mistakes gh-axi lavish-axi quota-axi; do
+      cat "$probes/$slot" 2>/dev/null
+    done
+    rm -rf "$probes"
+  fi
+  [ -z "$tasks_axi_line" ] || printf '%s\n' "$tasks_axi_line"
+}
+
+# Runs one probe in the background into <dir>/<tool>, or in place when there
+# is no directory to collect it in.
+probe_slot() {  # <dir> <tool> <command...>
+  local dir=$1 tool=$2
+  shift 2
+  if [ -n "$dir" ]; then
+    "$@" > "$dir/$tool" &
+  else
+    "$@"
+  fi
+}
+
+# The treehouse lease-support upgrade check is only relevant when the resolved
+# backend actually requires treehouse (every backend except orca, which owns its
+# own worktrees); an orca home must not be told to upgrade a provider it never uses.
+probe_treehouse_lease() {
   if fm_backend_list_contains "$TOOLS" treehouse \
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
     echo "MISSING: treehouse (install: $(install_cmd treehouse))"
   fi
-  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
-    echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
+}
+
+probe_tool_floor() {  # <tool> <min-version>
+  if command -v "$1" >/dev/null 2>&1 && ! tool_version_at_least "$1" "$2"; then
+    echo "MISSING: $1 (install: $(install_cmd "$1"))"
   fi
-  if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
-    echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
-  fi
+}
+
+probe_lavish_axi() {
   if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
     echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
   fi
+}
+
+probe_quota_axi() {
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "MISSING: quota-axi (install: $(install_cmd quota-axi))"
-  fi
-  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
-    echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
   fi
 }
 
