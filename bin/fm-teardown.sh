@@ -448,6 +448,17 @@ DESCENDANT_TASK_IDS=()
 DESCENDANT_TASK_KINDS=()
 DESCENDANT_TASK_HOMES=()
 DESCENDANT_TREEHOUSE_LOCK_PATHS=()
+teardown_cwd_is_under() {  # <dir>...
+  local here dir
+  here=$(pwd -P) || return 1
+  for dir in "$@"; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    dir=$(cd "$dir" && pwd -P) || continue
+    case "$here" in "$dir"|"$dir"/*) return 0 ;; esac
+  done
+  return 1
+}
+
 teardown_release_locks() {
   local status=$? i
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
@@ -512,6 +523,14 @@ fm_backlog_record_present "$META" "task record" "$STATE" || {
 }
 TEARDOWN_META_KIND=$(fm_meta_get "$META" kind)
 [ -n "$TEARDOWN_META_KIND" ] || TEARDOWN_META_KIND=ship
+# A teardown started from inside the worktree or tasktmp would find the shell
+# that ran it, and its own subshells, holding that directory and reap them, so
+# it refuses here, before it writes anything session start could replay.
+if [ "$TEARDOWN_META_KIND" != secondmate ] \
+   && teardown_cwd_is_under "$(fm_meta_get "$META" worktree)" "$(fm_meta_get "$META" tasktmp)"; then
+  echo "REFUSED: teardown is running from inside $(pwd -P), which belongs to $ID; run it again from outside the task's worktree and tasktmp." >&2
+  exit 1
+fi
 # Retiring a persistent secondmate is main's alone in both postures; the kind
 # is read under the metadata lock (role partition: bin/fm-lease-lib.sh).
 [ "$TEARDOWN_META_KIND" != secondmate ] || fm_lease_forbid_branch "secondmate retirement (fm-teardown)"
@@ -1655,17 +1674,6 @@ path_is_ancestor_of() {
   case "$path" in
     "$ancestor"/*) return 0 ;;
   esac
-  return 1
-}
-
-teardown_cwd_is_under() {  # <dir>...
-  local here dir
-  here=$(pwd -P) || return 1
-  for dir in "$@"; do
-    [ -n "$dir" ] && [ -d "$dir" ] || continue
-    dir=$(cd "$dir" && pwd -P) || continue
-    case "$here" in "$dir"|"$dir"/*) return 0 ;; esac
-  done
   return 1
 }
 
@@ -3564,12 +3572,6 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
-# A teardown started from inside the worktree or tasktmp would find the shell
-# that ran it, and its own subshells, holding that directory and reap them.
-if [ "$KIND" != secondmate ] && teardown_cwd_is_under "$WT" "$TASK_TMP"; then
-  echo "REFUSED: teardown is running from inside $(pwd -P), which belongs to $ID; run it again from outside the task's worktree and tasktmp." >&2
-  exit 1
-fi
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"

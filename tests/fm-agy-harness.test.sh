@@ -539,10 +539,18 @@ if [ "${1:-}" = models ]; then
   if [ "${FM_FAKE_AGY_MODELS_FAIL:-0}" = 1 ]; then exit 3; fi
   if [ "${FM_FAKE_AGY_MODELS_HANG:-0}" = 1 ]; then
     printf '%(%s)T\n' -1 > "$FM_FAKE_AGY_STATE.probe-start"
-    # Bash runs this trap only once the foreground sleep is gone, so the stamp
-    # is late unless the bound signalled the whole probe group.
-    trap 'printf "%(%s)T\n" -1 > "$FM_FAKE_AGY_STATE.probe-cut"; exit 143' TERM
-    cat > /dev/null; sleep 30; exit 0
+    cat > /dev/null
+    # The heartbeat runs in a child, so it stops only when the bound signals
+    # the whole probe group. A TERM trap here would race the bound's follow-up
+    # KILL, which on Windows often lands before bash runs the trap.
+    (
+      for ((i = 0; i < 30; i++)); do
+        sleep 1
+        printf '%(%s)T\n' -1 > "$FM_FAKE_AGY_STATE.probe-alive"
+      done
+      printf '%(%s)T\n' -1 > "$FM_FAKE_AGY_STATE.probe-finished"
+    )
+    exit 0
   fi
   printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n'
   printf 'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n'
@@ -691,8 +699,22 @@ test_agy_unreachable_listing_launches_unvalidated() {
   pass "fm-spawn: an unreachable agy listing establishes nothing and launches"
 }
 
+# Sets AGY_PROBE_SECONDS to how long the hung fake listing lived, failing when
+# its heartbeat outlived the spawn.
+agy_hung_probe_lifetime() {  # <label>
+  local state=$CASE_DIR/agy.state last
+  [ -s "$state.probe-start" ] || fail "$1: the hung model probe never started"
+  last=$(cat "$state.probe-alive" 2>/dev/null || cat "$state.probe-start")
+  sleep 3
+  if [ -e "$state.probe-finished" ] \
+     || [ "$(cat "$state.probe-alive" 2>/dev/null || cat "$state.probe-start")" != "$last" ]; then
+    fail "$1: the hung model probe outlived its bound"
+  fi
+  AGY_PROBE_SECONDS=$(( last - $(cat "$state.probe-start") ))
+}
+
 test_agy_hung_listing_is_cut_off_and_launches() {
-  local id rec out rc probe
+  local id rec out rc
   id="agy-hanglisting-z8-$$"
   rec=$(make_agy_spawn_case hanglisting "$id")
   read_agy_spawn_record "$rec"
@@ -700,9 +722,8 @@ test_agy_hung_listing_is_cut_off_and_launches() {
   out=$(FM_FAKE_AGY_MODELS_HANG=1 run_agy_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" \
     "$FAKEBIN_DIR" "$id" --model gemini-3.8-flash-low) || rc=$?
   expect_code 0 "$rc" "a hung model listing must not block the spawn"
-  [ -s "$CASE_DIR/agy.state.probe-cut" ] || fail "the hung model probe was never signalled"
-  probe=$(( $(cat "$CASE_DIR/agy.state.probe-cut") - $(cat "$CASE_DIR/agy.state.probe-start") ))
-  [ "$probe" -lt 20 ] || fail "the model probe was not cut off by its bound (took ${probe}s)"
+  agy_hung_probe_lifetime hung-listing
+  [ "$AGY_PROBE_SECONDS" -lt 20 ] || fail "the model probe was not cut off by its bound (took ${AGY_PROBE_SECONDS}s)"
   assert_contains "$out" "did not answer within 1s" "a hung listing launched without its timeout notice"
   [ -s "$CASE_DIR/launch.log" ] || fail "a hung listing produced no launch command"
   assert_contains "$(cat "$CASE_DIR/launch.log")" "--model 'gemini-3.8-flash-low'" \
@@ -711,18 +732,17 @@ test_agy_hung_listing_is_cut_off_and_launches() {
 }
 
 test_agy_zero_model_timeout_is_clamped_to_the_default_bound() {
-  local id rec out rc started elapsed
+  local id rec out rc
   id="agy-zerobound-z14-$$"
   rec=$(make_agy_spawn_case zerobound "$id")
   read_agy_spawn_record "$rec"
   rc=0
-  started=$(date +%s)
   out=$(FM_FAKE_AGY_MODELS_HANG=1 FM_AGY_MODELS_TIMEOUT=0 \
     run_agy_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" \
     "$FAKEBIN_DIR" "$id" --model gemini-3.8-flash-low) || rc=$?
-  elapsed=$(( $(date +%s) - started ))
   expect_code 0 "$rc" "a hung listing with a zero bound must not block the spawn"
-  [ "$elapsed" -lt 25 ] || fail "a zero model bound disabled the deadline (took ${elapsed}s)"
+  agy_hung_probe_lifetime zero-bound
+  [ "$AGY_PROBE_SECONDS" -lt 25 ] || fail "a zero model bound disabled the deadline (took ${AGY_PROBE_SECONDS}s)"
   assert_contains "$out" "did not answer within 15s" \
     "a zero model bound was not clamped to the documented default"
   [ -s "$CASE_DIR/launch.log" ] || fail "a zero model bound produced no launch command"
