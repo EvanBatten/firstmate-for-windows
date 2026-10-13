@@ -6,8 +6,11 @@
 # A native process has no readable command line without a CIM query per
 # process, so its args are its executable path, the same as comm.
 
-# A cached walk row can outlive its process by FM_WIN_CHAIN_TTL seconds, so the
-# cache answers identity and parent links only, never liveness.
+# A bash a native program started keeps its Win32 chain on disk for
+# FM_WIN_CHAIN_TTL seconds, so the scripts of one session query it once.
+# Windows gives a dead process's pid to a new process within seconds, so a kept
+# chain answers only the bash it was queried for, named by its MSYS pid and
+# start time. It answers identity and parent links only, never liveness.
 FM_WIN_CHAIN_TTL=${FM_WIN_CHAIN_TTL:-10}
 FM_PROC_PPID='' FM_PROC_PGID='' FM_PROC_COMM='' FM_PROC_ARGS='' FM_PROC_WINPID=''
 declare -gA _FM_W32_PPID=() _FM_W32_COMM=()
@@ -50,32 +53,43 @@ _fm_win32_rows_load() {
   done <<< "$1"
 }
 
-_fm_win32_cache_load() {
-  local file born out
+_fm_win32_cache_sweep() {
+  local file born
   local -a stale=()
-  [ -z "${_FM_WIN_CACHE_READ:-}" ] || return 0
-  _FM_WIN_CACHE_READ=1
-  _fm_win_cache_dir || return 0
   for file in "$_FM_WIN_CACHE_DIR"/chain-*; do
-    born=0 out=''
-    { IFS= read -r -d '' out < "$file"; } 2>/dev/null
-    born=${out%%$'\n'*}
+    born=''
+    { read -r born < "$file"; } 2>/dev/null
+    born=${born%% *}
     case "$born" in ''|*[!0-9]*) continue ;; esac
-    if [ $((EPOCHSECONDS - born)) -gt "$FM_WIN_CHAIN_TTL" ]; then
-      stale+=("$file")
-      continue
-    fi
-    _fm_win32_rows_load "${out#*$'\n'}"
+    [ $((EPOCHSECONDS - born)) -le "$FM_WIN_CHAIN_TTL" ] || stale+=("$file")
   done
   [ "${#stale[@]}" -eq 0 ] || rm -f "${stale[@]}" 2>/dev/null
 }
 
-fm_win32_chain_load() {
-  local root=$1 out
+_fm_win_msys_start() {
+  local stat
+  local -a field=()
+  _FM_WIN_START=''
+  { read -r stat < "/proc/$1/stat"; } 2>/dev/null || return 0
+  read -r -a field <<< "${stat##*) }"
+  _FM_WIN_START=${field[19]:-}
+}
+
+fm_win32_chain_load() {  # <win32-pid> [<msys-pid>:<start>]
+  local root=$1 id=${2:-} out='' file='' head born
   case "$root" in ''|*[!0-9]*|0) return 1 ;; esac
   [ -n "${_FM_W32_PPID[$root]+x}" ] && return 0
-  _fm_win32_cache_load
-  [ -n "${_FM_W32_PPID[$root]+x}" ] && return 0
+  if [ -n "$id" ] && _fm_win_cache_dir; then
+    file=$_FM_WIN_CACHE_DIR/chain-$root
+    { IFS= read -r -d '' out < "$file"; } 2>/dev/null
+    head=${out%%$'\n'*}
+    born=${head%% *}
+    case "$born" in ''|*[!0-9]*) born=0 ;; esac
+    if [ "${head#* }" = "$id" ] && [ $((EPOCHSECONDS - born)) -le "$FM_WIN_CHAIN_TTL" ]; then
+      _fm_win32_rows_load "${out#*$'\n'}"
+      [ -n "${_FM_W32_PPID[$root]+x}" ] && return 0
+    fi
+  fi
   # shellcheck disable=SC2016 # PowerShell syntax, passed through unexpanded.
   out=$(FM_WIN_ROOT=$root pwsh -NoProfile -NonInteractive -Command '
 $p = Get-Process -Id ([int]$env:FM_WIN_ROOT) -ErrorAction SilentlyContinue
@@ -87,9 +101,10 @@ for ($i = 0; $i -lt 16 -and $p; $i++) {
 }' 2>/dev/null) || return 1
   out=${out//$'\r'/}
   [ -n "$out" ] || return 1
-  if _fm_win_cache_dir; then
-    printf '%s\n%s\n' "$EPOCHSECONDS" "$out" > "$_FM_WIN_CACHE_DIR/chain-$root.$$" 2>/dev/null \
-      && mv -f "$_FM_WIN_CACHE_DIR/chain-$root.$$" "$_FM_WIN_CACHE_DIR/chain-$root" 2>/dev/null
+  if [ -n "$file" ]; then
+    _fm_win32_cache_sweep
+    printf '%s %s\n%s\n' "$EPOCHSECONDS" "$id" "$out" > "$file.$$" 2>/dev/null \
+      && mv -f "$file.$$" "$file" 2>/dev/null
   fi
   _fm_win32_rows_load "$out"
   [ -n "${_FM_W32_PPID[$root]+x}" ]
@@ -122,12 +137,13 @@ fm_win_proc() {
   local pid=$1
   FM_PROC_PSPACE=msys
   if [ "${2:-}" != w32 ] && fm_win_msys_proc "$pid"; then
-    if [ "$FM_PROC_PPID" -le 1 ] && fm_win32_chain_load "$FM_PROC_WINPID"; then
+    [ "$FM_PROC_PPID" -le 1 ] || return 0
+    _fm_win_msys_start "$pid"
+    if fm_win32_chain_load "$FM_PROC_WINPID" "${_FM_WIN_START:+$pid:$_FM_WIN_START}"; then
       _fm_win_parent_msys_first "${_FM_W32_PPID[$FM_PROC_WINPID]}"
     fi
     return 0
   fi
-  [ -n "${_FM_W32_PPID[$pid]+x}" ] || _fm_win32_cache_load
   [ -n "${_FM_W32_PPID[$pid]+x}" ] || fm_win32_alive "$pid" || return 1
   fm_win32_chain_load "$pid" || return 1
   _fm_win_parent_msys_first "${_FM_W32_PPID[$pid]}"
