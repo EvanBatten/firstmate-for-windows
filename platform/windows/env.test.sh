@@ -44,4 +44,10 @@ expect "a drive-path re-source of a home already recorded private exports the re
 got=$(clean FM_HOME="$T/home" FM_WIN_PRIVATE_ROOTS="$roots" bash -c '. "$1"; MSYS2_ARG_CONV_EXCL="*" cmd.exe /c "bash -c umask"' _ "$src" | tr -d '\r')
 expect "a bash under a native parent then runs at 077" "0077" "$got"
 
+mkdir -p "$T/wrap"
+printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$ROOT/platform/windows/bin/jq" > "$T/wrap/jq"
+chmod +x "$T/wrap/jq"
+got=$(printf '{"a":1}' | clean FM_HOME="$T/home" bash -c '. "$1" 2> /dev/null; PATH="$T/wrap:/usr/bin" timeout -k 2 20 "$T/wrap/jq" -c .; echo "rc=$?"' _ "$src")
+expect "a fixture's jq wrapper that runs bin/jq by path from a PATH without jq.exe reaches the real jq" '{"a":1} rc=0' "$(printf '%s' "$got" | tr '\n' ' ')"
+
 [ "$fails" -eq 0 ]
