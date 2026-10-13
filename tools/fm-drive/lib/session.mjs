@@ -407,6 +407,11 @@ export class Session {
     const paneEnv = { FM_PANE_PATH: this.panePath(), PATH: this.panePath(), TMUX: '', TMUX_PANE: '', CLAUDE_CONFIG_DIR: this.claudeConfigDir };
     const token = this.env.CLAUDE_CODE_OAUTH_TOKEN || this.env.CLAUDE_CODE_OATH_TOKEN || '';
     if (token) paneEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+    // Phase records (bin/fm-timing-lib.sh) from the primary's hooks and the scripts it runs.
+    if (this.env.FM_TIMING_LOG) {
+      paneEnv.FM_TIMING_LOG = this.env.FM_TIMING_LOG;
+      paneEnv.FM_TIMING_EPOCH_MS = String(this.env.FM_TIMING_EPOCH_MS || Date.now());
+    }
     const created = await this.herdr.call('workspace.create', { cwd: this.home, label: `fm-drive-${this.trace.feature}`, focus: false, env: paneEnv });
     this.workspaceId = created.workspace?.workspace_id;
     this.paneId = created.root_pane?.pane_id;

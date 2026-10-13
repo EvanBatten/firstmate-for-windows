@@ -1528,13 +1528,16 @@ detect_home_summary_publication() {
 # The stamp variable is named for the library rather than `start` on purpose:
 # fleet_sync and others assign plain names like `start` without `local`, and
 # bash's dynamic scoping would let them overwrite a stamp held by a caller.
+fm_timing_mark bootstrap begin
 local_phase && detect_local_tools
+fm_timing_mark bootstrap local-tools
 if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
+fm_timing_mark bootstrap local-config
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
@@ -1576,6 +1579,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
+  fm_timing_mark bootstrap x-mode
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \
@@ -1583,6 +1587,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-contributions.sh" arm --if-owned >/dev/null \
       || echo "MISSING: contribution observation could not be armed; coverage is unconfirmed"
   fi
+  fm_timing_mark bootstrap contributions
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"
@@ -1590,4 +1595,5 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
 fi
 local_phase && secondmate_handoff_detect
+fm_timing_mark bootstrap handoff-detect
 exit 0

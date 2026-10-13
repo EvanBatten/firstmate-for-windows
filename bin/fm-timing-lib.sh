@@ -134,6 +134,23 @@ fm_timing_record() {  # <scope> <name> <start-ms> [detail]
   return 0
 }
 
+# Record the time since this process's previous mark (or since its first mark)
+# as one step. Fork-free, so a mark on a hot path costs no process start, which
+# on Windows is the very cost being measured. Scope and name are literals at
+# every call site, so they skip the sanitizer that would cost a fork.
+fm_timing_mark() {  # <scope> <name>
+  fm_timing_enabled || return 0
+  local raw=${EPOCHREALTIME:-} now
+  case "$raw" in *[0-9][.,][0-9][0-9][0-9]*) ;; *) return 0 ;; esac
+  now=${raw%%[.,]*}${raw#*[.,]}
+  now=$(( 10#${now:0:${#now}-3} ))
+  case "${FM_TIMING_EPOCH_MS:-}" in ''|*[!0-9]*) FM_TIMING_EPOCH_MS=$now; export FM_TIMING_EPOCH_MS ;; esac
+  case "${__fm_timing_mark_pid:-}" in "$$") ;; *) __fm_timing_mark_pid=$$ __fm_timing_mark_at=$now ;; esac
+  printf 'v1\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$(( __fm_timing_mark_at - FM_TIMING_EPOCH_MS ))" "$(( now - __fm_timing_mark_at ))" "$$" \
+    >> "$FM_TIMING_LOG" 2>/dev/null || true
+  __fm_timing_mark_at=$now
+}
+
 # Render a recorded run for a human. Prints nothing at all when the file is
 # missing or holds no record, so an uninstrumented or empty run adds no output.
 fm_timing_render() {  # <file>

@@ -278,6 +278,7 @@ done
 SESSION_START_STAGES='lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
 
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
+  fm_timing_mark session-start "$1"
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
   printf '%s\n' "$1" > "$FM_SESSION_START_STAGE_FILE" 2>/dev/null || true
 }
@@ -286,6 +287,8 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
@@ -300,6 +303,7 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     # is lost, so the child still runs bounded.
     SESSION_START_STAGE_FILE=/dev/null
   fi
+  fm_timing_mark session-start parent-ready
   if [ "$REEMIT" -eq 1 ]; then
     if [ -n "$SESSION_SOURCE" ]; then
       fm_run_timed "$SESSION_START_BUDGET" \
@@ -320,6 +324,7 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
       "$SCRIPT_DIR/fm-session-start.sh"
   fi
   SESSION_START_RC=$?
+  fm_timing_mark session-start child-returned
   # ANY nonzero child exit is a truncation: the banner contract promises that
   # a stage that cannot print is named. Exit 124 is the bound firing; any
   # other status means the child died or was killed mid-stage, which truncates
