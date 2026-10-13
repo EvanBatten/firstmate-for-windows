@@ -537,7 +537,13 @@ SH
 set -u
 if [ "${1:-}" = models ]; then
   if [ "${FM_FAKE_AGY_MODELS_FAIL:-0}" = 1 ]; then exit 3; fi
-  if [ "${FM_FAKE_AGY_MODELS_HANG:-0}" = 1 ]; then cat > /dev/null; sleep 30; exit 0; fi
+  if [ "${FM_FAKE_AGY_MODELS_HANG:-0}" = 1 ]; then
+    printf '%(%s)T\n' -1 > "$FM_FAKE_AGY_STATE.probe-start"
+    # Bash runs this trap only once the foreground sleep is gone, so the stamp
+    # is late unless the bound signalled the whole probe group.
+    trap 'printf "%(%s)T\n" -1 > "$FM_FAKE_AGY_STATE.probe-cut"; exit 143' TERM
+    cat > /dev/null; sleep 30; exit 0
+  fi
   printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n'
   printf 'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n'
   printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n'
@@ -686,17 +692,17 @@ test_agy_unreachable_listing_launches_unvalidated() {
 }
 
 test_agy_hung_listing_is_cut_off_and_launches() {
-  local id rec out rc started elapsed
+  local id rec out rc probe
   id="agy-hanglisting-z8-$$"
   rec=$(make_agy_spawn_case hanglisting "$id")
   read_agy_spawn_record "$rec"
   rc=0
-  started=$(date +%s)
   out=$(FM_FAKE_AGY_MODELS_HANG=1 run_agy_spawn "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" \
     "$FAKEBIN_DIR" "$id" --model gemini-3.8-flash-low) || rc=$?
-  elapsed=$(( $(date +%s) - started ))
   expect_code 0 "$rc" "a hung model listing must not block the spawn"
-  [ "$elapsed" -lt 20 ] || fail "the model probe was not cut off by its bound (took ${elapsed}s)"
+  [ -s "$CASE_DIR/agy.state.probe-cut" ] || fail "the hung model probe was never signalled"
+  probe=$(( $(cat "$CASE_DIR/agy.state.probe-cut") - $(cat "$CASE_DIR/agy.state.probe-start") ))
+  [ "$probe" -lt 20 ] || fail "the model probe was not cut off by its bound (took ${probe}s)"
   assert_contains "$out" "did not answer within 1s" "a hung listing launched without its timeout notice"
   [ -s "$CASE_DIR/launch.log" ] || fail "a hung listing produced no launch command"
   assert_contains "$(cat "$CASE_DIR/launch.log")" "--model 'gemini-3.8-flash-low'" \
