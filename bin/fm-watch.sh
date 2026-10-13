@@ -97,9 +97,9 @@
 #                          payload names what clears it
 #   check: process-event source failed to start: <keys>
 #                          a registered process-to-event source was launched by
-#                          reconcile and did not prove it took the claim within
-#                          the confirm window, so nothing is confirmed to be
-#                          collecting for it and every cycle will relaunch it
+#                          reconcile and its runner exited before proving it
+#                          took the claim, so nothing is collecting for it and
+#                          every cycle will relaunch it
 #                          (bin/fm-procevent.sh reconcile queues it once per
 #                          failure episode, and a later cycle that finds the
 #                          source owned closes that episode); the queued

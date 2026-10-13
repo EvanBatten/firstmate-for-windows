@@ -2164,9 +2164,11 @@ The generation's first launch is immediate, later launches share its monotonic p
 
 `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS` (default 3, range 1..600) bounds how long `reconcile` waits for the runners it just started to prove they are running: never less than the configured value, and at most one second more, because the wait is measured on a whole-second clock.
 
-- Starting a runner is detached and its errors are not visible to the caller, so `reconcile` reports a start only after the source is observed owned or its launch-pacing stamp has advanced or appeared, and reports every unconfirmed launch as `failed=` and a non-zero exit instead.
+- Starting a runner is detached and its errors are not visible to the caller, so `reconcile` reports a start only after the source is observed owned or its launch-pacing stamp has advanced or appeared.
+- A launch whose runner is gone with neither signal is reported as `failed=` and a non-zero exit, and one whose runner is still alive when the window ends is reported as `uncertain=`, because a runner still starting has not failed.
 - Both signals are durable evidence a runner claimed: ownership is the only evidence a runner still blocked on its source ever shows, and the stamp - written after the claim and before the source command runs, and removed only by registration replacement - covers a runner that claimed, ran and exited between two polls.
-- A healthy launch therefore confirms on the first poll and the window only bounds a launch that has not yet proved itself - one that died before claiming, or one merely too slow to claim inside the window; confirmation cannot tell those apart, and a launch that proves itself on a later cycle closes its failure episode without a retraction wake.
+- A healthy launch on a fast host confirms on the first poll, and the window only bounds a launch that has not yet proved itself; on Git Bash a healthy runner can take about 20 seconds to claim.
+- A runner still starting when the window ends announces its own failure if it then exits before claiming, so a slow host still hears about a source that cannot start, and a launch that proves itself on a later cycle closes its failure episode without a retraction wake.
 - All of a cycle's launches share one window, so a home full of sources that cannot start costs the same bounded wait as one.
 
 **Keep confirmation below the watcher interval**
@@ -2185,7 +2187,7 @@ Later cycles stay silent for that episode until a launch confirms.
 A later fresh failure gets a fresh key, because the watcher never re-surfaces a key it has already surfaced.
 
 - The announcement changes nothing about the launch: `reconcile` keeps relaunching the source every cycle exactly as before, and nothing is retried differently, throttled, or recovered from that signal.
-- The wake reports only the observed failure: the launch did not prove that it took the claim within the window.
+- The wake reports only the observed failure: the runner exited before it proved that it took the claim.
 - If the failure persists, inspect the source command and adapter binary named in the registration.
   The wake names both, along with the attached `bin/fm-procevent.sh start <source-id>` command that reproduces the refusal on stderr.
   The detached launch discards that output.
