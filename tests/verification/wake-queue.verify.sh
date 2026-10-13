@@ -58,6 +58,14 @@ else
 fi
 rm -f "$STATE/.watcher-down"
 
+# An acknowledgement of an empty queue succeeds and leaves nothing, so the two
+# claims below prove only as much as what is queued when they run.
+if [ "$("$BIN/fm-wake-drain.sh" 2>/dev/null | grep -c 'check: captain inbox note')" -eq 2 ]; then
+  ok "both items are still queued when they are acknowledged"
+else
+  bad "the queue no longer holds both items, so the acknowledgement below has nothing to consume"
+fi
+
 if "$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$gen" >/dev/null 2>&1; then
   ok "the right acknowledgement is accepted"
 else
