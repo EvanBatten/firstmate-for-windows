@@ -362,6 +362,7 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   exit 0
 fi
 
+fm_timing_mark session-start child-boot
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 
 # shellcheck source=bin/fm-backend.sh
@@ -384,7 +385,9 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 # child collapses six subprocesses to three. fm-tasks-axi-lib.sh owns both reuse
 # layers and the one-hop consumption rule that keeps the verdict out of any
 # agent's environment.
+fm_timing_mark session-start harness-and-libs
 if fm_tasks_axi_compatible; then TASKS_AXI_COMPATIBLE=1; else TASKS_AXI_COMPATIBLE=0; fi
+fm_timing_mark session-start tasks-axi-probe
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -685,6 +688,7 @@ stage lock
 subsection "LOCK"
 LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
 LOCK_RC=$?
+fm_timing_mark session-start lock-acquired
 printf '%s\n' "$LOCK_OUT"
 READ_ONLY=0
 if [ "$LOCK_RC" -ne 0 ]; then
@@ -711,12 +715,14 @@ if [ "$READ_ONLY" -eq 0 ]; then
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
   fi
   fm_trace_context_session_start "$CONFIG" "$STATE/.trace-context-effective"
+  fm_timing_mark session-start trace-context
   # A full locked start publishes this home's current structured summary.
   # Publication is side-band and best-effort, so it can never change the
   # session-start result. A context re-emit is not another session start.
   if [ "$REEMIT" -eq 0 ]; then
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
   fi
+  fm_timing_mark session-start home-summary
   # Every network call and the potentially slow inactive-outcome startup scan
   # are launched HERE, detached and bounded, so they run concurrently with the
   # whole digest below instead of in front of it. Step 7 harvests whatever has
@@ -730,6 +736,7 @@ if [ "$READ_ONLY" -eq 0 ]; then
   [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
   "$SCRIPT_DIR/fm-startup-network.sh" start \
     --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
+  fm_timing_mark session-start network-start
 fi
 
 # --- 2. bootstrap --------------------------------------------------------
@@ -747,6 +754,7 @@ elif [ "$REEMIT" -eq 1 ]; then
 else
   BOOT_OUT=$(
     "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
+    fm_timing_mark session-start herdr-cleanup
     FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
       "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
   )
@@ -792,6 +800,7 @@ if [ "$READ_ONLY" -eq 1 ]; then
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-branch-outcome.sh" seed-tail >/dev/null 2>&1 || true
+  fm_timing_mark session-start seed-tail
   # Pi supervision-branch recovery, locked path only: clear leases whose
   # supervising session died, and surface outcomes the branch stored durably
   # that never reached main (docs/pi-supervision-branch.md). Gated to the

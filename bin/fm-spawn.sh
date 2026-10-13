@@ -3071,6 +3071,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   fi
 fi
 
+fm_timing_mark spawn brief-content
 delivery_rigor_rank() { # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
   case "$1" in
   no-mistakes) echo 3 ;;
@@ -3178,6 +3179,7 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
+fm_timing_mark spawn delivery-agreement
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -3487,6 +3489,7 @@ herdr_projection_existing_meta_allows_flat() { # <meta>
 # transitionable BEFORE any endpoint, worktree, or record exists: a refusal here
 # costs nothing to unwind, while the same refusal after publication would strand
 # a live pane. The authoritative mutation still runs under the meta lock below.
+fm_timing_mark spawn worktree-fns
 BACKLOG_TRANSITION=0
 BACKLOG_ROW_STATE=
 if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
@@ -3778,6 +3781,7 @@ else
         fi
       fi
     fi
+    fm_timing_mark spawn herdr-presentation
     if [ "$HERDR_PROJECTED" -ne 1 ]; then
       HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS" "$HERDR_LAUNCHER_RELATIONSHIP") || exit 1
       # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
@@ -3799,6 +3803,7 @@ EOF
       echo "error: herdr did not return a tab/pane id for $W" >&2
       exit 1
     fi
+    fm_timing_mark spawn herdr-task-pane
     T="$HERDR_SES:$HERDR_PANE_ID"
     fm_backend_herdr_session_pin "$HERDR_SES"
     spawn_herdr_presentation_order_lock_release
@@ -4265,6 +4270,7 @@ elif [ "$RELAUNCH" -eq 1 ]; then
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  fm_timing_mark spawn treehouse-sent
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
