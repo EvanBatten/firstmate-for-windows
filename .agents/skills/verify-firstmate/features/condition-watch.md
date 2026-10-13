@@ -25,10 +25,10 @@ Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
 - The condition is a file the script creates, and the action touches another file.
-- On Windows the watch's private spec only validates when the home runs under the overlay (`platform/windows/env.sh`, with umask 077 for that home); the suite does not load it, so `arm` fails with `published spec failed validation` there, see Gotchas.
+- On Windows the watch's private spec only validates when the home runs under the overlay (`platform/windows/env.sh`, with umask 077 for that home), which `tests/verification/lib.sh` loads for every throwaway home; without it `arm` fails with `published spec failed validation`.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run condition-watch`.
-  The suite prints `verification: 1 passed, 0 failed, 0 skipped`; a passing run takes under a minute, and each wait is capped at 90 seconds.
+  The suite prints `verification: 1 passed, 0 failed, 0 skipped`, and each wait is capped at 90 seconds.
 - **Arm.** The script runs `bin/fm-procevent-when.sh arm probe --interval 2 --stable 1 --deadline 180 --condition test -f <flag> --action touch <marker>`.
   It succeeds, and `bin/fm-procevent.sh list` names `when-probe`.
 - **Start.** The script runs `bin/fm-procevent.sh reconcile`.

@@ -22,12 +22,11 @@ This feature proves that a pane created the way firstmate creates one runs what 
 Preconditions:
 
 - The doctor reports `# doctor: worth driving` and does not warn that `herdr`, `jq`, or `timeout` is missing; without them this feature skips.
-- On `main` this feature cannot pass yet, see Gotchas.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run herdr-lab-pane`.
   The suite prints `verification: 1 passed, 0 failed, 0 skipped`, then the inventory verdict and the evidence path, and takes a few minutes.
 - **Lab session.** The script runs `bin/fm-herdr-lab.sh name paneshell` and `bin/fm-herdr-lab.sh prepare <session>`, then starts that session's server.
-- **Two panes.** The script creates one pane with a plain `workspace create` and one through the backend's task-pane function, and waits for each pane's shell to settle.
+- **Two panes.** The script creates one pane with a plain `workspace create` sent straight to Herdr through `bin/fm-herdr-lab.sh run` and one through `fm_backend_herdr_create_task` under the overlay, and waits for each pane's shell to settle.
 - **Type into both.** The script types the same POSIX one-liner into each pane.
   The task pane runs it and the plain pane does not.
 - **Teardown.** The script runs `bin/fm-herdr-lab.sh teardown <session>` from its exit trap.
@@ -39,7 +38,6 @@ Preconditions:
   A timeout is reported as a failure that names the budget, not as a skip.
 - The lab session is started by this run, so its panes inherit this shell's environment.
   It therefore cannot show a tool missing from a pane of the live session; [Real session](./real-session.md) is the feature that can.
-- The script creates its task pane with `fm_backend_herdr_task_tab_create`, a function from the frozen `windows` branch that `main` does not have, and hides the error, so every run on `main` fails with `a task pane could not be created within 45s`.
-  That failure is the script, not the product; until the script calls `fm_backend_herdr_create_task` with the overlay loaded, this feature has no live proof.
+- The plain pane bypasses the overlay on purpose, because the overlay's Herdr layer would make any created workspace a Git Bash pane too.
 - The lab helper refuses the session named `default`.
   Never aim a `herdr` command at a session the run did not create.

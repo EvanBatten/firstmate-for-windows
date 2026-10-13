@@ -22,7 +22,7 @@ Preconditions:
 
 - The doctor reports `# doctor: worth driving`.
 - On a machine whose temp directory has one spelling, both drives use the same path and must still pass.
-- On Windows the fix for #82 lives in the overlay (`platform/windows/path.sh`, loaded by `platform/windows/env.sh`), which a captain always runs under; the suite does not load it, so a drive through `verify.sh` tests bare upstream code and fails under the physical spelling with a takeover chain.
+- On Windows the fix for #82 lives in the overlay (`platform/windows/path.sh`, loaded by `platform/windows/env.sh`), which a captain always runs under and `tests/verification/lib.sh` loads for every throwaway home; without it the drive tests bare upstream code and fails under the physical spelling with a takeover chain.
 
 - **Drive the feature.** Run `.agents/skills/verify-firstmate/verify.sh run lock-home-spelling`.
 - **Two spellings.** The transcript names the home under both spellings, or says the temp directory has one.
