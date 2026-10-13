@@ -480,10 +480,10 @@ export class Session {
     const sha = await this.git(['-C', this.root, 'rev-parse', 'HEAD']);
     const branch = await this.git(['-C', this.root, 'rev-parse', '--abbrev-ref', 'HEAD']);
     if (branch === 'HEAD') {
-      await this.git(['clone', '-q', '--no-tags', '-c', 'core.symlinks=true', this.root, this.home]);
+      await this.git(['clone', '-q', '-c', 'core.symlinks=true', this.root, this.home]);
       await this.git(['-C', this.home, 'checkout', '-q', sha]);
     } else {
-      await this.git(['clone', '-q', '--no-tags', '-c', 'core.symlinks=true', '--branch', branch, this.root, this.home]);
+      await this.git(['clone', '-q', '-c', 'core.symlinks=true', '--branch', branch, this.root, this.home]);
     }
     this.committedHooks = await this.gitBytes(['-C', this.home, 'show', 'HEAD:.claude/settings.json']).catch(() => null);
     const dirty = await this.git(['-C', this.root, 'status', '--porcelain']);
@@ -529,8 +529,8 @@ export class Session {
     const tree = await git('write-tree');
     const commit = await git('-c', 'user.name=firstmate', '-c', 'user.email=firstmate@example.invalid', 'commit-tree', tree, '-m', 'firstmate');
     await git('checkout', '-q', '-B', 'main', commit);
-    for (const head of (await git('for-each-ref', '--format=%(refname:short)', 'refs/heads')).split('\n')) {
-      if (head && head !== 'main') await git('branch', '-q', '-D', head);
+    for (const ref of (await git('for-each-ref', '--format=%(refname)')).split('\n')) {
+      if (ref && ref !== 'refs/heads/main') await git('update-ref', '-d', ref);
     }
     await git('reflog', 'expire', '--expire=now', '--all');
   }
