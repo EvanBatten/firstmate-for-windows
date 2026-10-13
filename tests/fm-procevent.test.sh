@@ -132,6 +132,12 @@ launch_failed_wake_payloads() {  # <home> <source-id>
     "$1/state/.wake-queue"
 }
 
+# Reconcile reports a runner that dies before it claims as soon as it is gone,
+# so the damaged-registration cases give confirmation a window far longer than
+# that death takes, even on Git Bash where it took about 20 s. The window then
+# bounds only a runner that never exits, and none of these cases waits it out.
+DEAD_LAUNCH_WINDOW=300
+
 first_result() {  # <home> <source-id>: print the first captured result, if any
   local g
   for g in "$1/state/procevent-inbox/$2".*.result; do
@@ -2271,7 +2277,7 @@ ep_damage() { cat "$TMP_ROOT/episode-bad.source" > "$EP_SOURCE"; }
 ep_repair() { cat "$TMP_ROOT/episode-good.source" > "$EP_SOURCE"; }
 ep_reconcile() {  # <expected-fragment> <expected-exit-nonzero:0|1> <msg>; sets ep_out
   local rc=0
-  ep_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HEP" reconcile) || rc=$?
+  ep_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HEP" reconcile) || rc=$?
   assert_contains "$ep_out" "$1" "$3: $ep_out"
   if [ "$2" -eq 1 ]; then
     [ "$rc" -ne 0 ] || fail "$3 (reconcile exited 0): $ep_out"
@@ -2293,11 +2299,10 @@ ep_episode_prefix=${BASH_REMATCH[1]}
 ep_wake=$(launch_failed_wake_payloads "$HEP" episode-src)
 assert_contains "$ep_wake" "episode-src" \
   "the launch-failed wake does not name the source it is about: $ep_wake"
-# The payload may state only what confirmation observed: no claim proved
-# inside the window. It cannot know whether the runner died or was slow, so it
-# must not assert a cause, must not present `start` as the fix, and must say
-# that a later cycle finding the source owned closes the episode by itself.
-assert_contains "$ep_wake" "did not prove it took the source's claim within FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS" \
+# The payload may state only what was observed: the runner exited before it
+# proved a claim. It must not guess why, must not present `start` as the fix,
+# and must say that a later cycle finding the source owned closes the episode.
+assert_contains "$ep_wake" "its runner exited before proving it took the source's claim" \
   "the launch-failed wake does not state what confirmation observed: $ep_wake"
 assert_contains "$ep_wake" "attached bin/fm-procevent.sh start episode-src to reproduce a refusal" \
   "the launch-failed wake does not say start reproduces rather than fixes: $ep_wake"
@@ -2356,7 +2361,7 @@ if ! { awk '/^argv:$/ { print; exit } { print }' "$LK_SOURCE" > "$LK_SOURCE.tmp"
   && cat "$LK_SOURCE.tmp" > "$LK_SOURCE" && rm -f -- "$LK_SOURCE.tmp"; }; then
   fail "could not damage the long-id registration"
 fi
-lk_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HLK" reconcile) || true
+lk_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HLK" reconcile) || true
 assert_contains "$lk_out" "failed=1" "the long-id launch was not reported failed: $lk_out"
 lk_key=$(launch_failed_wake_keys "$HLK" "$LK_ID")
 [ -n "$lk_key" ] || fail "the long-id launch failure was not announced: $lk_out"
@@ -2387,7 +2392,10 @@ fi
 mv "$UF_SOURCE.tmp" "$UF_SOURCE" || fail "could not damage the unstartable registration"
 chmod 0600 "$UF_SOURCE"
 uf_rc=0
-uf_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HUF" reconcile) || uf_rc=$?
+uf_began=$SECONDS
+uf_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HUF" reconcile) || uf_rc=$?
+[ $((SECONDS - uf_began)) -lt "$DEAD_LAUNCH_WINDOW" ] \
+  || fail "reconcile waited out its window for a runner that had already exited: $uf_out"
 assert_contains "$uf_out" "started=0" \
   "reconcile counted a runner that never started as a start: $uf_out"
 assert_contains "$uf_out" "failed=1" \
@@ -2397,6 +2405,78 @@ uf_owner=$(pe "$HUF" list | awk '$1 == "unstartable-src" { print $3 }')
 [ "$uf_owner" = none ] || fail "the unstartable source reports an owner: $uf_owner"
 pe "$HUF" retire unstartable-src >/dev/null 2>&1 || true
 pass "reconcile reports a launch it could not confirm instead of counting it as a start"
+
+# --- a launch still on its way to its claim is not reported failed ----------
+# Where every fork is slow (Git Bash on Windows measured about 20 s from
+# detach to claim on battery) a healthy runner is still starting when the
+# confirm window ends. Its process is still alive, which a runner that died
+# before claiming never is, so the cycle has not seen it fail. The fake `ps`
+# delays only the runner's own process-group check, which runs before it
+# claims, so the launch below is healthy and merely slower than the window.
+SLOW_REAL_PS=$(command -v ps) || fail "this host has no ps to build the slow-launch fixture on"
+SLOW_BIN=$(fm_fakebin "$TMP_ROOT/slow-launch-bin")
+cat > "$SLOW_BIN/ps" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = -o ] && [ "\$2" = "pgid=" ] && [ ! -e "\$SLOW_LAUNCH_SPENT" ]; then
+  : > "\$SLOW_LAUNCH_SPENT"
+  sleep 4
+fi
+exec "$SLOW_REAL_PS" "\$@"
+SH
+chmod +x "$SLOW_BIN/ps"
+slow_reconcile() {  # <home> <spent-marker>; sets slow_out and slow_rc
+  slow_rc=0
+  slow_out=$(PATH="$SLOW_BIN:$PATH" SLOW_LAUNCH_SPENT="$2" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
+    pe "$1" reconcile) || slow_rc=$?
+}
+
+HSL="$TMP_ROOT/hsl"; new_home "$HSL"
+SL_TRIGGER="$TMP_ROOT/slow-launch-trigger"
+pe_register "$HSL" lavish slow-src -- "$BLOCKER" "$SL_TRIGGER" "slow" >/dev/null
+slow_reconcile "$HSL" "$TMP_ROOT/slow-launch-spent"
+assert_contains "$slow_out" "failed=0" \
+  "reconcile reported a launch that was still starting as failed: $slow_out"
+assert_contains "$slow_out" "uncertain=1" \
+  "reconcile did not say it could not settle a launch that was still starting: $slow_out"
+[ "$slow_rc" -eq 0 ] || fail "reconcile exited $slow_rc for a launch that was still starting: $slow_out"
+for _ in $(seq 1 600); do
+  [ "$(pe "$HSL" list | awk '$1 == "slow-src" { print $3 }')" = live ] && break
+  sleep 0.1
+done
+[ "$(pe "$HSL" list | awk '$1 == "slow-src" { print $3 }')" = live ] \
+  || fail "fixture invalid: the slow runner never took its claim"
+[ -e "$TMP_ROOT/slow-launch-spent" ] || fail "fixture invalid: the runner never went through the slow group check"
+[ "$(launch_failed_wake_count "$HSL" slow-src)" = 0 ] \
+  || fail "a launch that went on to claim was announced as failed"
+: > "$SL_TRIGGER"
+pe "$HSL" retire slow-src >/dev/null 2>&1 || true
+pass "a launch still starting when the confirm window ends is not reported failed"
+
+# The same slow start for a runner that then dies before claiming. Reconcile
+# saw it alive, so the runner announces its own failure on the way out, and
+# a host slower than the window still hears about a source that cannot start.
+HSF="$TMP_ROOT/hsf"; new_home "$HSF"
+pe_register "$HSF" lavish slow-bad-src -- "$BLOCKER" "$TMP_ROOT/slow-bad-trigger" "bad" >/dev/null
+SF_SOURCE="$HSF/state/procevent/slow-bad-src.source"
+awk '/^argv:$/ { print; exit } { print }' "$SF_SOURCE" > "$SF_SOURCE.tmp" \
+  || fail "could not damage the slow unstartable registration"
+mv "$SF_SOURCE.tmp" "$SF_SOURCE" || fail "could not damage the slow unstartable registration"
+chmod 0600 "$SF_SOURCE"
+slow_reconcile "$HSF" "$TMP_ROOT/slow-bad-spent"
+assert_contains "$slow_out" "uncertain=1" \
+  "reconcile settled a launch whose runner was still alive: $slow_out"
+for _ in $(seq 1 600); do
+  [ "$(launch_failed_wake_count "$HSF" slow-bad-src)" = 0 ] || break
+  sleep 0.1
+done
+[ "$(launch_failed_wake_count "$HSF" slow-bad-src)" = 1 ] \
+  || fail "a runner that died before claiming after the window was never announced"
+assert_contains "$(launch_failed_wake_payloads "$HSF" slow-bad-src)" "slow-bad-src" \
+  "the slow launch-failed wake does not name its source"
+[ "$(pe "$HSF" list | awk '$1 == "slow-bad-src" { print $3 }')" = none ] \
+  || fail "the slow unstartable source reports an owner"
+pe "$HSF" retire slow-bad-src >/dev/null 2>&1 || true
+pass "a runner that dies before claiming after the window announces its own failure"
 
 # --- a launch that finished before the first poll is still confirmed ---------
 # Confirmation has to read evidence a finished runner leaves behind. A runner
