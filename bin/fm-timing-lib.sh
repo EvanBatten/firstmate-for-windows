@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# fm-timing-lib.sh - the single owner of the deferred network stage's elapsed-time
-# instrumentation.
+# fm-timing-lib.sh - the single owner of firstmate's elapsed-time instrumentation:
+# the deferred network stage's steps and the session-start, bootstrap, spawn and
+# turn-end guard phase marks.
 #
 # Sourced, never executed.
 #
@@ -8,7 +9,9 @@
 # aggregate started/finished pair, so a run that took a minute could not be
 # attributed to a phase, a host, or a clone without re-running it by hand under
 # manual tracing. These helpers record per-step elapsed times as the run happens,
-# so the next slow run is answerable from the durable record alone.
+# so the next slow run is answerable from the durable record alone. The same
+# reasoning holds for session start and spawn, whose phases fm_timing_mark
+# records without the inflation an xtrace profile adds to fork-heavy steps.
 #
 # OFF BY DEFAULT, AND INERT. Every helper is a no-op unless FM_TIMING_LOG names a
 # file. Nothing here talks to the network, waits, locks, or changes control flow:
@@ -27,6 +30,8 @@
 #
 # RECORD FORMAT, one tab-separated line per measured step:
 #   v1 <TAB> scope <TAB> name <TAB> start-offset-ms <TAB> elapsed-ms <TAB> detail
+# A mark's elapsed time runs from the previous mark in the same process, and its
+# detail is the process id.
 # Appends are single short lines opened O_APPEND, so concurrent writers interleave
 # whole lines rather than corrupting each other.
 #
