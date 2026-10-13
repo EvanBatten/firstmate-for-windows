@@ -27,7 +27,7 @@ Preconditions:
 - **Drive the feature.** Run `VERIFY_REAL_SESSION=1 .agents/skills/verify-firstmate/verify.sh run scout-report`.
   It takes twenty to thirty minutes.
 - **Drive the trace instead.** `node tools/fm-drive/drive.mjs run tools/fm-drive/traces/scout-report.json` drives the same request through [control-firstmate](../../control-firstmate/SKILL.md) in about fifteen minutes.
-  Its `proves` lists `readme-ship-and-scout`, so `record` can make that row proven; it does not check that the project stayed unchanged or that the report survives cleanup, so `feature-scout-report` stays with this script.
+  Its `proves` lists `agents-7-scout-report-gate` and `readme-ship-and-scout`, so `record` can make those rows proven; it does not check that the project stayed unchanged or that the report survives cleanup, so `feature-scout-report` stays with this script.
 - **Ask.** An investigation into which subcommands the greeter should have, as a written report, with the opus worker.
 - **Scout.** `state/<id>.meta` says `kind=scout`.
 - **Report.** `data/<id>/report.md` appears and mentions the greeter; the project's `main` and working tree are unchanged.

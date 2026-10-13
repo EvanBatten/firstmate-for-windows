@@ -36,14 +36,39 @@ else
   bad "unacknowledged work was dropped"
 fi
 
-"$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation 99999.1.bogus >/dev/null 2>&1 # The generation binds an acknowledgement to one recovery episode. With no
-# episode pending there is nothing to bind to and any generation is fine, so
-# the question only means something once an episode exists.
-printf 'pending:handling:fixture
-' > "$STATE/.watcher-down"
+# An acknowledgement of an empty queue succeeds and leaves nothing, so the two
+# claims below prove only as much as what is queued when they run.
+if [ "$("$BIN/fm-wake-drain.sh" 2>/dev/null | grep -c 'check: captain inbox note')" -eq 2 ]; then
+  ok "both items are still queued when they are acknowledged"
+else
+  bad "the queue no longer holds both items, so the acknowledgement below has nothing to consume"
+fi
+
+if "$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$gen" >/dev/null 2>&1; then
+  ok "the right acknowledgement is accepted"
+else
+  bad "the correct acknowledgement was refused"
+fi
+
+if ! "$BIN/fm-wake-drain.sh" 2>/dev/null | grep -q 'check: captain inbox note'; then
+  ok "acknowledged work is gone"
+else
+  bad "acknowledged work came back"
+fi
+
+# The generation binds an acknowledgement to one recovery episode, so the
+# question only means something once an episode exists, and only while a wake
+# is queued for the acknowledgement to consume.
+"$BIN/fm-inbox.sh" note "third" >/dev/null 2>&1
+printf 'pending:handling:fixture\n' > "$STATE/.watcher-down"
 redrain=$("$BIN/fm-wake-drain.sh" 2>&1)
 rgen=$(printf '%s' "$redrain" | awk '/WAKE_ACK_REQUIRED/ { for (i=1;i<=NF;i++) if ($i=="--recovery-generation") print $(i+1) }' | tail -1)
 rseq=$(printf '%s' "$redrain" | awk '/WAKE_ACK_REQUIRED/ { for (i=1;i<=NF;i++) if ($i=="--ack-through") print $(i+1) }' | tail -1)
+if [ "$(printf '%s' "$redrain" | grep -c 'check: captain inbox note')" -eq 1 ] && [ "${rseq:-0}" -gt 0 ]; then
+  ok "a wake is queued while the recovery episode is pending"
+else
+  bad "no wake is queued during the recovery episode, so its acknowledgements consume nothing"
+fi
 "$BIN/fm-wake-drain.sh" --ack-through "$rseq" --recovery-generation 99999.1.bogus >/dev/null 2>&1 || true
 if grep -q "^acked:handling:$rgen$" "$STATE/.watcher-down" 2>/dev/null; then
   bad "a stale generation retired a recovery episode it does not own"
@@ -57,18 +82,6 @@ else
   bad "the correct generation did not retire the recovery episode"
 fi
 rm -f "$STATE/.watcher-down"
-
-if "$BIN/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$gen" >/dev/null 2>&1; then
-  ok "the right acknowledgement is accepted"
-else
-  bad "the correct acknowledgement was refused"
-fi
-
-if ! "$BIN/fm-wake-drain.sh" 2>/dev/null | grep -q 'check: captain inbox note'; then
-  ok "acknowledged work is gone"
-else
-  bad "acknowledged work came back"
-fi
 
 # Regression, issue #59: an acknowledgement that empties the row set used to
 # abandon its temp file, one per acknowledgement, forever.

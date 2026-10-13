@@ -93,26 +93,25 @@ session_clone() {
 }
 
 session_open() {  # <workspace label>
-  local label=$1 out bash_win emitter quoted
+  local label=$1 out bash_win rc quoted
   SESSION_BASELINE_WS=$(session_herdr workspace list 2>/dev/null | jq -r '.result.workspaces[].workspace_id')
   bash_win=$(cygpath -w "$BASH")
   SESSION_PANE_PATH=$(session_pane_path)
-  # The pane's own bash evaluates this at each of its prompts; nothing may
-  # expand here.
-  # shellcheck disable=SC2016
-  emitter='printf "\033]9;9;%s\033\\" "$(cygpath -w "$PWD")"'
   out=$(session_herdr workspace create --cwd "$(cygpath -w "$SESSION_HOME")" --label "$label" --no-focus \
-    --env "SHELL=$bash_win" --env "PROMPT_COMMAND=$emitter" \
     --env "FM_PANE_PATH=$(cygpath -w -p "$SESSION_PANE_PATH")" 2>&1) ||
     { bad "Herdr refused to create a workspace for the session: $out"; verify_done; }
   printf '%s\n' "$out" > "$VERIFY_ARTIFACT_RUN/workspace.json"
   SESSION_WS=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty')
   SESSION_PANE=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty')
   [ -n "$SESSION_WS" ] && [ -n "$SESSION_PANE" ] || { bad "Herdr created a workspace but reported no pane for it"; verify_done; }
+  # The primary runs where a captain's does: Git Bash on the overlay's pane-rc.sh,
+  # which loads env.sh and reports the pane's cwd at each prompt.
   quoted=${bash_win//\'/\'\'}
+  rc=$(cygpath -w "$SESSION_HOME/platform/windows/pane-rc.sh")
+  rc=${rc//\'/\'\'}
   # pwsh expands these in the pane, not this shell.
   # shellcheck disable=SC2016
-  session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --login" >/dev/null 2>&1
+  session_herdr pane run "$SESSION_PANE" 'if ($env:FM_PANE_PATH) { $env:Path = $env:FM_PANE_PATH }; '"& '$quoted' --rcfile '$rc' -i" >/dev/null 2>&1
   if session_herdr pane wait-output --regex '(?m)^\$ ?$' --timeout 30000 "$SESSION_PANE" >/dev/null 2>&1; then
     ok "the session's pane runs Git Bash with the captain's toolchain on PATH"
   else

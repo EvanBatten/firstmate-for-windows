@@ -7,8 +7,9 @@
 #
 # The suite it drives is tests/verification/, whose README owns the contract
 # every script keeps. This wrapper adds what an agent in one of several parallel
-# worktrees needs on top of it: a doctor that writes nothing, and an evidence
-# directory derived from the worktree and the run, so two worktrees, or a
+# worktrees needs on top of it: a doctor that writes nothing outside a scratch
+# directory it removes, and an evidence directory derived from the worktree
+# and the run, so two worktrees, or a
 # baseline and a treatment run in the same worktree, never share a transcript.
 #
 # Everything is resolved from the worktree that holds THIS file, not from the
@@ -45,6 +46,19 @@ features() {
     [ -e "$f" ] || continue
     basename "$f" .verify.sh
   done
+}
+
+# suite_home_loads_overlay: build one throwaway home the way a script does and
+# report whether the overlay came up in it. The caller's own overlay is unset
+# first, so a doctor run from an overlay shell cannot pass on its behalf.
+suite_home_loads_overlay() {
+  local scratch loaded
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/fm-verify-doctor.XXXXXX") || return 1
+  # shellcheck disable=SC2016 # bash -c text, expanded by the child
+  loaded=$(env -u FM_PLATFORM_OVERLAY TMPDIR="$scratch" VERIFY_ARTIFACT_DIR="$scratch/artifacts" \
+    bash -c '. "$1" && verify_home && printf %s "${FM_PLATFORM_OVERLAY:-}"' _ "$SUITE/lib.sh" 2>/dev/null)
+  rm -rf -- "$scratch"
+  [ -n "$loaded" ]
 }
 
 DOCTOR_BAD=0
@@ -125,7 +139,7 @@ cmd_doctor() {
 
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-      if [ -f "$ROOT/platform/windows/env.sh" ] && ! grep -q 'platform/windows/env\.sh' "$SUITE/lib.sh" "$SUITE/session-lib.sh" 2>/dev/null; then
+      if [ -f "$ROOT/platform/windows/env.sh" ] && ! suite_home_loads_overlay; then
         d_warn "the suite drives bin/ without platform/windows/env.sh, the overlay every Windows captain runs under, so condition-watch fails to arm and lock-home-spelling grows a takeover chain here although the product under the overlay does neither"
       fi ;;
   esac

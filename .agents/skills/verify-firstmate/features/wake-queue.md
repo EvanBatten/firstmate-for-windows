@@ -33,12 +33,13 @@ Preconditions:
 - **Read the acknowledgement.** The same output carries `WAKE_ACK_REQUIRED` with `--ack-through <seq>` and `--recovery-generation <generation>`.
 - **Look again without acknowledging.** The script runs `bin/fm-wake-drain.sh` a second time.
   Both items are presented again.
-- **Offer a stale generation.** With a recovery episode pending in the home, the script runs the acknowledgement with `--recovery-generation 99999.1.bogus`.
+- **Acknowledge the work.** While both items are still queued, the script runs the original acknowledgement.
+  It succeeds, and the next `bin/fm-wake-drain.sh` presents no inbox item.
+- **Open a recovery episode.** The script queues a third note and writes a pending episode, and the drain presents that one note.
+- **Offer a stale generation.** The script acknowledges that note with `--recovery-generation 99999.1.bogus`.
   The episode record under `state/` is not retired.
 - **Offer the right generation.** The script runs the acknowledgement with the generation the drain printed.
   The episode record reads as acknowledged.
-- **Acknowledge the work.** The script runs the original acknowledgement.
-  It succeeds, and the next `bin/fm-wake-drain.sh` presents no inbox item.
 - **Check the home.** The script lists `state/` for leftover `.wake-rows.consume.*` and `.main-eligible-rows.tmp.*` files.
   There are none.
 - **Proof.** Read `wake-queue/transcript.txt` in the evidence directory: one `ok` line per claim above and no `FAIL` line.
@@ -47,7 +48,6 @@ Preconditions:
 
 - The generation never gates removing rows: `--ack-through <seq>` removes every presented row up to `<seq>` whatever generation it carries, and the generation only decides whether the recovery episode in `state/.watcher-down` is marked acknowledged.
   The script writes that episode itself (`pending:handling:fixture`); a hand drive that skips that step proves nothing about generations.
-- The script's first stale-generation acknowledgement already removes both notes, so the later "right acknowledgement" and "acknowledged work is gone" claims run on an empty queue and do not prove the acknowledgement on their own.
 - The session-start entry point is not driven here.
   It presents the same queue, but its own digest is unproved by this script.
 - The leftover-file claim is the regression check for a defect that leaked one empty file per acknowledgement, so do not weaken it to a count.

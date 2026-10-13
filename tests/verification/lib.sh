@@ -52,6 +52,16 @@ verify_home() {
   VERIFY_HOME="$VERIFY_TMP/home"
   mkdir -p "$VERIFY_HOME/data" "$VERIFY_HOME/state" "$VERIFY_HOME/config" "$VERIFY_HOME/projects"
   cp "$VERIFY_ROOT/.tasks.toml" "$VERIFY_HOME/.tasks.toml"
+  verify_platform_overlay "$VERIFY_HOME"
+}
+
+# verify_platform_overlay <home>: on Windows a captain runs bin/ only under
+# platform/windows/env.sh, so a drive without it tests code no captain runs.
+# env.sh judges the home's privacy from FM_HOME, so it is loaded per home.
+verify_platform_overlay() {
+  case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) ;; *) return 0 ;; esac
+  # shellcheck source=platform/windows/env.sh
+  FM_HOME=$1 . "$VERIFY_ROOT/platform/windows/env.sh"
 }
 
 # Artifacts. A run that only prints to a terminal leaves nothing to inspect an

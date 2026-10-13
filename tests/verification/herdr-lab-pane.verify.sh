@@ -3,8 +3,9 @@
 #
 # Issues #63 and #64. Two end-to-end suites fail on Windows the moment they type
 # a POSIX command into a pane they made with a plain `workspace create`. The
-# production path does not do that: fm_backend_herdr_task_tab_create sends a
-# Git Bash launch line first, because a fresh pane here opens a Windows shell.
+# production path does not do that: fm_backend_herdr_create_task runs under the
+# Windows overlay, whose Herdr layer makes the tab a Git Bash on pane-rc.sh,
+# because a fresh pane here opens a Windows shell.
 # If that is the whole story, the same command fails in one pane and works in
 # the other, and one fixture change buys both suites back.
 #
@@ -86,9 +87,10 @@ poke() {
   [ -s "$marker" ]
 }
 
-# 1. The shape both failing suites build: a plain workspace, no bootstrap.
+# 1. The shape both failing suites build: a plain workspace, no bootstrap. It
+# goes straight to Herdr, because the overlay would lay out its pane too.
 RAW_CWD="$VERIFY_TMP/raw"; mkdir -p "$RAW_CWD"
-RAW=$(herdr_call workspace create --cwd "$RAW_CWD" --label raw --no-focus)
+RAW=$(timeout "$CALL_BUDGET" bash "$BIN/fm-herdr-lab.sh" run "$SESSION" workspace create --cwd "$RAW_CWD" --label raw --no-focus 2>/dev/null)
 RAW_PANE=$(printf '%s' "$RAW" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
 if [ -n "$RAW_PANE" ]; then
   ok "a plain workspace pane can be created"
@@ -107,10 +109,11 @@ fi
 TASK_CWD="$VERIFY_TMP/task"; mkdir -p "$TASK_CWD"
 WSID=$(printf '%s' "$RAW" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
 # shellcheck disable=SC2016  # the single-quoted program is bash -c text
-TAB=$(timeout "$CALL_BUDGET" bash -c '
-  . "$1"; fm_backend_herdr_task_tab_create "$2" "$3" "$4" "$5"
-' _ "$BACKEND" "$SESSION" "$WSID" "$TASK_CWD" fmverify 2>/dev/null)
-TASK_PANE=$(printf '%s' "$TAB" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+TASK_IDS=$(timeout "$CALL_BUDGET" bash -c '
+  . "$1"; fm_backend_herdr_create_task "$2:$3" fmverify "$4" ""
+' _ "$BACKEND" "$SESSION" "$WSID" "$TASK_CWD" 2>/dev/null)
+TASK_PANE=${TASK_IDS#* }
+[ "$TASK_PANE" != "$TASK_IDS" ] || TASK_PANE=
 if [ -n "$TASK_PANE" ]; then
   ok "a task pane can be created the way firstmate creates one"
 else

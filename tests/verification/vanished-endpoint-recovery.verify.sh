@@ -14,6 +14,8 @@
 # shellcheck source=tests/verification/lib.sh disable=SC1091
 . "$(dirname "$0")/lib.sh"
 
+command -v herdr >/dev/null 2>&1 || verify_skip "herdr is not installed"
+
 verify_home
 HOME_DIR="$VERIFY_HOME"
 export FM_HOME="$HOME_DIR"
@@ -21,6 +23,26 @@ BIN="$VERIFY_ROOT/bin"
 PROJ="$HOME_DIR/projects/demo"
 WT="$VERIFY_TMP/demo-work"
 ID=vanished
+
+# The record names a session no one else uses, because relaunch starts that
+# session's server, and this script stops only what it started.
+GONE=$(timeout 30 bash "$BIN/fm-herdr-lab.sh" name gone 2>/dev/null)
+if [ -z "$GONE" ] || ! timeout 60 bash "$BIN/fm-herdr-lab.sh" prepare "$GONE" >/dev/null 2>&1; then
+  verify_skip "the herdr lab helper could not reserve a session name"
+fi
+# shellcheck disable=SC2329  # runs from verify_done and verify_cleanup
+gone_teardown() { timeout 90 bash "$BIN/fm-herdr-lab.sh" teardown "$GONE" >/dev/null 2>&1 || true; }
+# shellcheck disable=SC2329  # runs from verify_done
+gone_stopped() {
+  gone_teardown
+  if herdr session list --json 2>/dev/null | jq -e --arg s "$GONE" '.sessions[]? | select(.name == $s)' >/dev/null; then
+    bad "the Herdr session this run started is still there: $GONE"
+  else
+    ok "the Herdr session this run started is gone"
+  fi
+}
+verify_at_done gone_stopped
+verify_at_cleanup gone_teardown
 
 mkdir -p "$PROJ"
 git -C "$PROJ" init -q -b main
@@ -36,7 +58,7 @@ WIP=$(git -C "$WT" rev-parse HEAD)
 mkdir -p "$HOME_DIR/data/$ID"
 printf 'Finish the thing.\n' > "$HOME_DIR/data/$ID/brief.md"
 cat > "$HOME_DIR/state/$ID.meta" <<META
-window=gone-session:w99:p99
+window=$GONE:w99:p99
 endpoint_task_id=$ID
 worktree=$WT
 project=$PROJ
@@ -47,7 +69,7 @@ yolo=off
 model=sonnet
 effort=low
 backend=herdr
-herdr_session=gone-session
+herdr_session=$GONE
 herdr_workspace_id=w99
 herdr_tab_id=w99:t99
 herdr_pane_id=w99:p99
@@ -86,12 +108,12 @@ else
   bad "recovery neither refused for the known reason nor reached the launch: $out"
 fi
 
-# Stopping is still the right answer for stopping: there genuinely is nothing
-# to stop, and that refusal should stay exactly as it is.
-if timeout 90 "$BIN/fm-control.sh" "$ID" exit >/dev/null 2>&1; then
-  bad "stopping a worker that is not there reported success"
+# A proven-gone endpoint took its agent with it, so stopping has nothing left
+# to do and says the endpoint is gone rather than claiming a stop.
+if out=$(timeout 90 "$BIN/fm-control.sh" "$ID" exit 2>&1) && printf '%s' "$out" | grep -Fq endpoint-gone; then
+  ok "stopping a worker that is not there reports its endpoint gone"
 else
-  ok "stopping still refuses, which is correct - there is nothing to stop"
+  bad "stopping a worker that is not there did not report its endpoint gone: $out"
 fi
 
 # Whatever happened above, the work is untouched. This is what makes a failed
