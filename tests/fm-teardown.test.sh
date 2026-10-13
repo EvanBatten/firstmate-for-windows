@@ -3720,23 +3720,31 @@ test_leaked_worktree_process_is_reaped() {
 }
 
 test_teardown_run_from_inside_worktree_spares_its_caller() {
-  local case_dir
-  case_dir=$(make_case caller-inside-worktree)
-  write_meta "$case_dir" no-mistakes ship
-  land_shippable_commit "$case_dir"
+  local where case_dir label
+  for where in wt wt/a/b tasktmp/x; do
+    label="caller-inside-${where//\//-}"
+    case_dir=$(make_case "$label")
+    write_meta "$case_dir" no-mistakes ship
+    printf 'tasktmp=%s\n' "$case_dir/tasktmp" >> "$case_dir/state/task-x1.meta"
+    land_shippable_commit "$case_dir"
+    seed_backlog_in_flight "$case_dir"
+    mkdir -p "$case_dir/$where"
 
-  ( cd "$case_dir/wt" && {
-      rc=0
-      run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
-      printf '%s
-' "$rc" > "$case_dir/caller-saw-rc"
-    } ) || true
+    ( cd "$case_dir/$where" && {
+        rc=0
+        run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+        printf '%s\n' "$rc" > "$case_dir/caller-saw-rc"
+      } ) || true
 
-  [ -s "$case_dir/caller-saw-rc" ]     || fail "caller-inside-worktree: teardown killed the shell that ran it"
-  expect_code 1 "$(cat "$case_dir/caller-saw-rc")"     "caller-inside-worktree: teardown from inside the worktree should refuse"
-  assert_grep "REFUSED: teardown is running from inside" "$case_dir/stderr"     "caller-inside-worktree: the refusal did not say teardown runs from inside the worktree"
-  [ -d "$case_dir/wt" ] || fail "caller-inside-worktree: the worktree was removed"
-  pass "teardown run from inside the task worktree refuses and spares the shell that ran it"
+    [ -s "$case_dir/caller-saw-rc" ] || fail "$label: teardown killed the shell that ran it"
+    expect_code 1 "$(cat "$case_dir/caller-saw-rc")" "$label: teardown from inside the task's directories should refuse"
+    assert_grep "REFUSED: teardown is running from inside" "$case_dir/stderr" "$label: the refusal did not say teardown runs from inside the task's directories"
+    [ ! -e "$case_dir/state/task-x1.backlog-close" ] || fail "$label: the refusal left a backlog close marker for session start to replay"
+    [ "$(backlog_row_state "$case_dir")" = in_flight ] || fail "$label: the refusal moved the backlog item out of In flight"
+    [ -f "$case_dir/state/task-x1.meta" ] || fail "$label: the refusal removed the task record"
+    [ -d "$case_dir/wt" ] || fail "$label: the worktree was removed"
+  done
+  pass "teardown run from inside the task worktree, a subdirectory of it, or its tasktmp refuses before it changes anything"
 }
 
 test_crafted_cwd_cannot_forge_a_reap() {
