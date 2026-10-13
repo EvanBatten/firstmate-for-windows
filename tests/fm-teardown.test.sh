@@ -3847,6 +3847,39 @@ SH
   pass "reaping a leaked process scans the process table once per check, not once per task root"
 }
 
+start_sleeper_in() {  # <dir> -> pid of a disowned sleeper whose cwd is <dir>
+  ( cd "$1" && exec sleep 300 ) </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!"
+  disown
+}
+
+test_reap_spares_sibling_dirs_sharing_a_prefix() {
+  local case_dir rc leak tleak wsib tsib pid alive=""
+  case_dir=$(make_case reap-sibling-prefix)
+  write_meta "$case_dir" no-mistakes ship
+  printf '%s\n' "tasktmp=$case_dir/tasktmp" >> "$case_dir/state/task-x1.meta"
+  mkdir -p "$case_dir/tasktmp/sub dir" "$case_dir/wt2" "$case_dir/tasktmp2"
+  land_shippable_commit "$case_dir"
+  leak=$(start_sleeper_in "$case_dir/wt")
+  tleak=$(start_sleeper_in "$case_dir/tasktmp/sub dir")
+  wsib=$(start_sleeper_in "$case_dir/wt2")
+  tsib=$(start_sleeper_in "$case_dir/tasktmp2")
+  sleep 0.5
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  for pid in "$leak" "$tleak" "$wsib" "$tsib"; do
+    kill -0 "$pid" 2>/dev/null && alive="$alive $pid "
+  done
+  kill -KILL "$leak" "$tleak" "$wsib" "$tsib" 2>/dev/null || true
+  expect_code 0 "$rc" "reap-sibling-prefix: teardown should succeed"
+  case "$alive" in *" $leak "*|*" $tleak "*) fail "reap-sibling-prefix: a leaked task process survived" ;; esac
+  case "$alive" in *" $wsib "*) ;; *) fail "reap-sibling-prefix: a process in sibling wt2 was reaped" ;; esac
+  case "$alive" in *" $tsib "*) ;; *) fail "reap-sibling-prefix: a process in sibling tasktmp2 was reaped" ;; esac
+  pass "a reap takes processes under the worktree and tasktmp and spares siblings whose names share their prefix"
+}
+
 test_lsof_absent_reaps_tmux_process_group() {
   local case_dir rc pid path_without_lsof
   case_dir=$(make_case lsof-absent-process-group-reap)
@@ -4452,6 +4485,7 @@ test_teardown_run_from_inside_worktree_spares_its_caller
 test_crafted_cwd_cannot_forge_a_reap
 test_leaked_tasktmp_process_is_reaped
 test_reap_scans_processes_once_per_check
+test_reap_spares_sibling_dirs_sharing_a_prefix
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
