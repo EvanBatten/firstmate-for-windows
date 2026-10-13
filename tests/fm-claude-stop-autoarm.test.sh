@@ -101,6 +101,7 @@ if [ -n "${FM_WATCH_PREDECESSOR_ARM_PID:-}" ]; then
     printf 'watcher: FAILED - no live watcher with a fresh beacon\n'
     exit 1
   fi
+  trap ': > "$FM_HOME/state/successor-termed"; exit 143' TERM
   printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
   while [ -e "$FM_HOME/state/successor-park" ]; do sleep 0.05; done
   exit 0
@@ -297,6 +298,23 @@ run_autoarm_bg() {
     | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
         printf "%s\n" "$$" > "$FM_HOME/state/.lock"
         "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
+      ' > "$out" 2>&1 &
+  RUN_AUTOARM_BG_PID=$!
+}
+
+# run_autoarm_bg, but the fake session outlives its hook, as a real one does
+# through the handling turn, until state/session-hold is removed. The session
+# then exits with the hook's status.
+run_autoarm_held() {
+  local dir=$1 out=$2
+  : > "$dir/state/session-hold"
+  printf '%s\n' '{"session_id":"sess-autoarm","stop_hook_active":false}' \
+    | FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+        printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+        "$FM_HOME/bin/fm-claude-stop-autoarm.sh"
+        rc=$?
+        while [ -e "$FM_HOME/state/session-hold" ]; do sleep 0.05; done
+        exit "$rc"
       ' > "$out" 2>&1 &
   RUN_AUTOARM_BG_PID=$!
 }
@@ -569,8 +587,11 @@ test_attached_cycle_end_starts_handling_successor() {
   : > "$dir/state/task.meta"
   write_arm_fixture "$dir" attached-delivered
   : > "$dir/state/successor-park"
-  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  expect_code 2 "$status" "an attached cycle's delivered wake must still rewake"
+  run_autoarm_held "$dir" "$dir/state/autoarm.out"
+  i=0
+  while [ ! -s "$dir/state/successor-ran" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+  wait_for_hook_exit "$dir" 300 || fail "the hook did not deliver its wake within 60 s"
+  out=$(cat "$dir/state/autoarm.out")
   assert_contains "$out" "signal: task.status done: fixture peer cycle ended" "rewake must carry the delivered reason"
   [ -s "$dir/state/successor-ran" ] \
     || fail "the hook returned from the ended attached cycle without starting a handling successor"
@@ -589,6 +610,9 @@ test_attached_cycle_end_starts_handling_successor() {
     sleep 0.05
     i=$((i + 1))
   done
+  rm -f "$dir/state/session-hold"
+  wait "$RUN_AUTOARM_BG_PID"; status=$?
+  expect_code 2 "$status" "an attached cycle's delivered wake must still rewake"
   [ "$(printf '%s\n' "$out" | grep -c '^firstmate watcher wake')" -eq 1 ] \
     || fail "the successor start must not change the single wake banner: $out"
   assert_not_contains "$out" "did not confirm" "a confirmed successor adds nothing to the rewake"
@@ -1505,6 +1529,32 @@ test_session_end_before_wake_starts_no_successor() {
   pass "auto-arm: a wake after the session ended starts no handling successor"
 }
 
+test_session_end_after_wake_stops_the_handling_successor() {
+  local dir successor i
+  dir=$(make_primary_dir "$TMP_ROOT/session-end-successor")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" actionable
+  : > "$dir/state/successor-park"
+  run_autoarm_held "$dir" "$dir/state/autoarm.out"
+  i=0
+  while [ ! -s "$dir/state/successor-ran" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+  wait_for_hook_exit "$dir" 300 || fail "the hook did not deliver its wake within 60 s"
+  successor=$(sed -n 's/^arm=\([0-9]*\) .*$/\1/p' "$dir/state/successor-ran")
+  [ -n "$successor" ] || fail "the wake started no handling successor: $(cat "$dir/state/autoarm.out")"
+  kill -0 "$successor" 2>/dev/null || fail "the handling successor stopped while its session was still running"
+
+  rm -f "$dir/state/session-hold"
+  wait "$RUN_AUTOARM_BG_PID" 2>/dev/null
+  i=0
+  while kill -0 "$successor" 2>/dev/null && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$successor" 2>/dev/null; then
+    rm -f "$dir/state/successor-park"
+    fail "the handling successor outlived its ended session by 15 s"
+  fi
+  assert_present "$dir/state/successor-termed" "the handling successor exited without being stopped"
+  pass "auto-arm: a session that ends after a wake stops its handling successor"
+}
+
 test_active_in_marked_secondmate_home() {
   local dir out status
   dir=$(make_secondmate_dir "$TMP_ROOT/secondmate")
@@ -1809,6 +1859,7 @@ test_afk_mid_cycle_suppresses_rewake
 test_session_end_mid_park_stops_the_arm
 test_session_end_before_retry_never_rearms
 test_session_end_before_wake_starts_no_successor
+test_session_end_after_wake_stops_the_handling_successor
 test_active_in_marked_secondmate_home
 test_long_poll_grace_reaches_arm_wrapper
 test_host_absent_flag_keeps_the_arm
