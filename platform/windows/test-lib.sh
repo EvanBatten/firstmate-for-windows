@@ -4,6 +4,11 @@
 # a mode must read it at 077 too or it sees 755 where firstmate sees 700 on the
 # same directory.
 umask 077
+# A test home is a fresh directory under the private temp tree, but no one
+# registered it as a private root, so bash-env.sh would start every product
+# child for it at 022, where firstmate refuses its own private files. Every
+# bash below a test sources this file after bash-env.sh and returns to 077.
+export FM_WIN_PRIOR_BASH_ENV=${BASH_SOURCE[0]}
 
 # Every git lock counts as held here (overrides.sh), so no case can prove one stale.
 fm_test_lock_staleness_provable() {
@@ -15,6 +20,12 @@ fm_test_lock_staleness_provable() {
 # and MSYS ps cannot report one.
 fm_test_ps_start_time_readable() {
   printf 'skip: %s: ps reports no process start time on Windows\n' "$1"
+  return 1
+}
+
+# chmod changes nothing on a noacl drive, so no case can loosen a mode.
+fm_test_chmod_loosens() {
+  printf 'skip: %s: chmod cannot loosen a mode on a noacl drive\n' "$1"
   return 1
 }
 

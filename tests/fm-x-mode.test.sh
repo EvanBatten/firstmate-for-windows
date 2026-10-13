@@ -544,17 +544,19 @@ test_poll_inbox_private_publication_rejects_unsafe_paths() {
   assert_absent "$home/external/req-x.json" "poll must not write through a linked inbox directory"
   [ -L "$home/state/x-inbox" ] || fail "poll must leave the rejected inbox symlink in place"
 
-  home="$TMP_ROOT/poll-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
-  fakebin=$(make_fake_curl "$home")
-  chmod 755 "$home/state/x-inbox"
-  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
-    FMX_PAIRING_TOKEN=tok-public FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
-    "$ROOT/bin/fm-x-poll.sh"); rc=$?
-  expect_code 0 "$rc" "poll public inbox dir exit"
-  [ "$out" = "x-mode-error cannot write inbox" ] \
-    || fail "poll must reject a nonprivate inbox directory (got: $out)"
-  assert_absent "$home/state/x-inbox/req-x.json" "poll must not publish into a nonprivate inbox directory"
-  assert_no_private_artifact_temps "$home/state/x-inbox"
+  if fm_test_chmod_loosens poll-inbox-public-dir; then
+    home="$TMP_ROOT/poll-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
+    fakebin=$(make_fake_curl "$home")
+    chmod 755 "$home/state/x-inbox"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
+      FMX_PAIRING_TOKEN=tok-public FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
+      "$ROOT/bin/fm-x-poll.sh"); rc=$?
+    expect_code 0 "$rc" "poll public inbox dir exit"
+    [ "$out" = "x-mode-error cannot write inbox" ] \
+      || fail "poll must reject a nonprivate inbox directory (got: $out)"
+    assert_absent "$home/state/x-inbox/req-x.json" "poll must not publish into a nonprivate inbox directory"
+    assert_no_private_artifact_temps "$home/state/x-inbox"
+  fi
 
   home="$TMP_ROOT/poll-inbox-linked-dest"; mkdir -p "$home/state/x-inbox"
   fakebin=$(make_fake_curl "$home")
@@ -1204,17 +1206,19 @@ test_reply_dry_run_outbox_private_publication_rejects_unsafe_paths() {
   [ "$(jq -r .text "$hardlink")" = "old" ] || fail "reply dry-run must preserve the hardlink peer"
   assert_no_private_artifact_temps "$home/state/x-outbox"
 
-  home="$TMP_ROOT/reply-outbox-wrong-mode-dest"; mkdir -p "$home/state/x-outbox"
-  err="$home/err.txt"
-  chmod 700 "$home/state/x-outbox"
-  dest="$home/state/x-outbox/req-x.json"
-  printf '{"request_id":"req-x","text":"old"}\n' > "$dest"
-  chmod 644 "$dest"
-  out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-x "preview text" 2>"$err"); rc=$?
-  [ "$rc" -ne 0 ] || fail "reply dry-run must reject a wrong-mode outbox destination"
-  [ "$(jq -r .text "$dest")" = "old" ] || fail "reply dry-run must preserve a rejected wrong-mode destination"
-  [ "$(path_mode "$dest")" = 644 ] || fail "reply dry-run must leave a rejected wrong-mode destination unchanged"
-  assert_no_private_artifact_temps "$home/state/x-outbox"
+  if fm_test_chmod_loosens reply-outbox-wrong-mode-dest; then
+    home="$TMP_ROOT/reply-outbox-wrong-mode-dest"; mkdir -p "$home/state/x-outbox"
+    err="$home/err.txt"
+    chmod 700 "$home/state/x-outbox"
+    dest="$home/state/x-outbox/req-x.json"
+    printf '{"request_id":"req-x","text":"old"}\n' > "$dest"
+    chmod 644 "$dest"
+    out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-x "preview text" 2>"$err"); rc=$?
+    [ "$rc" -ne 0 ] || fail "reply dry-run must reject a wrong-mode outbox destination"
+    [ "$(jq -r .text "$dest")" = "old" ] || fail "reply dry-run must preserve a rejected wrong-mode destination"
+    [ "$(path_mode "$dest")" = 644 ] || fail "reply dry-run must leave a rejected wrong-mode destination unchanged"
+    assert_no_private_artifact_temps "$home/state/x-outbox"
+  fi
 
   home="$TMP_ROOT/reply-outbox-private-success"; mkdir -p "$home"
   out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-x "preview text" 2>/dev/null); rc=$?
@@ -1393,15 +1397,17 @@ test_reply_rejects_unsafe_inbox_context_reads() {
     || fail "reply must not trust a hardlinked inbox file for Discord budget context"
   [ "$(jq -r .platform "$dest")" = "discord" ] || fail "reply must leave a hardlinked inbox lookalike unchanged"
 
-  home="$TMP_ROOT/reply-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
-  chmod 755 "$home/state/x-inbox"
-  jq -cn '{request_id:"req-public-dir",platform:"discord",reply_max_chars:1900,text:"question"}' \
-    > "$home/state/x-inbox/req-public-dir.json"
-  private_artifact_file "$home/state/x-inbox/req-public-dir.json"
-  out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-public-dir "$reply" 2>/dev/null); rc=$?
-  expect_code 0 "$rc" "reply public inbox dir read exit"
-  jq -e '.texts and (.texts|length>1)' "$home/state/x-outbox/req-public-dir.json" >/dev/null \
-    || fail "reply must not trust a nonprivate inbox directory for Discord budget context"
+  if fm_test_chmod_loosens reply-inbox-public-dir; then
+    home="$TMP_ROOT/reply-inbox-public-dir"; mkdir -p "$home/state/x-inbox"
+    chmod 755 "$home/state/x-inbox"
+    jq -cn '{request_id:"req-public-dir",platform:"discord",reply_max_chars:1900,text:"question"}' \
+      > "$home/state/x-inbox/req-public-dir.json"
+    private_artifact_file "$home/state/x-inbox/req-public-dir.json"
+    out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-public-dir "$reply" 2>/dev/null); rc=$?
+    expect_code 0 "$rc" "reply public inbox dir read exit"
+    jq -e '.texts and (.texts|length>1)' "$home/state/x-outbox/req-public-dir.json" >/dev/null \
+      || fail "reply must not trust a nonprivate inbox directory for Discord budget context"
+  fi
   pass "fm-x-reply rejects unsafe inbox context artifacts"
 }
 

@@ -870,6 +870,14 @@ fm_test_lock_staleness_provable() {
   return 0
 }
 
+# fm_test_chmod_loosens <label>: a case whose premise is a file that chmod made
+# group- or world-accessible calls this first and skips that premise when it
+# fails. A platform overlay whose drive ignores chmod cannot loosen a mode, so
+# the premise cannot hold there and the case prints one skip line instead.
+fm_test_chmod_loosens() {
+  return 0
+}
+
 # fm_test_ps_start_time_readable <label>: a case that hides /proc so a process
 # identity must come from `ps -o lstart=` calls this first and returns when it
 # fails. A platform overlay whose ps cannot report a start time prints one skip
