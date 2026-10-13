@@ -74,7 +74,9 @@
 #            listening, and a wedged source would go on presenting as armed.
 #            Every launch is counted as `started` only after the source is
 #            observed owned or its launch-pacing stamp has moved, `failed`
-#            otherwise, and any failure also makes this command exit non-zero.
+#            when its runner is gone without either, and `uncertain` when its
+#            runner is still starting as the window ends; any failure also
+#            makes this command exit non-zero.
 #            One bounded window covers a whole cycle's launches
 #            (FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS; docs/configuration.md).
 #            A launch that fails to confirm is also announced as a durable
@@ -887,7 +889,7 @@ publish_pending() {  # [result-file-to-skip]
 # the runner's own owner guard). The guard deliberately gets its OWN group
 # rather than joining the runner's: it has to survive the group signal it sends,
 # and a member of the runner's group would also make that group read as alive
-# after the runner itself is gone.
+# after the runner itself is gone. A detached start prints the new leader's pid.
 isolate_process() {  # <wait|detach> <command> [argv...]
   local mode=$1 program
   shift
@@ -897,10 +899,15 @@ isolate_process() {  # <wait|detach> <command> [argv...]
     if ($pid == 0) {
       setpgrp(0, 0) or exit 125;
       $ENV{FM_PROCEVENT_RUNNER_GROUP} = $$;
+      if ($mode eq "detach") {
+        open(STDIN, "<", "/dev/null");
+        open(STDOUT, ">", "/dev/null");
+        open(STDERR, ">", "/dev/null");
+      }
       exec @ARGV;
       exit 125;
     }
-    exit 0 if $mode eq "detach";
+    if ($mode eq "detach") { print "$pid\n"; exit 0; }
     waitpid($pid, 0) == $pid or exit 125;
     my $status = $?;
     exit(128 + ($status & 127)) if $status & 127;
@@ -909,7 +916,7 @@ isolate_process() {  # <wait|detach> <command> [argv...]
     perl -e "$program" "$mode" "$@"
     return $?
   fi
-  perl -e "$program" "$mode" "$@" >/dev/null 2>&1 &
+  perl -e "$program" "$mode" "$@" </dev/null 2>/dev/null
 }
 
 isolate_runner() {  # <wait|detach> <source-id>
@@ -972,6 +979,11 @@ cmd_start() {
   local id=${1-} adapter out rc claimed bound_rc published_capture=0 handled_capture=0 self_announcing=0 task_owner='' task_pending
   local extension_owner=0 extension_load_state extension_sequence='' extension_request_id=''
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
+  if [ "${FM_PROCEVENT_ANNOUNCE_UNCLAIMED:-}" = 1 ]; then
+    unset FM_PROCEVENT_ANNOUNCE_UNCLAIMED
+    # shellcheck disable=SC2064 # The id is path-safe and fixed for this runner.
+    trap "report_unclaimed_exit $id" EXIT
+  fi
   require_runner_group
   fm_procevent_source_lock_acquire "$id" || die "cannot lock source: $id"
   if [ ! -f "$(source_file "$id")" ] || [ -L "$(source_file "$id")" ]; then
@@ -1463,7 +1475,7 @@ start_owner_guard() {  # <source-id>
   identity=$(fm_pid_identity "$$" 2>/dev/null) || return 1
   ready=$(umask 077; mktemp "$REG/.owner-guard-ready.XXXXXX") || return 1
   if ! isolate_process detach "$SCRIPT_DIR/fm-procevent.sh" _owner-watchdog \
-      "$1" "$$" "$identity" "$ready" "$CLAIM_STATE_DEVICE" "$CLAIM_STATE_INODE"; then
+      "$1" "$$" "$identity" "$ready" "$CLAIM_STATE_DEVICE" "$CLAIM_STATE_INODE" >/dev/null; then
     rm -f -- "$ready"
     return 1
   fi
@@ -1572,8 +1584,20 @@ cmd_owner_watchdog() {  # <source-id> <runner-pid> <runner-identity> <ready-file
 
 # Start a runner outside the watcher cycle that noticed it was missing. The
 # public start boundary establishes its own process group before claiming.
-detach_runner() {  # <source-id>
+detach_runner() {  # <source-id>; prints the runner's pid
   isolate_runner detach "$1"
+}
+
+# A runner reconcile detached that exits before it claims has refused its source,
+# and its stderr reaches nobody. Reconcile announces that itself when it sees the runner
+# gone inside its confirm window. A runner still starting when the window ends
+# is left unsettled there, so it announces its own refusal here, under the same
+# once-per-episode marker. The claim replaces this trap.
+report_unclaimed_exit() {  # <source-id>
+  local status=$? identity
+  [ "$status" -ne 0 ] || return 0
+  identity=$(fm_pr_file_identity "$(source_file "$1")" 2>/dev/null) || identity=
+  report_launch_failure "$1" "$identity" || true
 }
 
 # Announce a source whose claim no unattended caller may displace, once per
@@ -1605,9 +1629,10 @@ report_stranded_source() {  # <source-id> <claim-token> <why-and-recovery>
 #
 # A launch that never proves it took the claim - a runner that died before
 # claiming on unreadable argv, a missing adapter binary or a guard that refused
-# to start, or one merely too slow under load - is relaunched every supervision
-# cycle and reported `failed=` to a stdout that cycle discards: armed in
-# appearance, a dead drop in fact, which is the incident with a different cause.
+# to start - is relaunched every supervision cycle and reported `failed=` to a
+# stdout that cycle discards: armed in appearance, a dead drop in fact, which is
+# the incident with a different cause. A runner that outlived the window calls
+# this itself from report_unclaimed_exit.
 # Confirmation observes only that no claim and no launch stamp appeared inside
 # the window, so this says exactly that and no more about why. An episode is
 # keyed by the registration identity the launch ran under and ends when a later
@@ -1629,7 +1654,7 @@ report_launch_failure() {  # <source-id> <registration-identity>
   nonce="$RANDOM$RANDOM"
   announce_source_once "$(launch_failed_file "$id")" "$episode" \
     "procevent:$id:launch-failed:$episode-$nonce" \
-    "check: process-event source $id is registered but its launch did not prove it took the source's claim within FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS, so nothing is confirmed to be collecting from it; reconcile reports that as failed= and keeps launching it every supervision cycle. If it stays that way, check the source command and the adapter binary the registration names, and run an attached bin/fm-procevent.sh start $id to reproduce a refusal on its stderr - the detached launch discards it, and a hand-run reconcile only counts it as failed=. A later cycle that finds the source owned ends this episode on its own, so a runner that was merely slow to claim needs nothing from you." \
+    "check: process-event source $id is registered but its runner exited before proving it took the source's claim, so nothing is collecting from it; reconcile keeps launching it every supervision cycle. If it stays that way, check the source command and the adapter binary the registration names, and run an attached bin/fm-procevent.sh start $id to reproduce a refusal on its stderr - the detached launch discards it. A later cycle that finds the source owned ends this episode on its own." \
     "$episode $nonce"
 }
 
@@ -1670,7 +1695,7 @@ stranded_leaderless_detail() {  # <source-id>
 
 cmd_reconcile() {
   local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
-  local launch_identity launch_stamp launch_mark unconfirmed entry
+  local launch_identity launch_stamp launch_mark runner_pid unconfirmed entry
   local -a launched=()
   # Rejected before anything is launched, and by name. A window this command
   # cannot use makes every launch unconfirmable, so validating it later would
@@ -1769,8 +1794,8 @@ cmd_reconcile() {
             launch_mark=$(cat -- "$launch_stamp" 2>/dev/null || true)
           fi
           fm_procevent_source_lock_release "$id"
-          detach_runner "$id"
-          launched+=("$id"$'\t'"$launch_identity"$'\t'"$launch_mark")
+          runner_pid=$(FM_PROCEVENT_ANNOUNCE_UNCLAIMED=1 detach_runner "$id") || runner_pid=
+          launched+=("$id"$'\t'"$launch_identity"$'\t'"$launch_mark"$'\t'"$runner_pid")
           continue
         elif [ "$claim_state" -eq 4 ]; then
           owner=$FM_PROCEVENT_CLAIM_HOME
@@ -1807,14 +1832,16 @@ cmd_reconcile() {
   fi
   if [ "${#launched[@]}" -gt 0 ]; then
     unconfirmed=$(confirm_launched_runners "${launched[@]}") \
-      || unconfirmed=$(printf '%s\n' "${launched[@]}")
+      || unconfirmed=$(printf 'failed\t%s\n' "${launched[@]}")
     for entry in "${launched[@]}"; do
       id=${entry%%$'\t'*}
       launch_identity=${entry#*$'\t'}
       launch_identity=${launch_identity%%$'\t'*}
-      if launch_entry_listed "$entry" "$unconfirmed"; then
+      if launch_entry_listed "failed"$'\t'"$entry" "$unconfirmed"; then
         failed=$((failed + 1))
         report_launch_failure "$id" "$launch_identity" || true
+      elif launch_entry_listed "pending"$'\t'"$entry" "$unconfirmed"; then
+        uncertain=$((uncertain + 1))
       else
         started=$((started + 1))
         rm -f -- "$(launch_failed_file "$id")"
@@ -1835,7 +1862,10 @@ launch_entry_listed() {  # <entry> <newline-separated entries>
 }
 
 # Bounded confirmation that every runner just detached actually took its
-# source's claim, printing every launch entry that did not, one per line.
+# source's claim. Prints `failed<TAB><entry>` for a launch whose runner is gone
+# with no evidence it claimed, and `pending<TAB><entry>` for one whose runner is
+# still alive and unclaimed when the window ends; a confirmed launch prints
+# nothing.
 #
 # detach_runner is fire-and-forget and discards the child's stderr, so before
 # this every failure inside _start - a refused claim above all - was still
@@ -1850,15 +1880,17 @@ launch_entry_listed() {  # <entry> <newline-separated entries>
 # stamp after claiming and before running the source command and nothing removes
 # it on the way out - only registration replacement does, which also changes the
 # snapshotted identity this reads under. A runner that dies BEFORE claiming
-# reaches neither, and that is the case this confirmation exists to catch; a
-# runner merely slow to claim looks the same inside the window, which is why
-# the failure this reports is "not proved within the window" and nothing more.
+# reaches neither, and that is the case this confirmation exists to catch. A
+# runner merely slow to claim reaches neither inside the window either, and on
+# Git Bash a healthy one measured about 20 s from detach to claim, so the
+# runner's own liveness is what tells the two apart: it is read before the two
+# signals, so a runner seen gone with neither signal never claimed.
 #
 # Every launch shares ONE window rather than taking a window each, so a whole
 # fleet of failing sources costs a watcher cycle the same bounded wait as one.
-confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><launch-stamp-before>...
-  local deadline window entry id rest identity before state stamp mark
-  local -a pending=("$@") remaining=()
+confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><launch-stamp-before><TAB><runner-pid>...
+  local deadline window entry id rest identity before pid alive state stamp mark
+  local -a pending=("$@") remaining=() gone=()
   window=$(fm_procevent_launch_confirm_seconds) || return 1
   # A zero-padded window is a valid value to its validator, which reads base 10;
   # reading it as octal here would silently shorten the window or abort this
@@ -1875,7 +1907,11 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
       id=${entry%%$'\t'*}
       rest=${entry#*$'\t'}
       identity=${rest%%$'\t'*}
-      before=${rest#*$'\t'}
+      rest=${rest#*$'\t'}
+      before=${rest%%$'\t'*}
+      pid=${rest#*$'\t'}
+      alive=0
+      [ -n "$pid" ] && fm_pid_alive "$pid" && alive=1
       state=1
       if fm_procevent_source_lock_try_acquire "$id"; then
         fm_procevent_claim_state_locked "$id"
@@ -1893,14 +1929,19 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
       if [ -n "$mark" ] && [ "$mark" != "$before" ]; then
         continue
       fi
-      remaining+=("$entry")
+      if [ "$alive" -eq 1 ]; then
+        remaining+=("$entry")
+      else
+        gone+=("$entry")
+      fi
     done
     pending=("${remaining[@]+"${remaining[@]}"}")
     [ "${#pending[@]}" -gt 0 ] || break
     [ "$SECONDS" -lt "$deadline" ] || break
     sleep 0.05
   done
-  [ "${#pending[@]}" -eq 0 ] || printf '%s\n' "${pending[@]}"
+  [ "${#gone[@]}" -eq 0 ] || printf 'failed\t%s\n' "${gone[@]}"
+  [ "${#pending[@]}" -eq 0 ] || printf 'pending\t%s\n' "${pending[@]}"
 }
 
 # 0 when this registration generation holds a live claim, 3 when another
@@ -1963,7 +2004,7 @@ cmd_ensure_listening() {
       return 0
     fi
     if [ "$started_once" -eq 0 ] && generation_can_launch "$id"; then
-      detach_runner "$id"
+      detach_runner "$id" >/dev/null
       started_once=1
     fi
     [ "$SECONDS" -lt "$deadline" ] || break
