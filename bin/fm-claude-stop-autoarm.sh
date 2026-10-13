@@ -42,8 +42,9 @@
 #     kills arm and watcher together, and the hook TERMs the arm with itself.
 #     A native Windows primary cannot signal that group and leaves the hook
 #     running when it exits, so the hook also watches the harness it serves:
-#     once that session has ended it TERMs its arm and never arms, retries,
-#     starts a successor, or rewakes again (outcome session-ended).
+#     once that session has ended it TERMs its arm and any handling successor
+#     it started, and never arms, retries, starts a successor, or rewakes
+#     again (outcome session-ended).
 #     HUP, TERM, and INT are translated through the ordinary durable failure
 #     handoff instead of leaving the generation frozen at arming. Claude does
 #     not deliver the exit 2 of a hook it terminated at the configured timeout
@@ -390,7 +391,9 @@ run_arm() {  # <output file, or empty for none>
 # handling turn instead of the home waiting uncovered for the next Stop. The
 # successor receives the closed arm's pid as FM_WATCH_PREDECESSOR_ARM_PID; it
 # must outlive this hook's exit, so it is detached three ways: nohup, stdio
-# away from the hook's pipes, and its own process group. Its one status line
+# away from the hook's pipes, and its own process group. It must not outlive
+# the session, so a session guard detached the same way TERMs it once the
+# session has ended, and the arm stops the watcher it owns. Its one status line
 # is awaited within the arm's own confirmation budget plus slack. Sets
 # SUCCESSOR_FAILURE to the banner line for an unconfirmed successor.
 SUCCESSOR_FAILURE=
@@ -407,6 +410,7 @@ start_handling_successor() {  # <closed-arm-pid>
   FM_WATCH_PREDECESSOR_ARM_PID=$1 FM_GUARD_GRACE="$GRACE" \
     nohup "$SCRIPT_DIR/fm-watch-arm.sh" >"$out" 2>&1 </dev/null &
   pid=$!
+  (trap '' HUP; stop_arm_when_session_ends "$pid") >/dev/null 2>&1 </dev/null &
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
   deadline=$(( $(date +%s) + budget + 2 ))
   while :; do
