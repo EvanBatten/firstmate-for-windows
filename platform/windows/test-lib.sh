@@ -23,6 +23,12 @@ fm_test_ps_start_time_readable() {
   return 1
 }
 
+# chmod changes nothing on a noacl drive, so no case can loosen a mode.
+fm_test_chmod_loosens() {
+  printf 'skip: %s: chmod cannot loosen a mode on a noacl drive\n' "$1"
+  return 1
+}
+
 # Git for Windows ships no C compiler, so the fake Cursor is a copy of bash.exe,
 # which MSYS names by its own file. Bash execs the last command of a -c script in
 # place of itself unless an EXIT trap is set, which would drop the Cursor parent,

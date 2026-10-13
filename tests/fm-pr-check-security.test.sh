@@ -1175,6 +1175,10 @@ test_live_artifact_single_link_and_privacy_validation() {
   fm_custom_check_snapshot_cleanup
   [ -e "$alias" ] || fail "custom-check hard-link refusal removed the external alias"
 
+  if ! fm_test_chmod_loosens private-custom-check-source; then
+    pass "live poll and custom-check artifacts require single-link files"
+    return 0
+  fi
   dir=$(make_case private-custom-check-source)
   state="$dir/home/state"
   printf '#!/usr/bin/env bash\nprintf "custom-ready\\n"\n' > "$state/custom.check.sh"
@@ -3226,6 +3230,10 @@ test_device_rerecord_refuses_tampered_artifacts() {
     # /usr/bin/stat directly, so no PATH fake can stand in there.
     if [ "$mutation" = foreign-device ] && [ "$(uname)" = Darwin ]; then
       exercised="$exercised (foreign-device not exercisable on Darwin)"
+      continue
+    fi
+    if [ "$mutation" = wrong-mode ] && ! fm_test_chmod_loosens device-rerecord-wrong-mode; then
+      exercised="$exercised (wrong-mode not exercisable here)"
       continue
     fi
     exercised="$exercised $mutation"
