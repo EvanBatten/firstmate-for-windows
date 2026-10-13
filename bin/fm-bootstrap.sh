@@ -1395,11 +1395,19 @@ detect_local_tools() {
   # where its memoised verdict is reused later.
   local probes slot tasks_axi_line=
   probes=$(mktemp -d "${TMPDIR:-/tmp}/fm-bootstrap-probes.XXXXXX" 2>/dev/null) || probes=
-  probe_slot "$probes" treehouse probe_treehouse_lease
-  probe_slot "$probes" no-mistakes probe_tool_floor no-mistakes "$NO_MISTAKES_MIN"
-  probe_slot "$probes" gh-axi probe_tool_floor gh-axi "$GH_AXI_MIN"
-  probe_slot "$probes" lavish-axi probe_lavish_axi
-  probe_slot "$probes" quota-axi probe_quota_axi
+  if [ -n "$probes" ]; then
+    probe_treehouse_lease > "$probes/treehouse" &
+    probe_tool_floor no-mistakes "$NO_MISTAKES_MIN" > "$probes/no-mistakes" &
+    probe_tool_floor gh-axi "$GH_AXI_MIN" > "$probes/gh-axi" &
+    probe_lavish_axi > "$probes/lavish-axi" &
+    probe_quota_axi > "$probes/quota-axi" &
+  else
+    probe_treehouse_lease
+    probe_tool_floor no-mistakes "$NO_MISTAKES_MIN"
+    probe_tool_floor gh-axi "$GH_AXI_MIN"
+    probe_lavish_axi
+    probe_quota_axi
+  fi
   if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
     tasks_axi_line="MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
   fi
@@ -1411,18 +1419,6 @@ detect_local_tools() {
     rm -rf "$probes"
   fi
   [ -z "$tasks_axi_line" ] || printf '%s\n' "$tasks_axi_line"
-}
-
-# Runs one probe in the background into <dir>/<tool>, or in place when there
-# is no directory to collect it in.
-probe_slot() {  # <dir> <tool> <command...>
-  local dir=$1 tool=$2
-  shift 2
-  if [ -n "$dir" ]; then
-    "$@" > "$dir/$tool" &
-  else
-    "$@"
-  fi
 }
 
 # The treehouse lease-support upgrade check is only relevant when the resolved
