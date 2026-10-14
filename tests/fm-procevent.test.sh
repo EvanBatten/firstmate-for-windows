@@ -2535,11 +2535,10 @@ assert_contains "$launch_out" "failed=1" "a still-hung runner stopped being repo
 launch_release "$HG_LOG"
 for _ in $(seq 1 300); do fm_pid_alive "$hg_pid" || break; sleep 0.1; done
 ! fm_pid_alive "$hg_pid" || fail "fixture invalid: the hung runner survived its release"
-launch_reconcile "$HHG" "$DEAD_LAUNCH_WINDOW" "${hg_env[@]}"
+launch_reconcile "$HHG" 1 "${hg_env[@]}"
 assert_contains "$launch_out" "failed=1" "a hung runner that then exited was not reported failed: $launch_out"
 [ "$(launch_failed_wake_count "$HHG" hang-src)" = 1 ] \
   || fail "a hung runner that then exited was announced again in the same episode"
-launch_reconcile "$HHG" 1 "${hg_env[@]}"
 wait_for_lines "$HG_LOG" 2 600 || fail "reconcile did not start a fresh runner once the hung one was gone"
 launch_release "$HG_LOG"
 pe "$HHG" retire hang-src >/dev/null 2>&1 || true
@@ -2578,8 +2577,8 @@ for sf_n in 1 2 3 4; do
   sf_pids+=("$!")
 done
 for sf_p in "${sf_pids[@]}"; do wait "$sf_p" || true; done
-assert_contains "$(cat "$TMP_ROOT"/slow-bad-out.*)" "failed=1" \
-  "no concurrent cycle reported the dead launch: $(cat "$TMP_ROOT"/slow-bad-out.*)"
+grep -q 'failed=[1-9]' "$TMP_ROOT"/slow-bad-out.* \
+  || fail "no concurrent cycle reported the dead launch: $(cat "$TMP_ROOT"/slow-bad-out.*)"
 case "$(cat "$TMP_ROOT"/slow-bad-out.*)" in
   *started=[1-9]*) fail "a concurrent cycle counted a launch that cannot start as started" ;;
 esac
@@ -2644,6 +2643,34 @@ assert_contains "$ru_out" "started=1" "a source whose old launch pid was reused 
 : > "$RU_TRIGGER"
 pe "$HRU" retire reused-src >/dev/null 2>&1 || true
 pass "a launch record whose pid now names another process does not block the source"
+
+# --- a runner stopped after it claimed is relaunched without a failure wake ---
+# `ensure-listening` (what Lavish `arm` runs) leaves its launch on record, and a
+# relisten runner stopped after claiming but before its first poll leaves its
+# claim and no launch stamp. Removing the stamp below reproduces that state
+# with an ordinary source. The stale claim still names the runner, so it did
+# claim: the next reconcile must start a replacement at once and say nothing
+# failed, or a rebuilt Lavish board sits with no listener.
+HSC="$TMP_ROOT/hsc"; new_home "$HSC"
+SC_TRIGGER="$TMP_ROOT/stopped-claim-trigger"
+pe_register "$HSC" lavish stopped-src -- "$BLOCKER" "$SC_TRIGGER" "stopped" >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=90 pe "$HSC" ensure-listening stopped-src \
+  || fail "fixture invalid: the stopped-claim source never started listening"
+sc_pid=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/stopped-src.claim")
+kill -KILL -- "-$sc_pid" 2>/dev/null || kill -KILL "$sc_pid" 2>/dev/null || true
+for _ in $(seq 1 300); do fm_pid_alive "$sc_pid" || break; sleep 0.1; done
+! fm_pid_alive "$sc_pid" || fail "fixture invalid: the stopped runner survived"
+rm -f -- "$HSC/state/procevent/stopped-src."*.last-launch
+sc_rc=0
+sc_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HSC" reconcile) || sc_rc=$?
+assert_contains "$sc_out" "started=1" "a runner stopped after claiming was not replaced: $sc_out"
+assert_contains "$sc_out" "failed=0" "a runner stopped after claiming was reported failed: $sc_out"
+[ "$sc_rc" -eq 0 ] || fail "reconcile exited $sc_rc replacing a runner stopped after claiming: $sc_out"
+[ "$(launch_failed_wake_count "$HSC" stopped-src)" = 0 ] \
+  || fail "a runner that had claimed was announced as failed: $(launch_failed_wake_payloads "$HSC" stopped-src)"
+: > "$SC_TRIGGER"
+pe "$HSC" retire stopped-src >/dev/null 2>&1 || true
+pass "a runner stopped after it claimed is replaced at once without a failure wake"
 
 # --- a launch that finished before the first poll is still confirmed ---------
 # Confirmation has to read evidence a finished runner leaves behind. A runner
