@@ -58,6 +58,9 @@ COMPLETION_FILE="$STATE/.session-start-complete"
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 # shellcheck source=bin/fm-hook-host-lib.sh
 . "$SCRIPT_DIR/fm-hook-host-lib.sh"
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
+fm_timing_mark sessionstart-run begin
 
 SOURCE=
 PI_PREREQUISITE=0
@@ -144,4 +147,5 @@ case "$SOURCE" in
     "$SCRIPT_DIR/fm-session-start.sh" --source "$SOURCE" || true
     ;;
 esac
+fm_timing_mark sessionstart-run end
 exit 0

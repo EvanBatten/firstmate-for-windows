@@ -1389,27 +1389,63 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
-  # The treehouse lease-support upgrade check is only relevant when the resolved
-  # backend actually requires treehouse (every backend except orca, which owns its
-  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
+  # Each version probe below starts a node or native process, about half a
+  # second apiece on Windows, and none depends on another, so they run at once
+  # and their lines print in this fixed order. tasks-axi stays in this shell,
+  # where its memoised verdict is reused later.
+  local probes slot tasks_axi_line=
+  probes=$(mktemp -d "${TMPDIR:-/tmp}/fm-bootstrap-probes.XXXXXX" 2>/dev/null) || probes=
+  if [ -n "$probes" ]; then
+    probe_treehouse_lease > "$probes/treehouse" &
+    probe_tool_floor no-mistakes "$NO_MISTAKES_MIN" > "$probes/no-mistakes" &
+    probe_tool_floor gh-axi "$GH_AXI_MIN" > "$probes/gh-axi" &
+    probe_lavish_axi > "$probes/lavish-axi" &
+    probe_quota_axi > "$probes/quota-axi" &
+  else
+    probe_treehouse_lease
+    probe_tool_floor no-mistakes "$NO_MISTAKES_MIN"
+    probe_tool_floor gh-axi "$GH_AXI_MIN"
+    probe_lavish_axi
+    probe_quota_axi
+  fi
+  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
+    tasks_axi_line="MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
+  fi
+  if [ -n "$probes" ]; then
+    wait
+    for slot in treehouse no-mistakes gh-axi lavish-axi quota-axi; do
+      cat "$probes/$slot" 2>/dev/null
+    done
+    rm -rf "$probes"
+  fi
+  [ -z "$tasks_axi_line" ] || printf '%s\n' "$tasks_axi_line"
+}
+
+# The treehouse lease-support upgrade check is only relevant when the resolved
+# backend actually requires treehouse (every backend except orca, which owns its
+# own worktrees); an orca home must not be told to upgrade a provider it never uses.
+probe_treehouse_lease() {
   if fm_backend_list_contains "$TOOLS" treehouse \
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
     echo "MISSING: treehouse (install: $(install_cmd treehouse))"
   fi
-  if command -v no-mistakes >/dev/null 2>&1 && ! tool_version_at_least no-mistakes "$NO_MISTAKES_MIN"; then
-    echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
+}
+
+probe_tool_floor() {  # <tool> <min-version>
+  if command -v "$1" >/dev/null 2>&1 && ! tool_version_at_least "$1" "$2"; then
+    echo "MISSING: $1 (install: $(install_cmd "$1"))"
   fi
-  if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
-    echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
-  fi
+}
+
+probe_lavish_axi() {
   if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
     echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
   fi
+}
+
+probe_quota_axi() {
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "MISSING: quota-axi (install: $(install_cmd quota-axi))"
-  fi
-  if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
-    echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
   fi
 }
 
@@ -1528,13 +1564,16 @@ detect_home_summary_publication() {
 # The stamp variable is named for the library rather than `start` on purpose:
 # fleet_sync and others assign plain names like `start` without `local`, and
 # bash's dynamic scoping would let them overwrite a stamp held by a caller.
+fm_timing_mark bootstrap begin
 local_phase && detect_local_tools
+fm_timing_mark bootstrap local-tools
 if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
   gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
+fm_timing_mark bootstrap local-config
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
@@ -1576,6 +1615,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup
+  fm_timing_mark bootstrap x-mode
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \
@@ -1583,6 +1623,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-contributions.sh" arm --if-owned >/dev/null \
       || echo "MISSING: contribution observation could not be armed; coverage is unconfirmed"
   fi
+  fm_timing_mark bootstrap contributions
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"
@@ -1590,4 +1631,5 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   fi
 fi
 local_phase && secondmate_handoff_detect
+fm_timing_mark bootstrap handoff-detect
 exit 0

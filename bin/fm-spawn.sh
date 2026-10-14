@@ -470,6 +470,9 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-timing-lib.sh
+. "$SCRIPT_DIR/fm-timing-lib.sh"
+fm_timing_mark spawn begin
 
 usage() {
   # The whole leading comment block, ending at the first line that is not a
@@ -631,12 +634,14 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+fm_timing_mark spawn libs
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
+fm_timing_mark spawn guard
 KIND=ship
 KIND_SET=0
 HARNESS_ARG=
@@ -885,6 +890,8 @@ else
     }
   fi
 fi
+
+fm_timing_mark spawn args
 
 spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
@@ -1383,6 +1390,7 @@ spawn_abort_cleanup() {
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
+fm_timing_mark spawn functions
 
 # One bounded lock per live Herdr session/socket, shared across all homes.
 # <session> is required so secondmate and primary spawns serialize against the
@@ -1674,6 +1682,7 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
 fi
 SPAWN_TASK_LOCK_HELD=1
 PROJ=
+fm_timing_mark spawn task-lock
 ARG3=
 FIRSTMATE_HOME=
 RAW_LAUNCH=0
@@ -1854,6 +1863,7 @@ else
   ARG3=${POS[2]:-}
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+fm_timing_mark spawn project
 
 shell_quote() {
   local rest=$1 quoted=
@@ -3007,6 +3017,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ];
   fi
   SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
 fi
+fm_timing_mark spawn harness
 [ -f "$BRIEF" ] || {
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1
@@ -3060,6 +3071,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   fi
 fi
 
+fm_timing_mark spawn brief-content
 delivery_rigor_rank() { # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
   case "$1" in
   no-mistakes) echo 3 ;;
@@ -3167,6 +3179,7 @@ if [ "$KIND" = ship ]; then
   fi
 fi
 
+fm_timing_mark spawn delivery-agreement
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 
@@ -3476,6 +3489,7 @@ herdr_projection_existing_meta_allows_flat() { # <meta>
 # transitionable BEFORE any endpoint, worktree, or record exists: a refusal here
 # costs nothing to unwind, while the same refusal after publication would strand
 # a live pane. The authoritative mutation still runs under the meta lock below.
+fm_timing_mark spawn worktree-fns
 BACKLOG_TRANSITION=0
 BACKLOG_ROW_STATE=
 if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
@@ -3517,6 +3531,7 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
   exit 1
 fi
 
+fm_timing_mark spawn brief-backlog
 W="fm-$ID"
 if [ "$RELAUNCH" -eq 1 ]; then
   # A secondmate's home already resolved WT above through the same validation a
@@ -3766,6 +3781,7 @@ else
         fi
       fi
     fi
+    fm_timing_mark spawn herdr-presentation
     if [ "$HERDR_PROJECTED" -ne 1 ]; then
       HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS" "$HERDR_LAUNCHER_RELATIONSHIP") || exit 1
       # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
@@ -3787,6 +3803,7 @@ EOF
       echo "error: herdr did not return a tab/pane id for $W" >&2
       exit 1
     fi
+    fm_timing_mark spawn herdr-task-pane
     T="$HERDR_SES:$HERDR_PANE_ID"
     fm_backend_herdr_session_pin "$HERDR_SES"
     spawn_herdr_presentation_order_lock_release
@@ -3852,6 +3869,7 @@ fi
 # Every other backend addresses its pane/surface by the id already in $T, so default
 # WT_TARGET to $T for them (and for any future backend) - the shared treehouse-get +
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
+fm_timing_mark spawn window
 : "${WT_TARGET:=$T}"
 spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
@@ -4252,6 +4270,7 @@ elif [ "$RELAUNCH" -eq 1 ]; then
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  fm_timing_mark spawn treehouse-sent
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
@@ -4332,6 +4351,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     SPAWN_SLOT_CLAIMED=1
   fi
 fi
+fm_timing_mark spawn treehouse-get
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
@@ -4340,6 +4360,7 @@ fi
 # adoption. This also updates Herdr's restored pane shell before any harness is
 # started, so a later host restart inherits the task worktree rather than the
 # tab's original project directory.
+fm_timing_mark spawn freshen-base
 spawn_enter_recorded_worktree
 spawn_assert_agent_worktree
 
@@ -4401,6 +4422,7 @@ esac
 # this user and writable by nobody else, then tightened, so no other local user
 # can plant or swap a file in it. The staged launch command lives in a sibling
 # directory namespaced by home identity, not in this shared per-id root.
+fm_timing_mark spawn enter-worktree
 TASK_TMP="/tmp/fm-$ID"
 if ! (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
   if [ -L "$TASK_TMP" ] || [ ! -d "$TASK_TMP" ] || [ ! -O "$TASK_TMP" ] ||
@@ -4821,6 +4843,7 @@ fi
 # chains the previous hooks so they still run. Real secondmate
 # homes are firstmate clones; a launch whose worktree is not git fails closed
 # rather than shipping a runtime that cannot strip.
+fm_timing_mark spawn harness-hooks
 GIT_HOOKS_DIR="$STATE_REAL/$ID.git-hooks"
 if [ "$KEEP_AI_TRAILERS" = 0 ]; then
   "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh" install "$GIT_HOOKS_DIR" "$WT" || {
@@ -5041,6 +5064,7 @@ fi
 # The summary must name this task before the spawn returns, but nothing below
 # reads it, so it is computed alongside launch delivery and the backlog commit,
 # and spawn_abort_cleanup waits for it on every exit.
+fm_timing_mark spawn meta
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort </dev/null &
 SPAWN_HOME_SUMMARY_PID=$!
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
@@ -5360,6 +5384,7 @@ if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
   echo "error: could not stage the launch command at $LAUNCH_FILE" >&2
   exit 1
 fi
+fm_timing_mark spawn launch-staged
 sleep 0.3
 SPAWN_LAUNCH_SENT=1
 if [ "$BACKEND" = herdr ]; then
@@ -5386,6 +5411,7 @@ else
   fi
   spawn_send_key "$T" Enter
 fi
+fm_timing_mark spawn launch-sent
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"
@@ -5523,6 +5549,7 @@ fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
 
+fm_timing_mark spawn backlog-commit
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
 SPAWN_ACCOUNT=
@@ -5531,3 +5558,4 @@ SPAWN_ACCOUNT=
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT$SPAWN_ACCOUNT"
+fm_timing_mark spawn spawned

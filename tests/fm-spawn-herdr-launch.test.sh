@@ -68,7 +68,7 @@ lift() {  # <awk-range-program>
 write_launch_step() {  # <file>
   {
     printf '%s\n' 'set -eu' 'trap '\''printf "abort-cleanup=%s\n" "$HERDR_PROJECTION_ABORT_CLEANUP"'\'' EXIT'
-    printf '%s\n' '. "$ROOT/bin/fm-backend.sh"' 'fm_backend_source herdr'
+    printf '%s\n' '. "$ROOT/bin/fm-backend.sh"' 'fm_backend_source herdr' '. "$ROOT/bin/fm-timing-lib.sh"'
     lift '/^shell_quote\(\) \{/,/^\}/'
     lift '/^spawn_send_text_line\(\) \{/,/^\}/'
     lift '/^spawn_send_literal\(\) \{/,/^\}/'
