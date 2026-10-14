@@ -55,6 +55,14 @@ if [ "${got%$'\n'helper=*}" = "$want" ]; then ok "ptree.exe gives the pids and p
 else not_ok "ptree.exe rows differ from pwsh: ${got%$'\n'helper=*} vs $want"; fi
 
 exe=$T/helper/fm-platform-windows/ptree.exe
+# services.exe's parent is a process whose creation time a user cannot read, so
+# nothing proves it older than its child and its pid may be a reused one.
+services=$(tasklist //FI "IMAGENAME eq services.exe" //FO CSV //NH | tr -d '\r' | cut -d'"' -f4)
+want_unread=$(pwsh_rows "$services")
+got_unread=$("$exe" "$services" | cut -f1,2 | tr -d '\r')
+if [ -n "$services" ] && [ "$got_unread" = "$want_unread" ]; then ok "ptree.exe stops where a parent's age cannot be read, as pwsh does"
+else not_ok "ptree.exe followed a parent of unknown age from services.exe $services: $got_unread vs $want_unread"; fi
+
 touch -d '2001-01-01' "$exe"
 rm -f "$T"/helper/fm-platform-windows/chain-*
 got=$(chain_rows "$T/helper" FM_WIN_CSC="$T/no-such-csc.exe")
