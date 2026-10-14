@@ -19,7 +19,8 @@
 #   - `pane get` never fills foreground_cwd here. The pane's cwd comes from
 #     the OSC 9;9 that pane-rc.sh prints at each prompt, in drive spelling.
 #   - `pane process-info` names only the pane's own shell as its foreground,
-#     whatever runs in it, so what a pane runs is read from /proc instead.
+#     whatever runs in it, so what a pane runs is read from /proc instead, and
+#     no pane's shell is ever proven idle.
 #
 # A herdr found on PATH that is not a native program is a test fixture's fake,
 # and gets every call byte for byte as upstream made it.
@@ -214,4 +215,19 @@ fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
     esac
   done
   if [ "$others" -eq 0 ]; then printf 'shell'; else printf 'other'; fi
+}
+
+# Upstream proves a pane holds one idle shell before it closes the pane by
+# killing that shell. Herdr here names the shell bash.exe by its Win32 pid, so
+# no sample can pass, and the proof paid its whole settle window before every
+# caller fell back to a plain close. It answers not-proven at once instead,
+# which is the answer upstream reaches anyway.
+_fm_win_herdr_keep_upstream fm_backend_herdr_pane_idle_shell_pid
+fm_backend_herdr_pane_idle_shell_pid() {  # <session> <pane-id>
+  [ "$PATH" = "${_FM_WIN_HERDR_PATH_KEY-}" ] || _fm_win_herdr_resolve
+  if [ "$_FM_WIN_HERDR_NATIVE" != 1 ]; then
+    _fm_win_upstream_fm_backend_herdr_pane_idle_shell_pid "$@"
+    return $?
+  fi
+  return 1
 }
