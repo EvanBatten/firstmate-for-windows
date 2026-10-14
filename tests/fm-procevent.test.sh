@@ -295,7 +295,7 @@ pe "$HSYM" reconcile >/dev/null
 wait_for "$FM_PROCEVENT_CLAIM_ROOT/symlinked-src.claim" \
   || fail "a home reached through a symlinked ancestor never claimed its source"
 : > "$SYM_TRIGGER"
-wait_for "$HSYM/state/.wake-queue" \
+wait_for "$HSYM/state/.wake-queue" 600 \
   || fail "a home reached through a symlinked ancestor published no event"
 assert_contains "$(wake_payloads "$HSYM")" "procevent lavish symlinked-src 1" \
   "the symlinked-ancestor home publishes the committed result sequence"
@@ -2322,7 +2322,9 @@ ep_reconcile "started=1" 0 "a repaired source did not confirm"
 assert_contains "$ep_out" "failed=0" "a repaired source was still reported failed: $ep_out"
 [ "$(launch_failed_wake_count "$HEP" episode-src)" = 1 ] \
   || fail "a confirmed launch produced a launch-failed wake: $ep_out"
-for _ in $(seq 1 100); do
+# Capturing, publishing and releasing after the claim takes a runner on Git
+# Bash well past ten seconds, so the wait allows a minute.
+for _ in $(seq 1 600); do
   [ -e "$FM_PROCEVENT_CLAIM_ROOT/episode-src.claim" ] || break
   sleep 0.1
 done

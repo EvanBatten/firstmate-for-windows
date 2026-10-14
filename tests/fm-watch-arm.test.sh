@@ -1115,6 +1115,8 @@ test_downtime_marker_does_not_follow_symlink() {
 # drives the real arm entry and asserts the arm STOPPED - non-zero exit, no
 # started line, no lock holder, no beacon - and that its refusal names the
 # variable, so a validator that merely returned false somewhere would not pass.
+# The watcher reaches its check about 15 s after launch on Git Bash, so the arm
+# waits a minute for it rather than reporting a missing beacon first.
 arm_refuses_an_unusable_value() {  # <case> <variable> <value> <accepted-range>
   local dir home state fakebin armout status lock_pid
   dir=$(make_case "$1")
@@ -1126,10 +1128,10 @@ arm_refuses_an_unusable_value() {  # <case> <variable> <value> <accepted-range>
 
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    FM_ARM_CONFIRM_TIMEOUT=5 env "$2=$3" \
+    FM_ARM_CONFIRM_TIMEOUT=60 env "$2=$3" \
     "$WATCH_ARM" > "$armout" 2>&1 &
   ARM_PID=$!
-  wait_for_exit "$ARM_PID" 200
+  wait_for_exit "$ARM_PID" 900
   status=$?
   [ "$status" -ne 124 ] || fail "arm with an unusable $2 never stopped: $(cat "$armout")"
   [ "$status" -ne 0 ] || fail "arm reported success with an unusable $2: $(cat "$armout")"
