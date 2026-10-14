@@ -88,7 +88,7 @@
 #            once per failure episode - keyed by the registration identity it
 #            ran under and ended by a later cycle finding that source owned -
 #            because the supervision cycle discards the `failed=` count. A
-#            source whose runner is gone is launched again on the next cycle.
+#            source whose runner is gone is launched again in the same cycle.
 #            A source whose claim nothing may automatically displace is not
 #            relaunched at all; it is counted `uncertain` and announced once per
 #            stranded claim generation as a durable `check` wake, because the
@@ -1649,12 +1649,15 @@ launch_runner_alive() {  # <runner-pid> <source-id>
 }
 
 # Settle the previous launch of a source that has no live claim, holding its
-# lock. 0 when a new launch may go ahead: there was no launch, it claimed (its
-# launch stamp moved), or its runner is gone under a registration since
-# replaced. 1 when its runner is still starting inside the hang bound. 2 when
-# its runner is gone without having claimed, which is announced. 3 when its
-# runner has been starting for longer than the hang bound, which is announced
-# and leaves that runner as the source's only one.
+# lock after fm_procevent_claim_state_locked. 0 when a new launch may go ahead:
+# there was no launch, it claimed, or its runner is gone under a registration
+# since replaced. A runner claimed when its launch stamp moved or when the stale
+# claim it left names it; a relisten runner stopped before its first poll leaves
+# only the claim. 1 when its runner is still starting inside the hang bound. 2
+# when its runner is gone without having claimed, which is announced, and a new
+# launch may still go ahead. 3 when its runner has been starting for longer than
+# the hang bound, which is announced and leaves that runner as the source's only
+# one.
 settle_launch_locked() {  # <source-id> <hang-seconds> <current-registration-identity>
   local id=$1 hang=$2 current=$3 stamp mark now
   launch_record_load "$id" || return 0
@@ -1663,7 +1666,8 @@ settle_launch_locked() {  # <source-id> <hang-seconds> <current-registration-ide
     && stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$LAUNCH_IDENTITY"); then
     mark=$(cat -- "$stamp" 2>/dev/null || true)
   fi
-  if [ -n "$mark" ] && [ "$mark" != "$LAUNCH_BEFORE" ]; then
+  if { [ -n "$mark" ] && [ "$mark" != "$LAUNCH_BEFORE" ]; } \
+    || { [ -e "$(fm_procevent_claim_path "$id")" ] && [ "$FM_PROCEVENT_CLAIM_PID" = "$LAUNCH_PID" ]; }; then
     launch_record_clear "$id" "$LAUNCH_PID"
     rm -f -- "$(launch_failed_file "$id")"
     return 0
@@ -1876,15 +1880,18 @@ cmd_reconcile() {
           launch_identity=$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null) || launch_identity=
           settled=0
           settle_launch_locked "$id" "$hang" "$launch_identity" || settled=$?
-          if [ "$settled" -ne 0 ]; then
-            if [ "$settled" -eq 1 ]; then
-              uncertain=$((uncertain + 1))
-            else
-              failed=$((failed + 1))
-            fi
-            fm_procevent_source_lock_release "$id"
-            continue
-          fi
+          case "$settled" in
+            1|3)
+              if [ "$settled" -eq 1 ]; then
+                uncertain=$((uncertain + 1))
+              else
+                failed=$((failed + 1))
+              fi
+              fm_procevent_source_lock_release "$id"
+              continue
+              ;;
+            2) failed=$((failed + 1)) ;;
+          esac
           if ! cleanup_extension_registration_invocations_locked "$id"; then
             uncertain=$((uncertain + 1))
             fm_procevent_source_lock_release "$id"

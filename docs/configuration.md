@@ -2177,8 +2177,9 @@ The generation's first launch is immediate, later launches share its monotonic p
 Every launch leaves a durable record naming its runner, and while that runner is alive no later cycle starts another runner for the same source, because a second one would only queue behind the first.
 Each later cycle settles that record before it considers a new launch.
 
-- A runner that claimed, or whose launch stamp moved, settles as started, and the source is handled as usual.
-- A runner that is gone without either is reported as `failed=` and a non-zero exit, and the next cycle launches the source again.
+- A runner that claimed settles as started, and the source is handled as usual.
+  A moved launch stamp proves the claim, and so does the stale claim a runner leaves when it is stopped before its first poll.
+- A runner that is gone without having claimed is reported as `failed=` and a non-zero exit, and the same cycle launches the source again.
 - A runner still alive is counted as `uncertain=` until it has been starting for longer than `FM_PROCEVENT_LAUNCH_HANG_SECONDS` (default 120, range 1..3600), measured from its launch.
   After that it is reported as `failed=` on every cycle and announced once.
   Reconcile still starts no other runner for the source while that runner lives, so stop it to let the next cycle start a fresh one.
