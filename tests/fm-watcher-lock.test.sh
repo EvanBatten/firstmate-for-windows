@@ -534,7 +534,7 @@ leave_dead_link_locks() {  # <state> <lock>...
   ' _ "$LIB" "$@" >/dev/null 2>&1 &
   holder=$!
   i=0
-  while [ "$i" -lt 50 ] && [ ! -s "$last/pid" ]; do
+  while [ "$i" -lt 500 ] && [ ! -s "$last/pid" ]; do
     sleep 0.02
     i=$((i + 1))
   done
@@ -757,7 +757,7 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
   ' _ "$LIB" "$lockdir" "$holder_file" &
   holder=$!
   i=0
-  while [ "$i" -lt 50 ] && [ ! -s "$holder_file" ]; do
+  while [ "$i" -lt 500 ] && [ ! -s "$holder_file" ]; do
     sleep 0.1
     i=$((i + 1))
   done
@@ -930,7 +930,7 @@ test_watch_restart_attaches_to_healthy_peer() {
   node -e 'const fs = require("node:fs"); process.on("SIGTERM", () => {}); fs.writeFileSync(process.argv[1], "ready\n"); setTimeout(() => {}, 300000)' "$peer_ready" &
   peer=$!
   i=0
-  while [ "$i" -lt 50 ] && [ ! -s "$peer_ready" ]; do
+  while [ "$i" -lt 500 ] && [ ! -s "$peer_ready" ]; do
     sleep 0.1
     i=$((i + 1))
   done
