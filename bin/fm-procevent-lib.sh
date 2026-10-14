@@ -233,6 +233,24 @@ fm_procevent_launch_confirm_seconds() {
   printf '%s\n' "$value"
 }
 
+# How long a runner reconcile started may stay alive without taking its
+# source's claim before reconcile calls it hung. A healthy runner on Git Bash
+# measured about 20 s from detach to claim, and the watcher's next cycle comes
+# sooner than that, so liveness alone cannot tell a slow runner from a stuck
+# one; only how long it has been starting can.
+FM_PROCEVENT_LAUNCH_HANG_DEFAULT_SECONDS=120
+FM_PROCEVENT_LAUNCH_HANG_MIN_SECONDS=1
+FM_PROCEVENT_LAUNCH_HANG_MAX_SECONDS=3600
+
+fm_procevent_launch_hang_seconds() {
+  local value=${FM_PROCEVENT_LAUNCH_HANG_SECONDS-}
+  [ -n "$value" ] || value=$FM_PROCEVENT_LAUNCH_HANG_DEFAULT_SECONDS
+  case "$value" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$((10#$value))" -ge "$FM_PROCEVENT_LAUNCH_HANG_MIN_SECONDS" ] || return 1
+  [ "$((10#$value))" -le "$FM_PROCEVENT_LAUNCH_HANG_MAX_SECONDS" ] || return 1
+  printf '%s\n' "$((10#$value))"
+}
+
 # The one place the launch-pacing stamp's name is constructed. Every writer,
 # pruner and reader goes through here so the naming rule is stated once.
 fm_procevent_launch_floor_stamp_path() {  # <state-root> <source-id> <registration-identity>

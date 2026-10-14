@@ -2168,8 +2168,22 @@ The generation's first launch is immediate, later launches share its monotonic p
 - A launch whose runner is gone with neither signal is reported as `failed=` and a non-zero exit, and one whose runner is still alive when the window ends is reported as `uncertain=`, because a runner still starting has not failed.
 - Both signals are durable evidence a runner claimed: ownership is the only evidence a runner still blocked on its source ever shows, and the stamp - written after the claim and before the source command runs, and removed only by registration replacement - covers a runner that claimed, ran and exited between two polls.
 - A healthy launch on a fast host confirms on the first poll, and the window only bounds a launch that has not yet proved itself; on Git Bash a healthy runner can take about 20 seconds to claim.
-- A runner still starting when the window ends announces its own failure if it then exits before claiming, so a slow host still hears about a source that cannot start, and a launch that proves itself on a later cycle closes its failure episode without a retraction wake.
+- A launch whose detach produced no runner at all is reported as `failed=` at once.
+- A launch that proves itself on a later cycle closes its failure episode without a retraction wake.
 - All of a cycle's launches share one window, so a home full of sources that cannot start costs the same bounded wait as one.
+
+**Settle launches across cycles**
+
+Every launch leaves a durable record naming its runner, and while that runner is alive no later cycle starts another runner for the same source, because a second one would only queue behind the first.
+Each later cycle settles that record before it considers a new launch.
+
+- A runner that claimed, or whose launch stamp moved, settles as started, and the source is handled as usual.
+- A runner that is gone without either is reported as `failed=` and a non-zero exit, and the next cycle launches the source again.
+- A runner still alive is counted as `uncertain=` until it has been starting for longer than `FM_PROCEVENT_LAUNCH_HANG_SECONDS` (default 120, range 1..3600), measured from its launch.
+  After that it is reported as `failed=` on every cycle and announced once.
+  Reconcile still starts no other runner for the source while that runner lives, so stop it to let the next cycle start a fresh one.
+- The default sits several times above the roughly 20 seconds a healthy runner took to claim on Git Bash, because a bound a healthy start can cross reports a healthy source as failed.
+  The bound counts time the host spends asleep, so a runner that was starting when the host went to sleep can be reported once after the host wakes.
 
 **Keep confirmation below the watcher interval**
 
@@ -2186,8 +2200,9 @@ For that reason, `reconcile` also publishes a durable `check` wake once per fail
 Later cycles stay silent for that episode until a launch confirms.
 A later fresh failure gets a fresh key, because the watcher never re-surfaces a key it has already surfaced.
 
-- The announcement changes nothing about the launch: `reconcile` keeps relaunching the source every cycle exactly as before, and nothing is retried differently, throttled, or recovered from that signal.
-- The wake reports only the observed failure: the runner exited before it proved that it took the claim.
+- The announcement changes nothing about the launch: `reconcile` settles and relaunches the source exactly as described above, and nothing is retried differently, throttled, or recovered from that signal.
+- The wake reports only the observed failure: the runner exited before it proved that it took the claim, the runner (named by pid) has been starting for longer than the hang bound, or no runner started at all.
+- Two cycles that settle the same failure at once, such as the watcher's and a hand-run `reconcile`, still announce it once.
 - If the failure persists, inspect the source command and adapter binary named in the registration.
   The wake names both, along with the attached `bin/fm-procevent.sh start <source-id>` command that reproduces the refusal on stderr.
   The detached launch discards that output.
@@ -2199,7 +2214,8 @@ A later fresh failure gets a fresh key, because the watcher never re-surfaces a 
 **Reject unusable settings**
 
 A value this command cannot use is refused by name before anything is launched, the same way `FM_PROCEVENT_LAUNCH_FLOOR_SECONDS` and `FM_PROCEVENT_MAX_OUTPUT_BYTES` are refused, so a mistyped window can never present as a fleet of sources that cannot start.
-`bin/fm-watch.sh` validates the same value when it arms and refuses to arm on an unusable one, naming the variable and the range: under a running watcher that refusal would otherwise repeat on every cycle into a discarded stdout and leave the whole home disarmed while presenting as supervised, whereas a watcher that will not arm is loud through the liveness guard.
+The confirm window and the hang bound are both checked this way.
+`bin/fm-watch.sh` validates the same values when it arms and refuses to arm on an unusable one, naming the variable and the range: under a running watcher that refusal would otherwise repeat on every cycle into a discarded stdout and leave the whole home disarmed while presenting as supervised, whereas a watcher that will not arm is loud through the liveness guard.
 
 **Limit captured output**
 
