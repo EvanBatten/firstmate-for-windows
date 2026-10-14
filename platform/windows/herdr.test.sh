@@ -107,6 +107,15 @@ fm_backend_herdr_send_text_line "$target" "$(printf '%q' "$T/agentbin/claude.exe
 expect_eq "a pane running a harness-named process reads as an agent pane" agent "$(process_state_until agent)"
 fm_backend_herdr_send_key "$target" C-c
 expect_eq "the pane reads shell-only again once that process exits" shell "$(process_state_until shell)"
+: > "$T/idle-calls"
+idle=$(
+  eval "_counted_$(declare -f fm_backend_herdr_cli)"
+  fm_backend_herdr_cli() { printf x >> "$T/idle-calls"; _counted_fm_backend_herdr_cli "$@"; }
+  FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=2 fm_backend_herdr_pane_idle_shell_pid "$S" "$pane" >/dev/null
+  echo "rc=$?"
+)
+expect_eq "an idle pane's shell is never proven idle here, and the proof asks herdr nothing" \
+  "rc=1 calls=0" "$idle calls=$(wc -c < "$T/idle-calls" | tr -d ' ')"
 
 fm_backend_herdr_send_literal "$target" /exit
 for ((i = 0; i < 50; i++)); do
