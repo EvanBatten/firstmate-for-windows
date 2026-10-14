@@ -1,8 +1,9 @@
 // ptree.exe <win32-pid>: the Win32 parent chain of a process, one
 // "pid<TAB>parent-pid<TAB>image-path" row per hop, up to 16 hops, the same rows
 // proc.sh would otherwise ask pwsh's Get-Process for. One ToolHelp snapshot
-// answers every hop. A parent created after its child is a reused pid, not the
-// parent, so the chain stops there with parent 0, as Get-Process's Parent does.
+// answers every hop. A parent is only trusted when it provably started before
+// its child, because a newer process or one whose start time cannot be read may
+// hold a reused pid, so the chain stops there with parent 0, as Get-Process does.
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -66,7 +67,7 @@ static class PTree {
         up = 0;
       } else {
         long mine = Created(pid), theirs = Created(up);
-        if (mine >= 0 && theirs >= 0 && theirs > mine) up = 0;
+        if (mine < 0 || theirs < 0 || theirs > mine) up = 0;
       }
       rows.Append(pid).Append('\t').Append(up).Append('\t').Append(ImagePath(pid, name[pid])).Append('\n');
       if (up == 0) break;
