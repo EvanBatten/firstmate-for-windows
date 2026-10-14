@@ -97,9 +97,9 @@
 #                          payload names what clears it
 #   check: process-event source failed to start: <keys>
 #                          a registered process-to-event source was launched by
-#                          reconcile and did not prove it took the claim within
-#                          the confirm window, so nothing is confirmed to be
-#                          collecting for it and every cycle will relaunch it
+#                          reconcile and its runner exited before proving it
+#                          took the claim, so nothing is collecting for it and
+#                          every cycle will relaunch it
 #                          (bin/fm-procevent.sh reconcile queues it once per
 #                          failure episode, and a later cycle that finds the
 #                          source owned closes that episode); the queued
@@ -2370,12 +2370,13 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
 
-# FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS is validated here, at arm time, and an
-# unusable value refuses to arm. This is deliberately NOT symmetry with the
-# tunables above, which this watcher only defaults and never validates. The
-# reason is specific: every supervision cycle runs `fm-procevent.sh reconcile`
-# with its output and exit status discarded, and reconcile refuses an unusable
-# window by name before it launches anything. Under this watcher that refusal
+# FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS and FM_PROCEVENT_LAUNCH_HANG_SECONDS are
+# validated here, at arm time, and an unusable value refuses to arm. This is
+# deliberately NOT symmetry with the tunables above, which this watcher only
+# defaults and never validates. The reason is specific: every supervision
+# cycle runs `fm-procevent.sh reconcile` with its output and exit status
+# discarded, and reconcile refuses an unusable
+# value by name before it launches anything. Under this watcher that refusal
 # is invisible - every cycle would exit early, no source would ever start, and
 # the whole home would sit disarmed while presenting as supervised. A watcher
 # that refuses to arm is loud through an existing, independent, proven path:
@@ -2385,6 +2386,10 @@ fi
 # child's stdout and recognises `watcher: FAILED` as the typed failure line.
 if ! fm_procevent_launch_confirm_seconds >/dev/null; then
   echo "watcher: FAILED - FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS must be whole seconds from $FM_PROCEVENT_LAUNCH_CONFIRM_MIN_SECONDS to $FM_PROCEVENT_LAUNCH_CONFIRM_MAX_SECONDS"
+  exit 1
+fi
+if ! fm_procevent_launch_hang_seconds >/dev/null; then
+  echo "watcher: FAILED - FM_PROCEVENT_LAUNCH_HANG_SECONDS must be whole seconds from $FM_PROCEVENT_LAUNCH_HANG_MIN_SECONDS to $FM_PROCEVENT_LAUNCH_HANG_MAX_SECONDS"
   exit 1
 fi
 

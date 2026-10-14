@@ -58,6 +58,10 @@ bin/fm-procevent.sh	live	identity=$(fm_pid_identity "$$" 2>/dev/null) || return 
 bin/fm-procevent.sh	recorded	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 2
 bin/fm-procevent.sh	recorded	kill -0 -"$pid" 2>/dev/null || return 0
 bin/fm-procevent.sh	recorded	kill -0 -"$pid" 2>/dev/null || return 0
+bin/fm-procevent.sh	recorded	[ -n "$pid" ] && fm_pid_alive "$pid" && alive=1
+bin/fm-procevent.sh	recorded	[ -r "/proc/$1/cmdline" ] || return 0
+bin/fm-procevent.sh	recorded	cmdline=$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null) || return 0
+bin/fm-procevent.sh	recorded	fm_pid_alive "$1" || return 1
 bin/fm-remote-doctor.sh	recorded	{ remote_job_existing_state && case "$pid" in ''|*[!0-9]*) false ;; *) kill -0 "$pid" 2>/dev/null ;; esac; }; then
 bin/fm-remote-entrypoint.sh	live	ENTRYPOINT_PPID=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)
 bin/fm-remote-entrypoint.sh	live	current=$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ' || true)

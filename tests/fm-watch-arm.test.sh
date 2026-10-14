@@ -1106,17 +1106,20 @@ test_downtime_marker_does_not_follow_symlink() {
   pass "watch-arm: downtime marker publication does not follow symlinks"
 }
 
-# The watcher validates FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS when it arms and
-# refuses to arm on an unusable value. Under a running watcher that value would
+# The watcher validates FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS and
+# FM_PROCEVENT_LAUNCH_HANG_SECONDS when it arms and refuses to arm on an
+# unusable value of either. Under a running watcher that value would
 # make every per-cycle reconcile refuse by name into a discarded stdout, so no
 # source would ever start and the home would sit disarmed while presenting as
 # supervised; refusing to arm is loud through the liveness guard instead. This
 # drives the real arm entry and asserts the arm STOPPED - non-zero exit, no
 # started line, no lock holder, no beacon - and that its refusal names the
 # variable, so a validator that merely returned false somewhere would not pass.
-test_arm_refuses_an_unusable_launch_confirm_window() {
+# The watcher reaches its check about 15 s after launch on Git Bash, so the arm
+# waits a minute for it rather than reporting a missing beacon first.
+arm_refuses_an_unusable_value() {  # <case> <variable> <value> <accepted-range>
   local dir home state fakebin armout status lock_pid
-  dir=$(make_case confirm-window-refusal)
+  dir=$(make_case "$1")
   home="$dir/home"
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -1125,18 +1128,18 @@ test_arm_refuses_an_unusable_launch_confirm_window() {
 
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
     FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    FM_ARM_CONFIRM_TIMEOUT=5 FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=5s \
+    FM_ARM_CONFIRM_TIMEOUT=60 env "$2=$3" \
     "$WATCH_ARM" > "$armout" 2>&1 &
   ARM_PID=$!
-  wait_for_exit "$ARM_PID" 200
+  wait_for_exit "$ARM_PID" 900
   status=$?
-  [ "$status" -ne 124 ] || fail "arm with an unusable confirm window never stopped: $(cat "$armout")"
-  [ "$status" -ne 0 ] || fail "arm reported success with an unusable confirm window: $(cat "$armout")"
+  [ "$status" -ne 124 ] || fail "arm with an unusable $2 never stopped: $(cat "$armout")"
+  [ "$status" -ne 0 ] || fail "arm reported success with an unusable $2: $(cat "$armout")"
   grep -q '^watcher: FAILED' "$armout" \
     || fail "arm did not report the typed failure line: $(cat "$armout")"
-  grep -qF 'FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS' "$armout" \
+  grep -qF "$2" "$armout" \
     || fail "the refusal did not name the variable: $(cat "$armout")"
-  grep -qF "must be whole seconds from 1 to 600" "$armout" \
+  grep -qF "must be whole seconds from $4" "$armout" \
     || fail "the refusal did not name the accepted range: $(cat "$armout")"
   ! grep -q '^watcher: started' "$armout" \
     || fail "arm reported a started watcher despite the refusal: $(cat "$armout")"
@@ -1145,7 +1148,15 @@ test_arm_refuses_an_unusable_launch_confirm_window() {
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   [ -z "$lock_pid" ] || ! kill -0 "$lock_pid" 2>/dev/null \
     || fail "a refused watcher is still running as pid $lock_pid"
-  pass "watch-arm: an unusable launch confirm window refuses to arm by name"
+  pass "watch-arm: an unusable $2 refuses to arm by name"
+}
+
+test_arm_refuses_an_unusable_launch_confirm_window() {
+  arm_refuses_an_unusable_value confirm-window-refusal FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS 5s "1 to 600"
+}
+
+test_arm_refuses_an_unusable_launch_hang_bound() {
+  arm_refuses_an_unusable_value hang-bound-refusal FM_PROCEVENT_LAUNCH_HANG_SECONDS 0 "1 to 3600"
 }
 
 # A watcher armed from a disposable no-mistakes validation checkout outlives the
@@ -1332,6 +1343,7 @@ test_reaper_stops_a_tracked_watcher() {
 test_attached_arm_reports_the_delivered_wake
 test_attached_arm_reports_the_delivered_wake_after_drain
 test_arm_refuses_an_unusable_launch_confirm_window
+test_arm_refuses_an_unusable_launch_hang_bound
 test_arm_refuses_a_disposable_validation_checkout
 test_watcher_exits_when_its_state_directory_is_removed
 test_watcher_exits_when_its_state_directory_is_removed_mid_lock_wait
