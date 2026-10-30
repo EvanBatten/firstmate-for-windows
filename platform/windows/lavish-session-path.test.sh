@@ -4,6 +4,9 @@
 # under Git Bash answers /tmp/... for the same file. Against the real cygpath,
 # the Lavish adapter must still find that session from either POSIX spelling
 # of the artifact and read the server's listing, which quotes the Windows path.
+# lavish-axi records the on-disk case while realpath keeps the case the artifact
+# was named with, so a mixed-case artifact spelling and a differently-cased
+# stored spelling must find the session too.
 # The store is a fixture under a temp dir: the real ~/.lavish-axi/state.json is
 # never read, no server is started, and no source is armed.
 set -u
@@ -12,6 +15,7 @@ cd "$ROOT" || exit 1
 T=$(mktemp -d /tmp/fm-win-lavish.XXXXXX)
 trap 'rm -rf "$T"' EXIT
 DRIVE_T=$(cygpath -u -- "$(cygpath -m -- "$LOCALAPPDATA")")/Temp/${T#/tmp/}
+MIXED_T=$(printf '%s' "$DRIVE_T" | tr '[:lower:]' '[:upper:]')
 
 fails=0
 ok() { printf 'ok - %s\n' "$1"; }
@@ -61,6 +65,12 @@ expect_eq "a session stored as $WIN is found from the /tmp spelling" \
   "wopr3.example:4387|rc=0" "$(poll "$T/board.html")"
 expect_eq "the same session is found from the drive spelling" \
   "wopr3.example:4387|rc=0" "$(poll "$DRIVE_T/board.html")"
+expect_eq "the same session is found from the mixed-case spelling $MIXED_T/board.html" \
+  "wopr3.example:4387|rc=0" "$(poll "$MIXED_T/board.html")"
+
+write_store "$(printf '%s' "$WIN" | tr '[:upper:]' '[:lower:]')"
+expect_eq "a session stored under a differently-cased spelling is found from the /tmp spelling" \
+  "wopr3.example:4387|rc=0" "$(poll "$T/board.html")"
 
 write_store "$OTHER_WIN"
 expect_eq "a session for another file is no session for this board" \
@@ -86,6 +96,8 @@ expect_eq "the quoted Windows listing row shows the /tmp-spelled board open" \
   open "$(listing_open "$LISTING" "$T/board.html")"
 expect_eq "the same row shows the drive-spelled board open" \
   open "$(listing_open "$LISTING" "$DRIVE_T/board.html")"
+expect_eq "the same row shows the mixed-case-spelled board open" \
+  open "$(listing_open "$LISTING" "$MIXED_T/board.html")"
 expect_eq "the row says nothing about another file" \
   not-open "$(listing_open "$LISTING" "$T/other.html")"
 expect_eq "a closed row is not open" \

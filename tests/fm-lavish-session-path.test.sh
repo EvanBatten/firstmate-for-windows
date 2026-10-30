@@ -2,14 +2,16 @@
 # Behavior tests for bin/fm-lavish-session-lib.sh through the Lavish adapter:
 # a Lavish session whose stored `file` is the Windows spelling of the artifact
 # is still found from the POSIX spelling realpath answers, two spellings of one
-# artifact still resolve to that one session, a different file resolves to
-# none, and a host without cygpath keeps the exact comparison it always had.
+# artifact still resolve to that one session, a differently-cased stored
+# spelling still resolves, a different file resolves to none, and a host
+# without cygpath keeps the exact comparison it always had.
 #
-# cygpath is faked so the Windows path translation runs on every host: -m folds
-# a POSIX path under the Z:/posix drive and a Windows path to forward slashes,
-# the two answers the real one gives for the two spellings of one file. The
-# fixture state.json stands in for Lavish's own store; the real one is never
-# read, no Lavish server is started, and `arm` is never run.
+# cygpath is faked so the Windows path translation runs on every host.
+# Its -lm folds a POSIX path under the Z:/posix drive and a Windows path to
+# forward slashes, the two answers the real one gives for the two spellings of
+# one file, and leaves case alone as the real one does for a path not on disk.
+# The fixture state.json stands in for Lavish's own store; the real one is
+# never read, no Lavish server is started, and `arm` is never run.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -34,9 +36,9 @@ OTHER_REAL=$(perl -MCwd=realpath -e 'print realpath($ARGV[0])' "$OTHER")
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 cat > "$FAKEBIN/cygpath" <<'SH'
 #!/usr/bin/env bash
-# Stands in for Git Bash's cygpath -m: a Windows spelling comes back with
+# Stands in for Git Bash's cygpath -lm: a Windows spelling comes back with
 # forward slashes, a POSIX spelling comes back under the Z:/posix drive.
-[ "${1-}" = -m ] || exit 2
+[ "${1-}" = -lm ] || exit 2
 shift
 [ "${1-}" != -- ] || shift
 case "$1" in
@@ -54,9 +56,15 @@ chmod +x "$FAKEBIN/cygpath" "$FAKEBIN/lavish-axi"
 
 # The Windows spelling the fake cygpath pairs with a POSIX realpath: the
 # Z:\posix drive prefix with backslashes, and a lowercase drive letter so the
-# case-insensitive drive comparison is exercised rather than assumed.
+# case-insensitive comparison is exercised rather than assumed.
 windows_spelling() {  # <posix-path>
   printf 'z:\\posix%s\n' "$1" | tr / '\134'
+}
+
+# The same Windows spelling in upper case, as lavish-axi may record it when
+# the on-disk case differs from the case the artifact was armed under.
+upper_windows_spelling() {  # <posix-path>
+  windows_spelling "$1" | tr '[:lower:]' '[:upper:]'
 }
 
 # Writes the fixture store with the given sessions, each `<file>|<url>`.
@@ -98,6 +106,13 @@ for spelling in "$TMP_ROOT/./board.html" "$TMP_ROOT/sub/../board.html"; do
     "the spelling $spelling resolves the same single session"
 done
 pass "two spellings of one artifact still yield the one saved session"
+
+write_store "$(upper_windows_spelling "$REAL")|$URL"
+poll "$ART"
+[ "$POLL_RC" -eq 0 ] || fail "poll failed against a differently-cased Windows-spelled session: $out"
+assert_equals "$(cat "$SEEN")" 'board.example:24387' \
+  "host and port come from the session stored under the differently-cased spelling"
+pass "a differently-cased stored spelling of the artifact still yields the one session"
 
 write_store "$(windows_spelling "$OTHER_REAL")|$URL"
 poll "$ART"
@@ -147,6 +162,7 @@ fi
 
 # lavish-axi's own listing is the other Lavish-written spelling the fleet
 # reads: TOON-quoted with doubled backslashes on Windows, bare on POSIX.
+# The quoted row is in upper case so the listing match folds case too.
 listing_open() {  # <listing> <real>
   PATH="$FAKEBIN:$PATH" bash -c '
     set -u
@@ -154,7 +170,7 @@ listing_open() {  # <listing> <real>
     fm_lavish_listing_open "$2" "$3"
   ' _ "$ROOT" "$1" "$2"
 }
-quoted=$(windows_spelling "$REAL")
+quoted=$(upper_windows_spelling "$REAL")
 quoted=${quoted//\\/\\\\}
 LISTING=$(printf 'sessions[2]{file,status,url,pending_prompts,listener}:\n  "%s",open,"%s",0,agent-listener\n  %s,open,"%s",0,none\n' \
   "$quoted" "$URL" "$OTHER_REAL" "$URL")

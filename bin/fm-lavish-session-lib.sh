@@ -12,15 +12,20 @@
 # two never matches, so every Lavish source on Windows failed to find its
 # session and no listener could start.
 #
-# Identity here is therefore physical, not a spelling. fm_lavish_path_key
-# folds any spelling of one file to one comparison key: on a host with cygpath
-# (Git Bash, MSYS2, Cygwin) both sides go through `cygpath -m`, which answers
-# C:/Users/... for a POSIX, drive-POSIX, or Windows spelling alike, and the
-# drive letter is lowercased because Windows compares it case-insensitively.
+# Identity here is therefore physical, not a spelling.
+# fm_lavish_path_key folds any spelling of one file to one comparison key.
+# On a host with cygpath (Git Bash, MSYS2, Cygwin) both sides go through
+# `cygpath -lm`, which answers C:/Users/... for a POSIX, drive-POSIX, or
+# Windows spelling alike and expands an 8.3 short name such as LONGUS~1 to
+# the long name lavish-axi records.
+# The whole key is then lowercased, because Windows compares every path
+# component case-insensitively while lavish-axi records the on-disk case
+# and Perl realpath keeps whatever case the caller typed.
 # Elsewhere the key is the spelling itself, so POSIX hosts keep the exact
-# comparison they always had. Every read of a Lavish-written path - the `file`
-# field of each session in state.json and the first column of lavish-axi's
-# session listing - compares keys through this one helper, never spellings.
+# comparison they always had.
+# Every read of a Lavish-written path - the `file` field of each session in
+# state.json and the first column of lavish-axi's session listing - compares
+# keys through this one helper, never spellings.
 #
 # File names cross from Perl to bash hex-encoded so a tab, a quote, or an odd
 # byte in a path cannot split or truncate a row. Only the row format is
@@ -34,15 +39,10 @@ fm_lavish_realpath() {  # <path>
 
 # Comparison key for one spelling of a path; see the header for the rule.
 fm_lavish_path_key() {  # <path>
-  local key=$1 drive
+  local key=$1
   if command -v cygpath >/dev/null 2>&1; then
-    key=$(cygpath -m -- "$1" 2>/dev/null) || key=$1
-    case "$key" in
-      [A-Za-z]:*)
-        drive=$(printf '%s' "${key:0:1}" | tr '[:upper:]' '[:lower:]')
-        key=$drive${key:1}
-        ;;
-    esac
+    key=$(cygpath -lm -- "$1" 2>/dev/null) || key=$1
+    key=$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')
   fi
   printf '%s\n' "$key"
 }
