@@ -92,6 +92,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 
+# shellcheck source=bin/fm-lavish-session-lib.sh
+. "$SCRIPT_DIR/fm-lavish-session-lib.sh"
+
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SCHEMA=fm-bearings-board.v1
@@ -213,27 +216,20 @@ validate_payload() {  # <data.json>
 # board open before the build may bind or arm its source.
 
 board_realpath() {  # <board>
-  perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$1" 2>/dev/null
+  fm_lavish_realpath "$1"
 }
 
 lavish_status_field() {  # <lavish-axi output>
   printf '%s\n' "$1" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1 | tr -d '"'
 }
 
-# The server's own listing, keyed on the canonical artifact path. Rows are
-# `<file>,<status>,"<url>",<pending>`, and only a live session is listed `open`.
+# The server's own listing, keyed on the canonical artifact path, and only a
+# live session is listed `open`. Lavish spells the listed file its own way, so
+# bin/fm-lavish-session-lib.sh owns the row format and the identity match.
 lavish_session_listed_open() {  # <canonical-board-path>
   local listing
   listing=$(lavish-axi 2>/dev/null) || return 1
-  printf '%s\n' "$listing" | awk -v path="$1" '
-    { line = $0; sub(/^[[:space:]]+/, "", line) }
-    index(line, path ",") == 1 {
-      rest = substr(line, length(path) + 2)
-      split(rest, field, ",")
-      if (field[1] == "open") { found = 1 }
-    }
-    END { exit found ? 0 : 1 }
-  '
+  fm_lavish_listing_open "$listing" "$1"
 }
 
 lavish_board_live() {  # <establish output> <canonical-board-path>
