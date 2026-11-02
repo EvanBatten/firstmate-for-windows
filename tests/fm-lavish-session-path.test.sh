@@ -37,14 +37,17 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 cat > "$FAKEBIN/cygpath" <<'SH'
 #!/usr/bin/env bash
 # Stands in for Git Bash's cygpath -lm: a Windows spelling comes back with
-# forward slashes, a POSIX spelling comes back under the Z:/posix drive.
+# forward slashes, a POSIX spelling comes back under the Z:/posix drive, one
+# answer per path argument in order.
 [ "${1-}" = -lm ] || exit 2
 shift
 [ "${1-}" != -- ] || shift
-case "$1" in
-  [A-Za-z]:*) printf '%s\n' "$1" | tr '\\' / ;;
-  *) printf 'Z:/posix%s\n' "$1" ;;
-esac
+for path in "$@"; do
+  case "$path" in
+    [A-Za-z]:*) printf '%s\n' "$path" | tr '\\' / ;;
+    *) printf 'Z:/posix%s\n' "$path" ;;
+  esac
+done
 SH
 cat > "$FAKEBIN/lavish-axi" <<'SH'
 #!/usr/bin/env bash

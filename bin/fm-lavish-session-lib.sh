@@ -13,23 +13,23 @@
 # session and no listener could start.
 #
 # Identity here is therefore physical, not a spelling.
-# fm_lavish_path_key folds any spelling of one file to one comparison key.
-# On a host with cygpath (Git Bash, MSYS2, Cygwin) both sides go through
+# The Perl sub fm_lavish_keys folds any spelling of one file to one comparison
+# key.
+# On a host with cygpath (Git Bash, MSYS2, Cygwin) every path goes through
 # `cygpath -lm`, which answers C:/Users/... for a POSIX, drive-POSIX, or
 # Windows spelling alike and expands an 8.3 short name such as LONGUS~1 to
 # the long name lavish-axi records.
-# The whole key is then lowercased, because Windows compares every path
-# component case-insensitively while lavish-axi records the on-disk case
-# and Perl realpath keeps whatever case the caller typed.
+# Each key is then lowercased, because Windows compares every path component
+# case-insensitively while lavish-axi records the on-disk case and Perl
+# realpath keeps whatever case the caller typed.
 # Elsewhere the key is the spelling itself, so POSIX hosts keep the exact
 # comparison they always had.
 # Every read of a Lavish-written path - the `file` field of each session in
 # state.json and the first column of lavish-axi's session listing - compares
 # keys through this one helper, never spellings.
-#
-# File names cross from Perl to bash hex-encoded so a tab, a quote, or an odd
-# byte in a path cannot split or truncate a row. Only the row format is
-# shared; the two readers below parse Lavish's two different surfaces.
+# Each reader folds the artifact and every row it read in one Perl process
+# and one cygpath call, so a lookup costs the same few processes however many
+# sessions Lavish has saved.
 
 # Physical path of <path>, or exit 1 when it cannot be resolved. The same
 # realpath Lavish itself uses to key a session.
@@ -37,20 +37,30 @@ fm_lavish_realpath() {  # <path>
   perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$1" 2>/dev/null
 }
 
-# Comparison key for one spelling of a path; see the header for the rule.
-fm_lavish_path_key() {  # <path>
-  local key=$1
-  if command -v cygpath >/dev/null 2>&1; then
-    key=$(cygpath -lm -- "$1" 2>/dev/null) || key=$1
-    key=$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')
-  fi
-  printf '%s\n' "$key"
+# Perl source defining fm_lavish_keys(@paths), the comparison key of each path
+# in order; see the header for the rule. A host where cygpath cannot be started
+# keeps the spellings; one whose cygpath answers short keeps them lowercased.
+# shellcheck disable=SC2016
+FM_LAVISH_KEYS_PL='
+sub fm_lavish_keys {
+  my @paths = @_;
+  my ($cygpath, $started);
+  local $/ = "\n";
+  open my $stderr, ">&", \*STDERR or return @paths;
+  open STDERR, ">", "/dev/null";
+  {
+    no warnings "exec";
+    $started = open $cygpath, "-|", "cygpath", "-lm", "--", @paths;
+  }
+  open STDERR, ">&", $stderr;
+  return @paths unless $started;
+  my @keys = <$cygpath>;
+  close $cygpath;
+  chomp @keys;
+  @keys = @paths unless @keys == @paths;
+  return map { lc } @keys;
 }
-
-# Decodes the lowercase hex byte string the readers below emit for a file name.
-fm_lavish_hex_decode() {  # <hex>
-  printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')"
-}
+'
 
 # Prints "<host>\n<port>" of one saved Lavish session URL, or a one-line reason
 # on stderr with exit 1. The shape is the one lavish-axi writes when it opens a
@@ -75,13 +85,12 @@ fm_lavish_session_url_endpoint() {  # <url>
 # store is Lavish's own record of the boards it opened; nothing here writes it.
 # Session content never reaches stdout or stderr, only the fixed reasons.
 fm_lavish_session_endpoint() {  # <state.json> <artifact>
-  local store=$1 artifact=$2 real key rows hex url file matches=0 found=''
+  local store=$1 artifact=$2 real url
   real=$(fm_lavish_realpath "$artifact") || { printf 'cannot resolve board artifact\n' >&2; return 1; }
-  key=$(fm_lavish_path_key "$real")
-  rows=$(perl -MJSON::PP -MEncode=encode_utf8 -e '
+  url=$(perl -MJSON::PP -MEncode=encode_utf8 -e "$FM_LAVISH_KEYS_PL"'
     use strict;
     use warnings;
-    my ($path) = @ARGV;
+    my ($path, $real) = @ARGV;
     open my $file, "<", $path or die "cannot read Lavish session store\n";
     -f $file or die "Lavish session store is not a regular file\n";
     local $/;
@@ -89,23 +98,19 @@ fm_lavish_session_endpoint() {  # <state.json> <artifact>
     !$@ or die "invalid Lavish session store\n";
     ref($state) eq "HASH" && ref($state->{sessions}) eq "HASH"
       or die "invalid Lavish session store\n";
+    my (@files, @urls);
     for my $session (values %{$state->{sessions}}) {
       next unless ref($session) eq "HASH" && defined($session->{file}) && !ref($session->{file});
       next unless length $session->{file};
-      my $url = defined($session->{url}) && !ref($session->{url}) ? $session->{url} : "";
-      $url = "" if $url =~ /\s/;
-      print unpack("H*", encode_utf8($session->{file})), "\t", $url, "\n";
+      push @files, encode_utf8($session->{file});
+      push @urls, defined($session->{url}) && !ref($session->{url}) ? $session->{url} : "";
     }
-  ' "$store") || return 1
-  while IFS=$'\t' read -r hex url; do
-    [ -n "$hex" ] || continue
-    file=$(fm_lavish_hex_decode "$hex")
-    [ "$(fm_lavish_path_key "$file")" = "$key" ] || continue
-    matches=$((matches + 1))
-    found=$url
-  done <<< "$rows"
-  [ "$matches" -eq 1 ] || { printf 'board must have one saved Lavish session\n' >&2; return 1; }
-  fm_lavish_session_url_endpoint "$found"
+    my ($key, @keys) = fm_lavish_keys($real, @files);
+    my @found = map { $urls[$_] } grep { $keys[$_] eq $key } 0 .. $#keys;
+    @found == 1 or die "board must have one saved Lavish session\n";
+    print $found[0], "\n";
+  ' "$store" "$real") || return 1
+  fm_lavish_session_url_endpoint "$url"
 }
 
 # Exit 0 when lavish-axi's own session listing shows the artifact at the
@@ -114,9 +119,8 @@ fm_lavish_session_endpoint() {  # <state.json> <artifact>
 # bare on POSIX and TOON-quoted on Windows (0.1.92: "C:\\Users\\..."), so a
 # quoted first field is unquoted before its key is compared.
 fm_lavish_listing_open() {  # <listing> <real>
-  local key rows hex status file
-  key=$(fm_lavish_path_key "$2")
-  rows=$(printf '%s\n' "$1" | perl -e '
+  printf '%s\n' "$1" | perl -e "$FM_LAVISH_KEYS_PL"'
+    my (@files, @statuses);
     while (<STDIN>) {
       chomp;
       s/^\s+//;
@@ -132,14 +136,10 @@ fm_lavish_listing_open() {  # <listing> <real>
       s/^,// or next;
       next unless length $file;
       my ($status) = /^([^,]*)/;
-      print unpack("H*", $file), "\t", $status, "\n";
+      push @files, $file;
+      push @statuses, $status;
     }
-  ') || return 1
-  while IFS=$'\t' read -r hex status; do
-    [ -n "$hex" ] || continue
-    file=$(fm_lavish_hex_decode "$hex")
-    [ "$(fm_lavish_path_key "$file")" = "$key" ] || continue
-    [ "$status" = open ] && return 0
-  done <<< "$rows"
-  return 1
+    my ($key, @keys) = fm_lavish_keys($ARGV[0], @files);
+    exit((grep { $keys[$_] eq $key && $statuses[$_] eq "open" } 0 .. $#keys) ? 0 : 1);
+  ' "$2"
 }
