@@ -50,18 +50,25 @@ _fm_win32_rows_load() {
   done <<< "$1"
 }
 
+# Epoch seconds without a fork. EPOCHSECONDS needs bash 5, and Git for Windows
+# still ships bash 4.4 on some installs; the printf time format works from 4.2.
+_fm_win_now() {
+  printf -v _FM_WIN_NOW '%(%s)T' -1
+}
+
 _fm_win32_cache_load() {
   local file born out
   local -a stale=()
   [ -z "${_FM_WIN_CACHE_READ:-}" ] || return 0
   _FM_WIN_CACHE_READ=1
   _fm_win_cache_dir || return 0
+  _fm_win_now
   for file in "$_FM_WIN_CACHE_DIR"/chain-*; do
     born=0 out=''
     { IFS= read -r -d '' out < "$file"; } 2>/dev/null
     born=${out%%$'\n'*}
     case "$born" in ''|*[!0-9]*) continue ;; esac
-    if [ $((EPOCHSECONDS - born)) -gt "$FM_WIN_CHAIN_TTL" ]; then
+    if [ $((_FM_WIN_NOW - born)) -gt "$FM_WIN_CHAIN_TTL" ]; then
       stale+=("$file")
       continue
     fi
@@ -87,8 +94,8 @@ for ($i = 0; $i -lt 16 -and $p; $i++) {
 }' 2>/dev/null) || return 1
   out=${out//$'\r'/}
   [ -n "$out" ] || return 1
-  if _fm_win_cache_dir; then
-    printf '%s\n%s\n' "$EPOCHSECONDS" "$out" > "$_FM_WIN_CACHE_DIR/chain-$root.$$" 2>/dev/null \
+  if _fm_win_cache_dir && _fm_win_now; then
+    printf '%s\n%s\n' "$_FM_WIN_NOW" "$out" > "$_FM_WIN_CACHE_DIR/chain-$root.$$" 2>/dev/null \
       && mv -f "$_FM_WIN_CACHE_DIR/chain-$root.$$" "$_FM_WIN_CACHE_DIR/chain-$root" 2>/dev/null
   fi
   _fm_win32_rows_load "$out"
