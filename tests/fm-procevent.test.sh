@@ -132,6 +132,12 @@ launch_failed_wake_payloads() {  # <home> <source-id>
     "$1/state/.wake-queue"
 }
 
+# Reconcile reports a runner that dies before it claims as soon as it is gone,
+# so the damaged-registration cases give confirmation a window far longer than
+# that death takes, even on Git Bash where it took about 20 s. The window then
+# bounds only a runner that never exits, and none of these cases waits it out.
+DEAD_LAUNCH_WINDOW=300
+
 first_result() {  # <home> <source-id>: print the first captured result, if any
   local g
   for g in "$1/state/procevent-inbox/$2".*.result; do
@@ -289,7 +295,7 @@ pe "$HSYM" reconcile >/dev/null
 wait_for "$FM_PROCEVENT_CLAIM_ROOT/symlinked-src.claim" \
   || fail "a home reached through a symlinked ancestor never claimed its source"
 : > "$SYM_TRIGGER"
-wait_for "$HSYM/state/.wake-queue" \
+wait_for "$HSYM/state/.wake-queue" 600 \
   || fail "a home reached through a symlinked ancestor published no event"
 assert_contains "$(wake_payloads "$HSYM")" "procevent lavish symlinked-src 1" \
   "the symlinked-ancestor home publishes the committed result sequence"
@@ -2271,7 +2277,7 @@ ep_damage() { cat "$TMP_ROOT/episode-bad.source" > "$EP_SOURCE"; }
 ep_repair() { cat "$TMP_ROOT/episode-good.source" > "$EP_SOURCE"; }
 ep_reconcile() {  # <expected-fragment> <expected-exit-nonzero:0|1> <msg>; sets ep_out
   local rc=0
-  ep_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HEP" reconcile) || rc=$?
+  ep_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HEP" reconcile) || rc=$?
   assert_contains "$ep_out" "$1" "$3: $ep_out"
   if [ "$2" -eq 1 ]; then
     [ "$rc" -ne 0 ] || fail "$3 (reconcile exited 0): $ep_out"
@@ -2293,11 +2299,10 @@ ep_episode_prefix=${BASH_REMATCH[1]}
 ep_wake=$(launch_failed_wake_payloads "$HEP" episode-src)
 assert_contains "$ep_wake" "episode-src" \
   "the launch-failed wake does not name the source it is about: $ep_wake"
-# The payload may state only what confirmation observed: no claim proved
-# inside the window. It cannot know whether the runner died or was slow, so it
-# must not assert a cause, must not present `start` as the fix, and must say
-# that a later cycle finding the source owned closes the episode by itself.
-assert_contains "$ep_wake" "did not prove it took the source's claim within FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS" \
+# The payload may state only what was observed: the runner exited before it
+# proved a claim. It must not guess why, must not present `start` as the fix,
+# and must say that a later cycle finding the source owned closes the episode.
+assert_contains "$ep_wake" "its runner exited before proving it took the source's claim" \
   "the launch-failed wake does not state what confirmation observed: $ep_wake"
 assert_contains "$ep_wake" "attached bin/fm-procevent.sh start episode-src to reproduce a refusal" \
   "the launch-failed wake does not say start reproduces rather than fixes: $ep_wake"
@@ -2317,7 +2322,9 @@ ep_reconcile "started=1" 0 "a repaired source did not confirm"
 assert_contains "$ep_out" "failed=0" "a repaired source was still reported failed: $ep_out"
 [ "$(launch_failed_wake_count "$HEP" episode-src)" = 1 ] \
   || fail "a confirmed launch produced a launch-failed wake: $ep_out"
-for _ in $(seq 1 100); do
+# Capturing, publishing and releasing after the claim takes a runner on Git
+# Bash well past ten seconds, so the wait allows a minute.
+for _ in $(seq 1 600); do
   [ -e "$FM_PROCEVENT_CLAIM_ROOT/episode-src.claim" ] || break
   sleep 0.1
 done
@@ -2356,7 +2363,7 @@ if ! { awk '/^argv:$/ { print; exit } { print }' "$LK_SOURCE" > "$LK_SOURCE.tmp"
   && cat "$LK_SOURCE.tmp" > "$LK_SOURCE" && rm -f -- "$LK_SOURCE.tmp"; }; then
   fail "could not damage the long-id registration"
 fi
-lk_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HLK" reconcile) || true
+lk_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HLK" reconcile) || true
 assert_contains "$lk_out" "failed=1" "the long-id launch was not reported failed: $lk_out"
 lk_key=$(launch_failed_wake_keys "$HLK" "$LK_ID")
 [ -n "$lk_key" ] || fail "the long-id launch failure was not announced: $lk_out"
@@ -2387,7 +2394,10 @@ fi
 mv "$UF_SOURCE.tmp" "$UF_SOURCE" || fail "could not damage the unstartable registration"
 chmod 0600 "$UF_SOURCE"
 uf_rc=0
-uf_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=2 pe "$HUF" reconcile) || uf_rc=$?
+uf_began=$SECONDS
+uf_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HUF" reconcile) || uf_rc=$?
+[ $((SECONDS - uf_began)) -lt "$DEAD_LAUNCH_WINDOW" ] \
+  || fail "reconcile waited out its window for a runner that had already exited: $uf_out"
 assert_contains "$uf_out" "started=0" \
   "reconcile counted a runner that never started as a start: $uf_out"
 assert_contains "$uf_out" "failed=1" \
@@ -2397,6 +2407,270 @@ uf_owner=$(pe "$HUF" list | awk '$1 == "unstartable-src" { print $3 }')
 [ "$uf_owner" = none ] || fail "the unstartable source reports an owner: $uf_owner"
 pe "$HUF" retire unstartable-src >/dev/null 2>&1 || true
 pass "reconcile reports a launch it could not confirm instead of counting it as a start"
+
+# --- the launch fixture: runners held, hung or counted before they claim -----
+# Every runner checks its own process group with `ps -o pgid=` before it takes
+# the source lock or its claim, so a fake `ps` there controls the pre-claim
+# path without touching anything after it. Only the runner itself (its group
+# leader runs `_start`) is affected; the owner guard and every other caller get
+# the real `ps`. LAUNCH_LOG records each runner that reached the check, by its
+# pid, so a case can count how many runners a source was given. LAUNCH_GATE
+# holds a runner there while the file exists, standing in for a healthy runner
+# that is slow to claim. LAUNCH_HANG makes a runner wait there for good.
+LAUNCH_REAL_PS=$(command -v ps) || fail "this host has no ps to build the launch fixture on"
+LAUNCH_BIN=$(fm_fakebin "$TMP_ROOT/launch-bin")
+cat > "$LAUNCH_BIN/ps" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = -o ] && [ "\$2" = "pgid=" ] && [ -n "\${FM_PROCEVENT_RUNNER_GROUP:-}" ] \\
+  && [ -n "\${LAUNCH_LOG:-}" ] \\
+  && tr '\\0' ' ' < "/proc/\$FM_PROCEVENT_RUNNER_GROUP/cmdline" 2>/dev/null | grep -q ' _start '; then
+  printf '%s\\n' "\$FM_PROCEVENT_RUNNER_GROUP" >> "\$LAUNCH_LOG"
+  [ -z "\${LAUNCH_HANG:-}" ] || exec sleep 3600
+  while [ -n "\${LAUNCH_GATE:-}" ] && [ -e "\$LAUNCH_GATE" ] && [ "\$SECONDS" -lt 300 ]; do
+    sleep 0.1
+  done
+fi
+exec "$LAUNCH_REAL_PS" "\$@"
+SH
+chmod +x "$LAUNCH_BIN/ps"
+launch_reconcile() {  # <home> <window> [VAR=value...]; sets launch_out and launch_rc
+  local home=$1 window=$2
+  shift 2
+  launch_rc=0
+  launch_out=$(env PATH="$LAUNCH_BIN:$PATH" FM_HOME="$home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS="$window" "$@" \
+    "$ROOT/bin/fm-procevent.sh" reconcile) || launch_rc=$?
+}
+launch_count() { grep -c . "$1" 2>/dev/null || echo 0; }
+launch_release() {  # <launch-log>: stop every runner the fixture is holding
+  local pid
+  while IFS= read -r pid; do
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  done < "$1"
+}
+source_owner() { pe "$1" list | awk -v id="$2" '$1 == id { print $3 }'; }
+
+# --- a launch still on its way to its claim is neither failed nor doubled ----
+# Where every fork is slow (Git Bash on Windows measured about 20 s from
+# detach to claim) a healthy runner is still starting when the confirm window
+# ends, and the watcher's next cycle (FM_POLL, 15 s by default) can come before
+# it claims. That runner is alive, which one that died before claiming is not,
+# so neither cycle has seen it fail, and a second runner for the same source
+# would only queue behind the first and refuse.
+HSL="$TMP_ROOT/hsl"; new_home "$HSL"
+SL_TRIGGER="$TMP_ROOT/slow-launch-trigger"
+SL_LOG="$TMP_ROOT/slow-launch.log"
+SL_GATE="$TMP_ROOT/slow-launch-gate"
+pe_register "$HSL" lavish slow-src -- "$BLOCKER" "$SL_TRIGGER" "slow" >/dev/null
+: > "$SL_GATE"
+sl_env=(LAUNCH_LOG="$SL_LOG" LAUNCH_GATE="$SL_GATE" FM_PROCEVENT_LAUNCH_HANG_SECONDS=600)
+launch_reconcile "$HSL" 1 "${sl_env[@]}"
+assert_contains "$launch_out" "failed=0" \
+  "reconcile reported a launch that was still starting as failed: $launch_out"
+assert_contains "$launch_out" "uncertain=1" \
+  "reconcile did not say it could not settle a launch that was still starting: $launch_out"
+[ "$launch_rc" -eq 0 ] || fail "reconcile exited $launch_rc for a launch that was still starting: $launch_out"
+wait_for_lines "$SL_LOG" 1 600 || fail "fixture invalid: the slow runner never reached its group check"
+launch_reconcile "$HSL" 1 "${sl_env[@]}"
+assert_contains "$launch_out" "failed=0" \
+  "the next cycle reported a launch that was still starting as failed: $launch_out"
+assert_contains "$launch_out" "uncertain=1" \
+  "the next cycle did not say the launch was still unsettled: $launch_out"
+[ "$launch_rc" -eq 0 ] || fail "the next cycle exited $launch_rc for a launch still starting: $launch_out"
+rm -f -- "$SL_GATE"
+for _ in $(seq 1 600); do
+  [ "$(source_owner "$HSL" slow-src)" = live ] && break
+  sleep 0.1
+done
+[ "$(source_owner "$HSL" slow-src)" = live ] || fail "fixture invalid: the slow runner never took its claim"
+[ "$(launch_count "$SL_LOG")" = 1 ] \
+  || fail "a source still being started was given $(launch_count "$SL_LOG") runners"
+launch_reconcile "$HSL" 1 "${sl_env[@]}"
+assert_contains "$launch_out" "failed=0" "a cycle after the slow claim reported a failure: $launch_out"
+[ "$(launch_failed_wake_count "$HSL" slow-src)" = 0 ] \
+  || fail "a launch that went on to claim was announced as failed"
+: > "$SL_TRIGGER"
+pe "$HSL" retire slow-src >/dev/null 2>&1 || true
+pass "a launch still starting across cycles is neither reported failed nor started twice"
+
+# --- a runner that hangs before claiming is announced once ------------------
+# A runner that never claims and never exits looks like a slow one until it
+# has been starting longer than any healthy start does,
+# FM_PROCEVENT_LAUNCH_HANG_SECONDS. Past that bound the source has collected
+# nothing the whole time, so reconcile reports it failed and says so once,
+# naming the runner. It starts no second runner while that one lives, because
+# another would only queue behind it.
+HHG="$TMP_ROOT/hhg"; new_home "$HHG"
+HG_LOG="$TMP_ROOT/hang-launch.log"
+HG_BOUND=90
+pe_register "$HHG" lavish hang-src -- "$BLOCKER" "$TMP_ROOT/hang-trigger" "hang" >/dev/null
+hg_env=(LAUNCH_LOG="$HG_LOG" LAUNCH_HANG=1 "FM_PROCEVENT_LAUNCH_HANG_SECONDS=$HG_BOUND")
+hg_began=$SECONDS
+launch_reconcile "$HHG" 1 "${hg_env[@]}"
+assert_contains "$launch_out" "failed=0" "a runner inside the hang bound was reported failed: $launch_out"
+assert_contains "$launch_out" "uncertain=1" "a runner inside the hang bound was settled: $launch_out"
+wait_for_lines "$HG_LOG" 1 600 || fail "fixture invalid: the hanging runner never reached its group check"
+launch_reconcile "$HHG" 1 "${hg_env[@]}"
+assert_contains "$launch_out" "failed=0" \
+  "a runner inside the hang bound was reported failed on the next cycle: $launch_out"
+[ "$((SECONDS - hg_began))" -lt "$HG_BOUND" ] \
+  || fail "fixture invalid: two cycles took longer than the hang bound"
+while [ "$((SECONDS - hg_began))" -le "$((HG_BOUND + 1))" ]; do sleep 1; done
+launch_reconcile "$HHG" 1 "${hg_env[@]}"
+assert_contains "$launch_out" "failed=1" "a runner past the hang bound was not reported failed: $launch_out"
+[ "$launch_rc" -ne 0 ] || fail "reconcile exited 0 with a hung runner: $launch_out"
+[ "$(launch_failed_wake_count "$HHG" hang-src)" = 1 ] \
+  || fail "a hung runner was announced $(launch_failed_wake_count "$HHG" hang-src) times"
+hg_pid=$(head -1 "$HG_LOG")
+hg_wake=$(launch_failed_wake_payloads "$HHG" hang-src)
+assert_contains "$hg_wake" "its runner (pid $hg_pid) has been starting for over $HG_BOUND s without taking the source's claim" \
+  "the hung-runner wake does not state what was observed: $hg_wake"
+case "$hg_wake" in
+  *exited*) fail "the hung-runner wake says a live runner exited: $hg_wake" ;;
+esac
+launch_reconcile "$HHG" 1 "${hg_env[@]}"
+assert_contains "$launch_out" "failed=1" "a still-hung runner stopped being reported failed: $launch_out"
+[ "$(launch_failed_wake_count "$HHG" hang-src)" = 1 ] || fail "a hung runner was announced again"
+[ "$(launch_count "$HG_LOG")" = 1 ] \
+  || fail "reconcile started $(launch_count "$HG_LOG") runners beside a hung one"
+launch_release "$HG_LOG"
+for _ in $(seq 1 300); do fm_pid_alive "$hg_pid" || break; sleep 0.1; done
+! fm_pid_alive "$hg_pid" || fail "fixture invalid: the hung runner survived its release"
+launch_reconcile "$HHG" 1 "${hg_env[@]}"
+assert_contains "$launch_out" "failed=1" "a hung runner that then exited was not reported failed: $launch_out"
+[ "$(launch_failed_wake_count "$HHG" hang-src)" = 1 ] \
+  || fail "a hung runner that then exited was announced again in the same episode"
+wait_for_lines "$HG_LOG" 2 600 || fail "reconcile did not start a fresh runner once the hung one was gone"
+launch_release "$HG_LOG"
+pe "$HHG" retire hang-src >/dev/null 2>&1 || true
+pass "a runner that hangs before claiming is announced once and never doubled"
+
+# --- a runner that dies after the window is announced once by a later cycle --
+# The same slow start for a runner that then dies before claiming. The cycle
+# that launched it saw it alive; a later cycle finds it gone with no claim. The
+# watcher and a hand-run reconcile can settle that at the same moment, and the
+# captain still hears about it once.
+HSF="$TMP_ROOT/hsf"; new_home "$HSF"
+SF_LOG="$TMP_ROOT/slow-bad.log"
+SF_GATE="$TMP_ROOT/slow-bad-gate"
+pe_register "$HSF" lavish slow-bad-src -- "$BLOCKER" "$TMP_ROOT/slow-bad-trigger" "bad" >/dev/null
+SF_SOURCE="$HSF/state/procevent/slow-bad-src.source"
+awk '/^argv:$/ { print; exit } { print }' "$SF_SOURCE" > "$SF_SOURCE.tmp" \
+  || fail "could not damage the slow unstartable registration"
+mv "$SF_SOURCE.tmp" "$SF_SOURCE" || fail "could not damage the slow unstartable registration"
+chmod 0600 "$SF_SOURCE"
+: > "$SF_GATE"
+sf_env=(LAUNCH_LOG="$SF_LOG" LAUNCH_GATE="$SF_GATE")
+launch_reconcile "$HSF" 1 "${sf_env[@]}"
+assert_contains "$launch_out" "uncertain=1" \
+  "reconcile settled a launch whose runner was still alive: $launch_out"
+wait_for_lines "$SF_LOG" 1 600 || fail "fixture invalid: the slow runner never reached its group check"
+sf_pid=$(head -1 "$SF_LOG")
+rm -f -- "$SF_GATE"
+for _ in $(seq 1 600); do fm_pid_alive "$sf_pid" || break; sleep 0.1; done
+! fm_pid_alive "$sf_pid" || fail "fixture invalid: the slow unstartable runner never exited"
+sf_pids=()
+for sf_n in 1 2 3 4; do
+  (
+    launch_reconcile "$HSF" "$DEAD_LAUNCH_WINDOW" "${sf_env[@]}"
+    printf '%s\n' "$launch_out" > "$TMP_ROOT/slow-bad-out.$sf_n"
+  ) &
+  sf_pids+=("$!")
+done
+for sf_p in "${sf_pids[@]}"; do wait "$sf_p" || true; done
+grep -q 'failed=[1-9]' "$TMP_ROOT"/slow-bad-out.* \
+  || fail "no concurrent cycle reported the dead launch: $(cat "$TMP_ROOT"/slow-bad-out.*)"
+case "$(cat "$TMP_ROOT"/slow-bad-out.*)" in
+  *started=[1-9]*) fail "a concurrent cycle counted a launch that cannot start as started" ;;
+esac
+[ "$(launch_failed_wake_count "$HSF" slow-bad-src)" = 1 ] \
+  || fail "a runner that died after the window was announced $(launch_failed_wake_count "$HSF" slow-bad-src) times"
+assert_contains "$(launch_failed_wake_payloads "$HSF" slow-bad-src)" \
+  "slow-bad-src is registered but its runner exited before proving it took the source's claim" \
+  "the dead-runner wake does not state what was observed"
+[ "$(source_owner "$HSF" slow-bad-src)" = none ] || fail "the slow unstartable source reports an owner"
+pe "$HSF" retire slow-bad-src >/dev/null 2>&1 || true
+pass "a runner that dies after the window is announced once, however many cycles see it"
+
+# --- a launch that never started says so -------------------------------------
+# When the detach itself fails there is no runner at all, so the wake must not
+# say one exited. The fake `perl` refuses only the detaching fork.
+HNS="$TMP_ROOT/hns"; new_home "$HNS"
+NS_REAL_PERL=$(command -v perl) || fail "this host has no perl"
+NS_BIN=$(fm_fakebin "$TMP_ROOT/no-start-bin")
+cat > "$NS_BIN/perl" <<SH
+#!/usr/bin/env bash
+[ "\$1" = -e ] && [ "\${3:-}" = detach ] && exit 1
+exec "$NS_REAL_PERL" "\$@"
+SH
+chmod +x "$NS_BIN/perl"
+pe_register "$HNS" lavish no-start-src -- "$BLOCKER" "$TMP_ROOT/no-start-trigger" "never" >/dev/null
+for ns_cycle in 1 2; do
+  ns_rc=0
+  ns_out=$(PATH="$NS_BIN:$PATH" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=3 pe "$HNS" reconcile) || ns_rc=$?
+  assert_contains "$ns_out" "started=0" "a launch that never started was counted (cycle $ns_cycle): $ns_out"
+  assert_contains "$ns_out" "failed=1" "a launch that never started was not reported (cycle $ns_cycle): $ns_out"
+  [ "$ns_rc" -ne 0 ] || fail "reconcile exited 0 when no runner started (cycle $ns_cycle): $ns_out"
+done
+[ "$(launch_failed_wake_count "$HNS" no-start-src)" = 1 ] \
+  || fail "a launch that never started was announced $(launch_failed_wake_count "$HNS" no-start-src) times"
+ns_wake=$(launch_failed_wake_payloads "$HNS" no-start-src)
+assert_contains "$ns_wake" "reconcile could not start a runner for it" \
+  "the wake for a launch that never started does not say so: $ns_wake"
+case "$ns_wake" in
+  *exited*) fail "the wake for a launch that never started says a runner exited: $ns_wake" ;;
+esac
+pe "$HNS" retire no-start-src >/dev/null 2>&1 || true
+pass "a launch whose runner never started is announced once as never started"
+
+# --- a launch record whose pid now names another process is not a runner -----
+# A launch record outlives its runner, a reboot included, and the pid it names
+# can come back as an unrelated process. The record below is the one a
+# runner launched long ago would leave, pointing at a live process that is not
+# a runner, so the source must start as usual and nothing may be called hung.
+HRU="$TMP_ROOT/hru"; new_home "$HRU"
+RU_TRIGGER="$TMP_ROOT/reused-pid-trigger"
+pe_register "$HRU" lavish reused-src -- "$BLOCKER" "$RU_TRIGGER" "reused" >/dev/null
+sleep 600 &
+RU_STRANGER=$!
+printf '\t\t%s\t1\n' "$RU_STRANGER" > "$HRU/state/procevent/.reused-src.launch"
+ru_rc=0
+ru_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HRU" reconcile) || ru_rc=$?
+kill "$RU_STRANGER" 2>/dev/null || true
+assert_contains "$ru_out" "started=1" "a source whose old launch pid was reused was not started: $ru_out"
+[ "$ru_rc" -eq 0 ] || fail "reconcile exited $ru_rc for a source whose old launch pid was reused: $ru_out"
+[ "$(launch_failed_wake_count "$HRU" reused-src)" = 0 ] \
+  || fail "a reused pid was announced as a hung runner: $(launch_failed_wake_payloads "$HRU" reused-src)"
+: > "$RU_TRIGGER"
+pe "$HRU" retire reused-src >/dev/null 2>&1 || true
+pass "a launch record whose pid now names another process does not block the source"
+
+# --- a runner stopped after it claimed is relaunched without a failure wake ---
+# `ensure-listening` (what Lavish `arm` runs) leaves its launch on record, and a
+# relisten runner stopped after claiming but before its first poll leaves its
+# claim and no launch stamp. Removing the stamp below reproduces that state
+# with an ordinary source. The stale claim still names the runner, so it did
+# claim: the next reconcile must start a replacement at once and say nothing
+# failed, or a rebuilt Lavish board sits with no listener.
+HSC="$TMP_ROOT/hsc"; new_home "$HSC"
+SC_TRIGGER="$TMP_ROOT/stopped-claim-trigger"
+pe_register "$HSC" lavish stopped-src -- "$BLOCKER" "$SC_TRIGGER" "stopped" >/dev/null
+FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=90 pe "$HSC" ensure-listening stopped-src \
+  || fail "fixture invalid: the stopped-claim source never started listening"
+sc_pid=$(sed -n '2p' "$FM_PROCEVENT_CLAIM_ROOT/stopped-src.claim")
+kill -KILL -- "-$sc_pid" 2>/dev/null || kill -KILL "$sc_pid" 2>/dev/null || true
+for _ in $(seq 1 300); do fm_pid_alive "$sc_pid" || break; sleep 0.1; done
+! fm_pid_alive "$sc_pid" || fail "fixture invalid: the stopped runner survived"
+rm -f -- "$HSC/state/procevent/stopped-src."*.last-launch
+sc_rc=0
+sc_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=$DEAD_LAUNCH_WINDOW pe "$HSC" reconcile) || sc_rc=$?
+assert_contains "$sc_out" "started=1" "a runner stopped after claiming was not replaced: $sc_out"
+assert_contains "$sc_out" "failed=0" "a runner stopped after claiming was reported failed: $sc_out"
+[ "$sc_rc" -eq 0 ] || fail "reconcile exited $sc_rc replacing a runner stopped after claiming: $sc_out"
+[ "$(launch_failed_wake_count "$HSC" stopped-src)" = 0 ] \
+  || fail "a runner that had claimed was announced as failed: $(launch_failed_wake_payloads "$HSC" stopped-src)"
+: > "$SC_TRIGGER"
+pe "$HSC" retire stopped-src >/dev/null 2>&1 || true
+pass "a runner stopped after it claimed is replaced at once without a failure wake"
 
 # --- a launch that finished before the first poll is still confirmed ---------
 # Confirmation has to read evidence a finished runner leaves behind. A runner
@@ -2502,6 +2776,26 @@ assert_contains "$iw_ok" "failed=0" \
 : > "$IW_TRIGGER"
 pe "$HIW" retire invalid-window-src >/dev/null 2>&1 || true
 pass "an unusable launch confirm window is refused by name instead of blamed on the sources"
+
+# --- an unusable hang bound is refused by name ------------------------------
+# A bound this command cannot read would call every slow runner hung, or none,
+# so it is refused by name before anything is launched.
+HIH="$TMP_ROOT/hih"; new_home "$HIH"
+IH_TRIGGER="$TMP_ROOT/invalid-hang-trigger"
+pe_register "$HIH" lavish invalid-hang-src -- "$BLOCKER" "$IH_TRIGGER" "hang-bound" >/dev/null
+for ih_value in 5s 0 3601; do
+  ih_rc=0
+  ih_out=$(FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=3 FM_PROCEVENT_LAUNCH_HANG_SECONDS="$ih_value" \
+    pe "$HIH" reconcile 2>&1) || ih_rc=$?
+  [ "$ih_rc" -ne 0 ] || fail "reconcile accepted the unusable hang bound '$ih_value': $ih_out"
+  assert_contains "$ih_out" "FM_PROCEVENT_LAUNCH_HANG_SECONDS" \
+    "the unusable hang bound '$ih_value' was not named by what refused it: $ih_out"
+  [ ! -e "$FM_PROCEVENT_CLAIM_ROOT/invalid-hang-src.claim" ] \
+    || fail "reconcile launched a runner before refusing the hang bound '$ih_value'"
+done
+: > "$IH_TRIGGER"
+pe "$HIH" retire invalid-hang-src >/dev/null 2>&1 || true
+pass "an unusable launch hang bound is refused by name"
 
 # --- a dead generation's untidyable leftovers never wedge ownership ----------
 # The same wedge as the state-root case above, reached through the sibling
