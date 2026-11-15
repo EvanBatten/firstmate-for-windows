@@ -53,6 +53,43 @@ if declare -F fm_lock_has_live_holder >/dev/null; then
   }
 fi
 
+# MSYS counts the start time in /proc/<pid>/stat from Windows' boot time, and
+# Windows moves that boot time when it steps its clock, so upstream's identity
+# changes under a live process and the watcher's own lock stops matching it.
+# MSYS stamps /proc/<pid> itself once, when it makes the pid, and that stamp is
+# stored, not derived, so every reader gets the same second for the life of the
+# process. It is a whole second, so the Win32 pid stands in for the
+# milliseconds: MSYS hands its own pids out in rotation, and a second process on
+# one pid would also need the same Windows pid, second and command line.
+# A proc tree with no winpid is not MSYS's, and keeps upstream's body.
+if declare -F fm_pid_identity >/dev/null; then
+  _fm_win_body=$(declare -f fm_pid_identity)
+  case $_fm_win_body in
+    *_fm_win_upstream_fm_pid_identity*) ;;
+    *) eval "_fm_win_upstream_$_fm_win_body" ;;
+  esac
+  unset _fm_win_body
+
+  fm_pid_identity() {
+    local pid=$1 dir made winpid='' hex
+    case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+    dir=${FM_PROC_ROOT_OVERRIDE:-/proc}/$pid
+    { read -r winpid < "$dir/winpid"; } 2>/dev/null
+    case "$winpid" in
+      '' | *[!0-9]*)
+        _fm_win_upstream_fm_pid_identity "$pid"
+        return $?
+        ;;
+    esac
+    made=$(stat -c %Y "$dir" 2>/dev/null) || return 1
+    case "$made" in '' | *[!0-9]*) return 1 ;; esac
+    hex=$(od -An -v -tx1 "$dir/cmdline" 2>/dev/null) || return 1
+    hex=${hex//[[:space:]]/}
+    [ -n "$hex" ] || return 1
+    printf 'msys-made=%s winpid=%s cmdline-hex=%s\n' "$made" "$winpid" "$hex"
+  }
+fi
+
 # A test fixture that puts its own fake `ps` first on PATH keeps the upstream
 # bodies, which read that fake as they do on Linux. MSYS's own ps is not a
 # fixture: Git's bin/bash.exe, which Claude runs hooks through, puts /usr/bin

@@ -1687,7 +1687,7 @@ test_msys_pid_identity_uses_proc() {
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
   case "$identity" in
-    proc-starttime=*" cmdline-hex="*) ;;
+    proc-starttime=*" cmdline-hex="* | msys-made=*" winpid="*" cmdline-hex="*) ;;
     *) fail "MSYS process identity did not use compatible /proc fields ('$identity')" ;;
   esac
   pass "MSYS process identity uses compatible /proc fields"
